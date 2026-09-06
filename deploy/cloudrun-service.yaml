@@ -1,0 +1,65 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: sgmis-api
+  annotations:
+    run.googleapis.com/launch-stage: GA
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        # Scale to zero when idle to maintain zero or near-zero pilot hosting cost
+        autoscaling.knative.dev/minScale: '0'
+        autoscaling.knative.dev/maxScale: '2'
+        run.googleapis.com/cpu-throttling: 'true'
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+        - image: gcr.io/sgmis-backend/sgmis-api:latest
+          resources:
+            limits:
+              # Smallest practical compute footprint for pilot
+              cpu: '1'
+              memory: 512Mi
+          env:
+            - name: DJANGO_DEBUG
+              value: 'False'
+            - name: PORT
+              value: '8080'
+            - name: ALLOWED_HOSTS
+              value: '*'
+            - name: CORS_ALLOWED_ORIGINS
+              value: ''
+            - name: DJANGO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: sgmis-django-secret-key
+                  key: latest
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sgmis-database-url
+                  key: latest
+            - name: SGMIS_INITIAL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sgmis-initial-admin-password
+                  key: latest
+          ports:
+            - containerPort: 8080
+          startupProbe:
+            httpGet:
+              path: /health/
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health/
+              port: 8080
+            periodSeconds: 30
+            failureThreshold: 3

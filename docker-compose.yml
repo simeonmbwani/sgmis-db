@@ -1,0 +1,69 @@
+# ==============================================================================
+# SGMIS — Local Development Environment (LOCAL USE ONLY)
+# Production deployment uses Google Cloud Run and PostgreSQL/Cloud SQL.
+# DO NOT store production passwords or production secrets in this file.
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  # Local PostgreSQL Database
+  db:
+    image: postgres:16-alpine
+    container_name: sgmis_dev_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sgmis_db}
+      POSTGRES_USER: ${POSTGRES_USER:-sgmis_dev_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sgmis_dev_secret_local}
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sgmis_dev_user -d sgmis_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # SGMIS Django REST Framework Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sgmis_dev_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DJANGO_DEBUG: "True"
+      DJANGO_SECRET_KEY: "sgmis-dev-secret-key-local-only-not-for-production"
+      DATABASE_URL: "postgres://sgmis_dev_user:sgmis_dev_secret_local@db:5432/sgmis_db"
+      ALLOWED_HOSTS: "localhost,127.0.0.1,backend,web"
+      CORS_ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:5173,http://localhost:8080,http://127.0.0.1:3000"
+      SGMIS_INITIAL_ADMIN_PASSWORD: ${SGMIS_INITIAL_ADMIN_PASSWORD:-DevAdminPass123!}
+      PORT: "8000"
+    volumes:
+      - ./backend:/app
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    ports:
+      - "8000:8000"
+
+  # Web Administration Portal
+  web:
+    image: nginx:alpine
+    container_name: sgmis_dev_web
+    restart: unless-stopped
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    ports:
+      - "3000:80"
+
+volumes:
+  postgres_dev_data:
+  static_volume:
+  media_volume:

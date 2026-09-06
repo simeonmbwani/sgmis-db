@@ -1,0 +1,7 @@
+{
+  "name": "SGMIS",
+  "description": "Security Guard Management Information System for guards, supervisors, and administrators with real-time duty, attendance, handovers, and patrols.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

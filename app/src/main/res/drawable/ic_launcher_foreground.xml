@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Security Shield Outer Border -->
+    <path
+        android:fillColor="#DDA15E"
+        android:pathData="M54,22 L78,32 C78,56 68,74 54,84 C40,74 30,56 30,32 Z" />
+    <!-- Shield Inner Contrast -->
+    <path
+        android:fillColor="#0B192C"
+        android:pathData="M54,26 L74,34 C74,54 65,69 54,78 C43,69 34,54 34,34 Z" />
+    <!-- Center Security Star / Checkmark / Badge -->
+    <path
+        android:fillColor="#DDA15E"
+        android:pathData="M54,34 L57,43 L66,43 L59,48 L62,57 L54,52 L46,57 L49,48 L42,43 L51,43 Z" />
+    <!-- Security Core Accent -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M49,60 L54,65 L63,56 L61,54 L54,61 L51,58 Z" />
+</vector>
