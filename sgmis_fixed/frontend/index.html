@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SGMIS — Command & Administration Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            navy: {
+              950: '#070F1A',
+              900: '#0B192C',
+              800: '#14263E',
+              700: '#1E3E62',
+              600: '#274D7A',
+            },
+            gold: {
+              400: '#FBE8D3',
+              500: '#DDA15E',
+              600: '#BC6C25',
+              900: '#382914',
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #070F1A; color: #F3F4F6; }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col antialiased">
+  <div id="app" class="flex-1 flex flex-col">
+    <!-- Rendered dynamically by app.js -->
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

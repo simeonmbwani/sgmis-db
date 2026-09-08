@@ -1,0 +1,8 @@
+{
+  "name": "sgmis-admin-portal",
+  "version": "1.0.0",
+  "description": "SGMIS Command & Administration Web Portal",
+  "scripts": {
+    "start": "python3 -m http.server 3000 --directory ."
+  }
+}
