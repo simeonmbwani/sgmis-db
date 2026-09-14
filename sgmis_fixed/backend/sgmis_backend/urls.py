@@ -5,12 +5,20 @@ URL configuration for SGMIS backend.
 from django.contrib import admin
 from django.urls import path, include
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
-from apps.core.views import health_check
+from apps.core.views import health_check, telemetry_overview
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("health/", health_check, name="health_check"),
     path("api/health/", health_check, name="api_health_check"),
+    
+    # Core & Telemetry canonical endpoints & aliases
+    path("core/", include("apps.core.urls")),
+    path("api/core/", include("apps.core.urls")),
+    path("core/telemetry/", telemetry_overview, name="telemetry_overview"),
+    path("api/core/telemetry/", telemetry_overview, name="api_telemetry_overview"),
+    path("telemetry/", telemetry_overview, name="root_telemetry_overview"),
+    path("api/telemetry/", telemetry_overview, name="root_api_telemetry_overview"),
     
     # Authentication & Accounts
     path("auth/", include("apps.accounts.auth_urls")),

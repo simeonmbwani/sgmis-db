@@ -8,7 +8,6 @@ class OccurrenceBookEntrySerializer(serializers.ModelSerializer):
     category_display = serializers.CharField(source="get_category_display", read_only=True)
 
     class Meta:
-        extra_kwargs = {"station": {"required": False}}
         model = OccurrenceBookEntry
         fields = [
             "id",
@@ -25,6 +24,33 @@ class OccurrenceBookEntrySerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = ["id", "entry_number", "guard", "created_at"]
+        extra_kwargs = {
+            "station": {"required": False, "allow_null": True},
+        }
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+
+        station = attrs.get("station")
+        if user and getattr(user, "role", None) == "GUARD":
+            if not user.station:
+                raise serializers.ValidationError({
+                    "station": "Your account has no station assigned. Contact your supervisor or administrator."
+                })
+            attrs["station"] = user.station
+        elif not station:
+            if user and getattr(user, "station", None):
+                attrs["station"] = user.station
+            else:
+                raise serializers.ValidationError({
+                    "station": "A valid station is required. Your account has no station assigned."
+                })
+        elif station and not station.is_active:
+            raise serializers.ValidationError({
+                "station": f"Station '{station.name}' is inactive."
+            })
+        return attrs
 
     def get_guard_name(self, obj):
         name = obj.guard.get_full_name().strip()

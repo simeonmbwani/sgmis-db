@@ -26,6 +26,35 @@ class SgmisRepository(
             apiClient.invalidateClient()
         }
 
+    // --- Error Parser Helper ---
+    private fun parseDrfError(errorBody: String?, fallback: String): String {
+        if (errorBody.isNullOrBlank()) return fallback
+        return try {
+            val jsonObj = org.json.JSONObject(errorBody)
+            if (jsonObj.has("detail")) {
+                return jsonObj.getString("detail")
+            }
+            if (jsonObj.has("non_field_errors")) {
+                val arr = jsonObj.getJSONArray("non_field_errors")
+                if (arr.length() > 0) return arr.getString(0)
+            }
+            val keys = jsonObj.keys()
+            if (keys.hasNext()) {
+                val firstKey = keys.next()
+                val firstVal = jsonObj.get(firstKey)
+                if (firstVal is org.json.JSONArray && firstVal.length() > 0) {
+                    "${firstKey.replace('_', ' ').capitalize()}: ${firstVal.getString(0)}"
+                } else {
+                    "${firstKey.replace('_', ' ').capitalize()}: $firstVal"
+                }
+            } else {
+                fallback
+            }
+        } catch (e: Exception) {
+            errorBody.take(160)
+        }
+    }
+
     // --- Authentication ---
     suspend fun login(identifier: String, pass: String): Result<User> {
         return try {
@@ -37,8 +66,23 @@ class SgmisRepository(
                 sessionManager.saveUser(body.user)
                 Result.success(body.user)
             } else {
-                val errorMsg = response.errorBody()?.string() ?: "Authentication failed (${response.code()})"
+                val errorMsg = parseDrfError(response.errorBody()?.string(), "Authentication failed (${response.code()})")
                 Result.failure(Exception(errorMsg))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchCurrentUser(): Result<User> {
+        return try {
+            val response = api.getCurrentUser()
+            if (response.isSuccessful && response.body() != null) {
+                val user = response.body()!!
+                sessionManager.saveUser(user)
+                Result.success(user)
+            } else {
+                Result.failure(Exception("Failed to fetch user profile (${response.code()})"))
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -231,7 +275,7 @@ class SgmisRepository(
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                val err = response.errorBody()?.string() ?: "Failed to record OB entry"
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to record OB entry")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -388,51 +432,367 @@ class SgmisRepository(
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                val err = response.errorBody()?.string() ?: "Failed to submit leave application"
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to submit leave application")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
-    // --- Profile ---
-    suspend fun updateProfile(request: ProfileUpdateRequest): Result<User> = try {
-        val response = api.updateProfile(request)
-        if (response.isSuccessful && response.body() != null) {
-            val user = response.body()!!
-            sessionManager.saveUser(user)
-            Result.success(user)
-        } else Result.failure(Exception(response.errorBody()?.string() ?: "Profile update failed (${response.code()})"))
-    } catch (e: Exception) { Result.failure(e) }
+
+    suspend fun reviewLeaveApplication(id: String, status: String, reviewerNotes: String): Result<LeaveApplication> {
+        return try {
+            val response = api.reviewLeaveApplication(id, LeaveReviewRequest(status, reviewerNotes))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to review leave application")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // --- User & Guard Management ---
+    suspend fun fetchUsers(role: String? = null, station: String? = null): Result<List<User>> {
+        return try {
+            val response = api.getUsers(role, station)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to load user directory"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createUser(request: CreateUserRequest): Result<User> {
+        return try {
+            val response = api.createUser(request)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to create user account")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun toggleUserActive(userId: String, currentActive: Boolean): Result<User> {
+        return try {
+            val response = api.updateUser(userId, mapOf("is_active" to !currentActive))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to update user status")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun assignUserStation(userId: String, stationId: String?): Result<User> {
+        return try {
+            val response = api.updateUser(userId, mapOf("station" to stationId))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to assign station to user")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // --- Station & Guard Pair Management ---
+    suspend fun fetchStations(): Result<List<Station>> {
+        return try {
+            val response = api.getStations()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to fetch stations"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createStation(name: String, code: String, address: String, lat: Double, lon: Double, geofence: Int): Result<Station> {
+        return try {
+            val response = api.createStation(CreateStationRequest(name, code, address, lat, lon, geofence))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to create station")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchGuardPairs(station: String? = null): Result<List<GuardPair>> {
+        return try {
+            val response = api.getGuardPairs(station)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to fetch guard pairings"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createGuardPair(stationId: String, guardAId: String, guardBId: String, order: Int): Result<GuardPair> {
+        return try {
+            val response = api.createGuardPair(CreateGuardPairRequest(stationId, guardAId, guardBId, order))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to create guard pairing")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // --- Shift Roster & Management ---
+    suspend fun fetchShifts(date: String? = null, station: String? = null): Result<List<Shift>> {
+        return try {
+            val response = api.getShifts(date, station)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to fetch roster shifts"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun generateRoster(stationId: String, startDate: String, cycleDays: Int): Result<Map<String, Any>> {
+        return try {
+            val response = api.generateRoster(RosterGenerateRequest(stationId, startDate, cycleDays))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Roster generation failed")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // --- Attendance Records ---
+    suspend fun fetchAttendanceRecords(date: String? = null, shift: String? = null): Result<List<Attendance>> {
+        return try {
+            val response = api.getAttendanceRecords(date, shift)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to fetch attendance records"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // --- Incident Actions ---
+    suspend fun acknowledgeIncident(id: String): Result<IncidentReport> {
+        return try {
+            val response = api.acknowledgeIncident(id)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to acknowledge incident")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun resolveIncident(id: String, notes: String): Result<IncidentReport> {
+        return try {
+            val response = api.resolveIncident(id, IncidentResolveRequest(notes))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to resolve incident")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // --- Escort Duties ---
+    suspend fun fetchEscortDuties(): Result<List<EscortDuty>> {
+        return try {
+            val response = api.getEscortDuties()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to fetch escort duties"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createEscortDuty(request: CreateEscortDutyRequest): Result<EscortDuty> {
+        return try {
+            val response = api.createEscortDuty(request)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to create escort duty")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateEscortStatus(id: String, status: String): Result<EscortDuty> {
+        return try {
+            val response = api.updateEscortDuty(id, mapOf("status" to status))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to update escort status")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // --- Exam Duties ---
+    suspend fun fetchExamDuties(): Result<List<ExamDuty>> {
+        return try {
+            val response = api.getExamDuties()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to fetch exam duties"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createExamDuty(request: CreateExamDutyRequest): Result<ExamDuty> {
+        return try {
+            val response = api.createExamDuty(request)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to schedule exam duty")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateExamStatus(id: String, status: String): Result<ExamDuty> {
+        return try {
+            val response = api.updateExamDuty(id, mapOf("status" to status))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to update exam status")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
     // --- Notifications ---
-    suspend fun fetchNotifications(): Result<List<NotificationItem>> = try {
-        val response = api.getNotifications()
-        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
-        else Result.failure(Exception("Failed to fetch notifications (${response.code()})"))
-    } catch (e: Exception) { Result.failure(e) }
+    suspend fun fetchNotifications(): Result<List<NotificationAlert>> {
+        return try {
+            val response = api.getNotifications()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to fetch notifications"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
-    suspend fun markNotificationRead(id: String): Result<NotificationItem> = try {
-        val response = api.markNotificationRead(id)
-        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
-        else Result.failure(Exception("Failed to mark notification as read"))
-    } catch (e: Exception) { Result.failure(e) }
+    suspend fun markNotificationRead(id: String): Result<Unit> {
+        return try {
+            val response = api.markNotificationRead(id)
+            if (response.isSuccessful) Result.success(Unit)
+            else Result.failure(Exception("Failed to mark alert as read"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
-    suspend fun markAllNotificationsRead(): Result<Boolean> = try {
-        val response = api.markAllNotificationsRead()
-        if (response.isSuccessful) Result.success(true) else Result.failure(Exception("Failed to mark notifications as read"))
-    } catch (e: Exception) { Result.failure(e) }
+    suspend fun markAllNotificationsRead(): Result<Unit> {
+        return try {
+            val response = api.markAllNotificationsRead()
+            if (response.isSuccessful) Result.success(Unit)
+            else Result.failure(Exception("Failed to mark all alerts as read"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
-    suspend fun fetchEscortDuties(): Result<List<EscortDuty>> = try {
-        val response = api.getEscortDuties()
-        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
-        else Result.failure(Exception("Failed to fetch escort duties (${response.code()})"))
-    } catch (e: Exception) { Result.failure(e) }
+    // --- Operational Telemetry & Profile Management ---
+    suspend fun fetchTelemetry(): Result<TelemetryOverview> {
+        return try {
+            val response = api.getTelemetry()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to load operational telemetry")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 
-    suspend fun fetchExamDuties(): Result<List<ExamDuty>> = try {
-        val response = api.getExamDuties()
-        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
-        else Result.failure(Exception("Failed to fetch exam duties (${response.code()})"))
-    } catch (e: Exception) { Result.failure(e) }
-
+    suspend fun updateUserProfile(
+        firstName: String?,
+        lastName: String?,
+        phoneNumber: String?,
+        profilePhoto: String?
+    ): Result<User> {
+        return try {
+            val request = UpdateProfileRequest(
+                firstName = firstName,
+                lastName = lastName,
+                phoneNumber = phoneNumber,
+                profilePhoto = profilePhoto
+            )
+            val response = api.updateProfile(request)
+            if (response.isSuccessful && response.body() != null) {
+                val updatedUser = response.body()!!
+                sessionManager.saveUser(updatedUser)
+                Result.success(updatedUser)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to update profile")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
 }

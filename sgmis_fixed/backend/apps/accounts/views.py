@@ -79,10 +79,11 @@ class UserViewSet(viewsets.ModelViewSet):
         if active is not None:
             qs = qs.filter(is_active=active.lower() in ("true", "1"))
 
-        # Supervisors only see guards within their scope or all guards
+        # Supervisors only see guards within their scope or unassigned guards
         if user.role == UserRole.SUPERVISOR:
             if user.station:
-                qs = qs.filter(station=user.station)
+                from django.db.models import Q
+                qs = qs.filter(Q(station=user.station) | Q(role=UserRole.GUARD, station__isnull=True))
             else:
                 qs = qs.filter(role=UserRole.GUARD)
         return qs

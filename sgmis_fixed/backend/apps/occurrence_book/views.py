@@ -33,6 +33,13 @@ class OccurrenceBookEntryViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        # Automatically assign guard's station if not explicitly supplied
+        if user.role == UserRole.GUARD and not user.station:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Your account has no station assigned. Contact your supervisor or administrator.")
+
         station = serializer.validated_data.get("station") or user.station
+        if not station:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({"station": "Your account has no station assigned. Contact your supervisor or administrator."})
+
         serializer.save(guard=user, station=station)

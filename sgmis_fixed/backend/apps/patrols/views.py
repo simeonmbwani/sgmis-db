@@ -40,7 +40,17 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        serializer.save(guard=self.request.user)
+        user = self.request.user
+        if user.role == UserRole.GUARD and not user.station:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("Your account has no station assigned. Contact your supervisor or administrator.")
+
+        station = serializer.validated_data.get("station") or user.station
+        if not station:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({"station": "Your account has no station assigned. Contact your supervisor or administrator."})
+
+        serializer.save(guard=user, station=station)
 
     @action(detail=True, methods=["post"], url_path="scan")
     def scan_checkpoint(self, request, pk=None):

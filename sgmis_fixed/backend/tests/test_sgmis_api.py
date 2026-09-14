@@ -284,3 +284,208 @@ class SGMISBackendEndToEndTests(TestCase):
             "code": "STN-UNAUTH",
         })
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_acceptance_1_guard_with_station_creates_ob_entry(self):
+        """
+        TEST 1:
+        Authenticated guard WITH station creates OB entry:
+        - POST /occurrence_book/entries/
+        - Response: 201 Created
+        - DB row has correct guard_id AND correct station_id
+        - Entry number generated
+        """
+        self.client.force_authenticate(user=self.guard_a)
+        resp = self.client.post("/occurrence_book/entries/", {
+            "category": "ROUTINE",
+            "occurrence_text": "Perimeter inspection complete. Station gates locked.",
+            "check_record": "Physical lock inspection verified.",
+        })
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(resp.data["entry_number"].startswith("OB-"))
+        self.assertEqual(str(resp.data["station"]), str(self.station.id))
+        self.assertEqual(str(resp.data["guard"]), str(self.guard_a.id))
+
+        # Verify database record
+        entry = OccurrenceBookEntry.objects.get(id=resp.data["id"])
+        self.assertEqual(entry.guard, self.guard_a)
+        self.assertEqual(entry.station, self.station)
+        self.assertIsNotNone(entry.station_id)
+
+    def test_acceptance_2_guard_without_station_rejected(self):
+        """
+        TEST 2:
+        Authenticated guard WITHOUT station creates OB entry:
+        - POST /occurrence_book/entries/
+        - Response: 400 or 403 (with clear station-assignment message)
+        - NO row inserted in occurrence_book_occurrencebookentry
+        - No 500 error
+        """
+        unassigned_guard = UserModel.objects.create_user(
+            username="unassigned_guard",
+            email="unassigned@sgmis.local",
+            password=self.password,
+            employee_number="SEC-999",
+            role=UserRole.GUARD,
+            station=None,
+        )
+        initial_ob_count = OccurrenceBookEntry.objects.count()
+
+        self.client.force_authenticate(user=unassigned_guard)
+        resp = self.client.post("/occurrence_book/entries/", {
+            "category": "ROUTINE",
+            "occurrence_text": "Attempting entry without assigned station",
+            "check_record": "None",
+        })
+        self.assertIn(resp.status_code, [status.HTTP_400_BAD_REQUEST, status.HTTP_403_FORBIDDEN])
+        error_str = str(resp.data)
+        self.assertIn("station", error_str.lower())
+        self.assertIn("assigned", error_str.lower())
+
+        # Verify no record created in database
+        self.assertEqual(OccurrenceBookEntry.objects.count(), initial_ob_count)
+
+    def test_acceptance_3_telemetry_canonical_and_database_values(self):
+        """
+        TEST 3:
+        Telemetry.
+        GET canonical telemetry endpoint
+        -> HTTP 200
+        -> real database values
+        -> no /core/telemetry/ 404
+        """
+        # Unauthenticated request should be rejected
+        unauth_resp = self.client.get("/core/telemetry/")
+        self.assertEqual(unauth_resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        # Authenticated as supervisor
+        self.client.force_authenticate(user=self.supervisor)
+        resp = self.client.get("/core/telemetry/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn("total_stations", resp.data)
+        self.assertIn("active_guards", resp.data)
+        self.assertIn("total_incidents", resp.data)
+        self.assertIn("total_ob_entries", resp.data)
+        self.assertGreaterEqual(resp.data["total_stations"], 1)
+        self.assertGreaterEqual(resp.data["active_guards"], 4)
+
+        # Alias /api/core/telemetry/ also works
+        alias_resp = self.client.get("/api/core/telemetry/")
+        self.assertEqual(alias_resp.status_code, status.HTTP_200_OK)
+
+    def test_acceptance_4_authorized_station_creation(self):
+        """
+        TEST 4:
+        Authorized station creation.
+        POST /stations/stations/
+        -> HTTP 201
+        -> record persists
+        -> GET stations contains it
+        """
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post("/stations/stations/", {
+            "name": "North Gate Security Depot",
+            "code": "STN-NRTH01",
+            "address": "North Industrial Zone, Gate 4",
+            "latitude": -1.2800,
+            "longitude": 36.8100,
+            "geofence_radius_meters": 150,
+        })
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        new_station_id = resp.data["id"]
+
+        # Verify persistence in database
+        self.assertTrue(Station.objects.filter(id=new_station_id, code="STN-NRTH01").exists())
+
+        # Verify GET /stations/stations/ contains it
+        list_resp = self.client.get("/stations/stations/")
+        self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
+        results = list_resp.data.get("results", list_resp.data) if isinstance(list_resp.data, dict) else list_resp.data
+        station_codes = [s["code"] for s in results]
+        self.assertIn("STN-NRTH01", station_codes)
+
+    def test_acceptance_5_unauthorized_guard_station_creation(self):
+        """
+        TEST 5:
+        Unauthorized guard station creation.
+        POST /stations/stations/
+        -> HTTP 403
+        """
+        self.client.force_authenticate(user=self.guard_a)
+        resp = self.client.post("/stations/stations/", {
+            "name": "Rogue Guard Post",
+            "code": "STN-ROGUE",
+            "address": "Unauthorized",
+        })
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(Station.objects.filter(code="STN-ROGUE").exists())
+
+    def test_acceptance_6_invalid_station_payload(self):
+        """
+        TEST 6:
+        Invalid station payload.
+        POST /stations/stations/
+        -> HTTP 400
+        -> useful serializer validation details
+        """
+        self.client.force_authenticate(user=self.admin)
+        # Empty code and empty name
+        resp = self.client.post("/stations/stations/", {
+            "name": "",
+            "code": "",
+        })
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("name", resp.data)
+        self.assertIn("code", resp.data)
+
+    def test_acceptance_station_assignment_workflow(self):
+        """
+        Tests the authoritative station assignment workflow:
+        1. Guard without station is rejected from creating OB
+        2. Supervisor/Admin assigns guard to station via PATCH /accounts/users/{id}/
+        3. GET /accounts/users/me/ returns the assigned station
+        4. Guard can now create OB entries successfully
+        """
+        guard = UserModel.objects.create_user(
+            username="guard_assigned_test",
+            email="assigned_test@sgmis.local",
+            password=self.password,
+            employee_number="SEC-777",
+            role=UserRole.GUARD,
+            station=None,
+        )
+
+        # Step 1: Guard cannot create OB without station
+        self.client.force_authenticate(user=guard)
+        resp1 = self.client.post("/occurrence_book/entries/", {
+            "category": "ROUTINE",
+            "occurrence_text": "Before assignment",
+            "check_record": "Check",
+        })
+        self.assertIn(resp1.status_code, [status.HTTP_400_BAD_REQUEST, status.HTTP_403_FORBIDDEN])
+        self.assertIn("station", str(resp1.data).lower())
+
+        # Step 2: Supervisor assigns guard to self.station
+        self.client.force_authenticate(user=self.supervisor)
+        patch_resp = self.client.patch(f"/accounts/users/{guard.id}/", {
+            "station": str(self.station.id),
+        })
+        self.assertEqual(patch_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(patch_resp.data["station"]), str(self.station.id))
+
+        # Step 3: Guard calls GET /accounts/users/me/
+        self.client.force_authenticate(user=guard)
+        guard.refresh_from_db()
+        me_resp = self.client.get("/accounts/users/me/")
+        self.assertEqual(me_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(me_resp.data["station"]), str(self.station.id))
+        self.assertEqual(me_resp.data["station_name"], self.station.name)
+
+        # Step 4: Guard can now create OB entry
+        resp2 = self.client.post("/occurrence_book/entries/", {
+            "category": "ROUTINE",
+            "occurrence_text": "After assignment: Station secured.",
+            "check_record": "Routine gate check.",
+        })
+        self.assertEqual(resp2.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(str(resp2.data["station"]), str(self.station.id))
+

@@ -47,12 +47,27 @@ data class SgmisUiState(
     val leaveApplications: List<LeaveApplication> = emptyList(),
     val leaveLoading: Boolean = false,
 
-    // Guard profile and additional duties
-    val notifications: List<NotificationItem> = emptyList(),
-    val notificationsLoading: Boolean = false,
+    // Escorts & Exams
     val escortDuties: List<EscortDuty> = emptyList(),
+    val escortsLoading: Boolean = false,
     val examDuties: List<ExamDuty> = emptyList(),
-    val additionalDutiesLoading: Boolean = false
+    val examsLoading: Boolean = false,
+
+    // Notifications
+    val notifications: List<NotificationAlert> = emptyList(),
+    val notificationsLoading: Boolean = false,
+
+    // Supervisory & Administrative
+    val users: List<User> = emptyList(),
+    val stations: List<Station> = emptyList(),
+    val guardPairs: List<GuardPair> = emptyList(),
+    val rosterShifts: List<Shift> = emptyList(),
+    val attendanceRecords: List<Attendance> = emptyList(),
+    val adminLoading: Boolean = false,
+
+    // Telemetry & Settings
+    val telemetry: TelemetryOverview = TelemetryOverview(),
+    val themeMode: String = "SYSTEM" // "SYSTEM", "LIGHT", "DARK"
 )
 
 class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
@@ -79,6 +94,14 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
 
     fun clearMessages() {
         _uiState.update { it.copy(errorMessage = null, successMessage = null) }
+    }
+
+    fun clearError() {
+        _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    fun clearSuccess() {
+        _uiState.update { it.copy(successMessage = null) }
     }
 
     // --- Authentication ---
@@ -125,6 +148,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     }
 
     fun refreshAllData() {
+        fetchCurrentUser()
         fetchTodayShift()
         fetchHandovers()
         fetchOBEntries()
@@ -132,8 +156,28 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         fetchCheckpoints()
         fetchPatrolLogs()
         fetchLeave()
+        fetchEscortDuties()
+        fetchExamDuties()
         fetchNotifications()
-        fetchAdditionalDuties()
+        fetchTelemetry()
+
+        val role = _uiState.value.currentUser?.role?.uppercase()
+        if (role == "SUPERVISOR" || role == "ADMIN" || role == "ADMINISTRATOR") {
+            fetchUsers()
+            fetchStations()
+            fetchGuardPairs()
+            fetchRosterShifts()
+            fetchAttendanceRecords()
+        }
+    }
+
+    fun fetchCurrentUser() {
+        viewModelScope.launch {
+            val res = repository.fetchCurrentUser()
+            res.onSuccess { user ->
+                _uiState.update { it.copy(currentUser = user) }
+            }
+        }
     }
 
     // --- Shifts & Attendance ---
@@ -426,59 +470,364 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             }
         }
     }
-}
 
-    fun updateProfile(request: ProfileUpdateRequest, onSuccess: () -> Unit = {}) {
+    fun reviewLeaveApplication(id: String, status: String, notes: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            repository.updateProfile(request).onSuccess { user ->
-                _uiState.update { it.copy(currentUser = user, isLoading = false, successMessage = "Profile updated successfully.") }
-                onSuccess()
+            val res = repository.reviewLeaveApplication(id, status, notes)
+            res.onSuccess {
+                _uiState.update {
+                    it.copy(isLoading = false, successMessage = "Leave application $status successfully.")
+                }
+                fetchLeave()
             }.onFailure { err ->
-                _uiState.update { it.copy(isLoading = false, errorMessage = err.message ?: "Profile update failed.") }
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
             }
         }
     }
 
+    // --- Incident Actions ---
+    fun acknowledgeIncident(id: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.acknowledgeIncident(id)
+            res.onSuccess {
+                _uiState.update {
+                    it.copy(isLoading = false, successMessage = "Incident acknowledged.")
+                }
+                fetchIncidents()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun resolveIncident(id: String, notes: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.resolveIncident(id, notes)
+            res.onSuccess {
+                _uiState.update {
+                    it.copy(isLoading = false, successMessage = "Incident marked as RESOLVED.")
+                }
+                fetchIncidents()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    // --- Escort Duties ---
+    fun fetchEscortDuties() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(escortsLoading = true) }
+            val res = repository.fetchEscortDuties()
+            res.onSuccess { list ->
+                _uiState.update { it.copy(escortDuties = list, escortsLoading = false) }
+            }.onFailure {
+                _uiState.update { it.copy(escortsLoading = false) }
+            }
+        }
+    }
+
+    fun createEscortDuty(request: CreateEscortDutyRequest, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.createEscortDuty(request)
+            res.onSuccess {
+                _uiState.update {
+                    it.copy(isLoading = false, successMessage = "Escort duty logged successfully.")
+                }
+                fetchEscortDuties()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun updateEscortStatus(id: String, status: String) {
+        viewModelScope.launch {
+            val res = repository.updateEscortStatus(id, status)
+            res.onSuccess {
+                _uiState.update {
+                    it.copy(successMessage = "Escort status updated to $status.")
+                }
+                fetchEscortDuties()
+            }.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = err.message) }
+            }
+        }
+    }
+
+    // --- Exam Duties ---
+    fun fetchExamDuties() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(examsLoading = true) }
+            val res = repository.fetchExamDuties()
+            res.onSuccess { list ->
+                _uiState.update { it.copy(examDuties = list, examsLoading = false) }
+            }.onFailure {
+                _uiState.update { it.copy(examsLoading = false) }
+            }
+        }
+    }
+
+    fun createExamDuty(request: CreateExamDutyRequest, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.createExamDuty(request)
+            res.onSuccess {
+                _uiState.update {
+                    it.copy(isLoading = false, successMessage = "Exam security duty scheduled.")
+                }
+                fetchExamDuties()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun updateExamStatus(id: String, status: String) {
+        viewModelScope.launch {
+            val res = repository.updateExamStatus(id, status)
+            res.onSuccess {
+                _uiState.update {
+                    it.copy(successMessage = "Exam duty status updated to $status.")
+                }
+                fetchExamDuties()
+            }.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = err.message) }
+            }
+        }
+    }
+
+    // --- Notifications ---
     fun fetchNotifications() {
         viewModelScope.launch {
             _uiState.update { it.copy(notificationsLoading = true) }
-            repository.fetchNotifications().onSuccess { items ->
-                _uiState.update { it.copy(notifications = items, notificationsLoading = false) }
-            }.onFailure { err ->
-                _uiState.update { it.copy(notificationsLoading = false, errorMessage = err.message) }
+            val res = repository.fetchNotifications()
+            res.onSuccess { alerts ->
+                _uiState.update { it.copy(notifications = alerts, notificationsLoading = false) }
+            }.onFailure {
+                _uiState.update { it.copy(notificationsLoading = false) }
             }
         }
     }
 
     fun markNotificationRead(id: String) {
         viewModelScope.launch {
-            repository.markNotificationRead(id).onSuccess { updated ->
-                _uiState.update { state -> state.copy(notifications = state.notifications.map { if (it.id == updated.id) updated else it }) }
-            }
+            val res = repository.markNotificationRead(id)
+            res.onSuccess { fetchNotifications() }
         }
     }
 
     fun markAllNotificationsRead() {
         viewModelScope.launch {
-            repository.markAllNotificationsRead().onSuccess {
-                _uiState.update { state -> state.copy(notifications = state.notifications.map { it.copy(read = true) }, successMessage = "All notifications marked as read.") }
+            val res = repository.markAllNotificationsRead()
+            res.onSuccess {
+                _uiState.update { it.copy(successMessage = "All alerts marked as read.") }
+                fetchNotifications()
             }
         }
     }
 
-    fun fetchAdditionalDuties() {
+    // --- Users & Guards Management ---
+    fun fetchUsers(role: String? = null, station: String? = null) {
         viewModelScope.launch {
-            _uiState.update { it.copy(additionalDutiesLoading = true) }
-            val escorts = repository.fetchEscortDuties()
-            val exams = repository.fetchExamDuties()
-            _uiState.update { state -> state.copy(
-                escortDuties = escorts.getOrDefault(emptyList()),
-                examDuties = exams.getOrDefault(emptyList()),
-                additionalDutiesLoading = false
-            ) }
+            _uiState.update { it.copy(adminLoading = true) }
+            val res = repository.fetchUsers(role, station)
+            res.onSuccess { userList ->
+                _uiState.update { it.copy(users = userList, adminLoading = false) }
+            }.onFailure {
+                _uiState.update { it.copy(adminLoading = false) }
+            }
         }
     }
+
+    fun createUser(request: CreateUserRequest, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.createUser(request)
+            res.onSuccess { u ->
+                _uiState.update {
+                    it.copy(isLoading = false, successMessage = "Account created for ${u.username} (${u.role})")
+                }
+                fetchUsers()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun toggleUserActive(user: User) {
+        viewModelScope.launch {
+            val res = repository.toggleUserActive(user.id, user.isActive)
+            res.onSuccess { updated ->
+                _uiState.update {
+                    it.copy(successMessage = "${updated.username} is now ${if (updated.isActive) "Active" else "Deactivated"}")
+                }
+                fetchUsers()
+            }.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun assignUserStation(userId: String, stationId: String?) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.assignUserStation(userId, stationId)
+            res.onSuccess { updated ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        successMessage = "Assigned ${updated.username} to ${updated.stationName ?: "station"}."
+                    )
+                }
+                fetchUsers()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    // --- Stations Management ---
+    fun fetchStations() {
+        viewModelScope.launch {
+            val res = repository.fetchStations()
+            res.onSuccess { list ->
+                _uiState.update { it.copy(stations = list) }
+            }
+        }
+    }
+
+    fun createStation(name: String, code: String, address: String, lat: Double, lon: Double, geofence: Int, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.createStation(name, code, address, lat, lon, geofence)
+            res.onSuccess { st ->
+                _uiState.update {
+                    it.copy(isLoading = false, successMessage = "Station ${st.name} registered.")
+                }
+                fetchStations()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    // --- Guard Pairs Management ---
+    fun fetchGuardPairs(stationId: String? = null) {
+        viewModelScope.launch {
+            val res = repository.fetchGuardPairs(stationId)
+            res.onSuccess { list ->
+                _uiState.update { it.copy(guardPairs = list) }
+            }
+        }
+    }
+
+    fun createGuardPair(stationId: String, guardA: String, guardB: String, order: Int, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.createGuardPair(stationId, guardA, guardB, order)
+            res.onSuccess {
+                _uiState.update {
+                    it.copy(isLoading = false, successMessage = "Guard pair established.")
+                }
+                fetchGuardPairs()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    // --- Shifts & Roster Management ---
+    fun fetchRosterShifts(date: String? = null, station: String? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(adminLoading = true) }
+            val res = repository.fetchShifts(date, station)
+            res.onSuccess { list ->
+                _uiState.update { it.copy(rosterShifts = list, adminLoading = false) }
+            }.onFailure {
+                _uiState.update { it.copy(adminLoading = false) }
+            }
+        }
+    }
+
+    fun generateRoster(stationId: String, startDate: String, cycleDays: Int, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.generateRoster(stationId, startDate, cycleDays)
+            res.onSuccess {
+                _uiState.update {
+                    it.copy(isLoading = false, successMessage = "Automated shift roster generated successfully.")
+                }
+                fetchRosterShifts(station = stationId)
+                fetchTodayShift()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    // --- Attendance Records ---
+    fun fetchAttendanceRecords(date: String? = null, shift: String? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(adminLoading = true) }
+            val res = repository.fetchAttendanceRecords(date, shift)
+            res.onSuccess { list ->
+                _uiState.update { it.copy(attendanceRecords = list, adminLoading = false) }
+            }.onFailure {
+                _uiState.update { it.copy(adminLoading = false) }
+            }
+        }
+    }
+
+    // --- Telemetry & Profile Management ---
+    fun fetchTelemetry() {
+        viewModelScope.launch {
+            val res = repository.fetchTelemetry()
+            res.onSuccess { telemetryData ->
+                _uiState.update { it.copy(telemetry = telemetryData) }
+            }
+        }
+    }
+
+    fun updateProfile(
+        firstName: String?,
+        lastName: String?,
+        phoneNumber: String?,
+        profilePhoto: String? = null,
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.updateUserProfile(firstName, lastName, phoneNumber, profilePhoto)
+            res.onSuccess { updatedUser ->
+                _uiState.update {
+                    it.copy(
+                        currentUser = updatedUser,
+                        isLoading = false,
+                        successMessage = "Personnel profile updated successfully."
+                    )
+                }
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun setThemeMode(mode: String) {
+        _uiState.update { it.copy(themeMode = mode) }
+    }
+}
 
 class SgmisViewModelFactory(private val repository: SgmisRepository) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
