@@ -14,7 +14,6 @@ class UsernameOrEmployeeNumberBackend(ModelBackend):
             return None
 
         try:
-            # Query by exact username or employee_number (case-insensitive where possible)
             user = UserModel.objects.get(
                 Q(username__iexact=username) | Q(employee_number__iexact=username)
             )
