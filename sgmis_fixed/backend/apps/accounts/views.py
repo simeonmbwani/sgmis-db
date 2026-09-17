@@ -1,25 +1,146 @@
+import secrets
+from datetime import timedelta
+from django.utils import timezone
+from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.views import APIView
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
-from .models import User, UserRole
-from .serializers import UserSerializer, UserCreateSerializer, UserProfileUpdateSerializer, LoginSerializer
+from django.conf import settings
+from apps.core.models import SecurityAuditEvent
+from apps.core.audit import log_security_event
+from .models import User, UserRole, LoginAttempt, PasswordResetOTP, UserDeactivationAudit
+from .serializers import (
+    UserSerializer,
+    UserCreateSerializer,
+    UserProfileUpdateSerializer,
+    LoginSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetConfirmSerializer,
+    UserDeactivateSerializer,
+)
 from .permissions import IsAdministrator, IsSupervisorOrAdmin
+
+def get_client_ip(request):
+    x_forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
+    if x_forwarded:
+        return x_forwarded.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR", "")
 
 class LoginView(APIView):
     """
     POST /auth/login/
     Accepts username OR employee_number + password.
-    Returns JWT tokens and user profile.
+    Enforces strict rate limiting: max 5 failed attempts followed by a 15-minute lockout.
     """
     permission_classes = [AllowAny]
 
     def post(self, request):
+        identifier = str(request.data.get("identifier", "")).strip()
+        client_ip = get_client_ip(request)
+        now = timezone.now()
+
+        # Check existing lockout record
+        attempt_record = None
+        if identifier:
+            attempt_record = LoginAttempt.objects.filter(identifier=identifier).first()
+        if not attempt_record and client_ip:
+            attempt_record = LoginAttempt.objects.filter(ip_address=client_ip).first()
+
+        if attempt_record and attempt_record.locked_until and attempt_record.locked_until > now:
+            remaining_seconds = int((attempt_record.locked_until - now).total_seconds())
+            remaining_minutes = max(1, (remaining_seconds + 59) // 60)
+            log_security_event(
+                event_type=SecurityAuditEvent.EventType.LOGIN_FAILURE,
+                actor_username=identifier,
+                ip_address=client_ip,
+                details={"reason": "Attempt on locked account", "remaining_minutes": remaining_minutes}
+            )
+            return Response({
+                "detail": f"Account locked due to 5 failed login attempts. Please retry after {remaining_minutes} minute(s).",
+                "is_locked": True,
+                "lockout_remaining_minutes": remaining_minutes,
+                "locked_until": attempt_record.locked_until.isoformat(),
+            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
         serializer = LoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            # Record failed login attempt
+            if not attempt_record and identifier:
+                attempt_record = LoginAttempt.objects.create(
+                    identifier=identifier,
+                    ip_address=client_ip,
+                    failed_attempts=0
+                )
+            elif not attempt_record and client_ip:
+                attempt_record = LoginAttempt.objects.create(
+                    identifier=identifier or "anonymous",
+                    ip_address=client_ip,
+                    failed_attempts=0
+                )
+
+            if attempt_record:
+                attempt_record.failed_attempts += 1
+                if attempt_record.failed_attempts >= 5:
+                    attempt_record.locked_until = now + timedelta(minutes=15)
+                    attempt_record.save()
+                    log_security_event(
+                        event_type=SecurityAuditEvent.EventType.LOGIN_FAILURE,
+                        actor_username=identifier,
+                        ip_address=client_ip,
+                        details={"reason": "Account locked after 5 failed attempts"}
+                    )
+                    return Response({
+                        "detail": "Maximum 5 failed login attempts exceeded. Account is locked for 15 minutes.",
+                        "is_locked": True,
+                        "lockout_remaining_minutes": 15,
+                        "locked_until": attempt_record.locked_until.isoformat(),
+                    }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+                else:
+                    attempt_record.save()
+                    remaining_attempts = 5 - attempt_record.failed_attempts
+                    log_security_event(
+                        event_type=SecurityAuditEvent.EventType.LOGIN_FAILURE,
+                        actor_username=identifier,
+                        ip_address=client_ip,
+                        details={"failed_attempts": attempt_record.failed_attempts, "remaining": remaining_attempts}
+                    )
+                    return Response({
+                        "detail": f"Invalid credentials. {remaining_attempts} attempt(s) remaining before a 15-minute account lockout.",
+                        "is_locked": False,
+                        "remaining_attempts": remaining_attempts,
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+            log_security_event(
+                event_type=SecurityAuditEvent.EventType.LOGIN_FAILURE,
+                actor_username=identifier,
+                ip_address=client_ip,
+                details={"errors": serializer.errors}
+            )
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # Login succeeded: reset failed attempts
         user = serializer.validated_data["user"]
+        if attempt_record:
+            attempt_record.failed_attempts = 0
+            attempt_record.locked_until = None
+            attempt_record.save()
+
+        if client_ip:
+            LoginAttempt.objects.filter(ip_address=client_ip).update(failed_attempts=0, locked_until=None)
+
+        log_security_event(
+            event_type=SecurityAuditEvent.EventType.LOGIN_SUCCESS,
+            actor=user,
+            actor_username=user.username,
+            ip_address=client_ip,
+            details={"role": user.role, "station": user.station.name if user.station else None}
+        )
+
         refresh = RefreshToken.for_user(user)
         return Response({
             "access": str(refresh.access_token),
@@ -27,18 +148,182 @@ class LoginView(APIView):
             "user": UserSerializer(user).data,
         }, status=status.HTTP_200_OK)
 
-class CustomTokenRefreshView(TokenRefreshView):
+class PasswordResetRequestView(APIView):
     """
-    POST /auth/refresh/
-    Refreshes access token using valid refresh token.
+    POST /auth/password_reset/request/
+    Initiates time-sensitive OTP recovery flow.
+    OTP is hashed in storage (SHA-256). Responses are uniform to prevent enumeration.
     """
     permission_classes = [AllowAny]
 
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ident = serializer.validated_data["identifier"].strip()
+        client_ip = get_client_ip(request)
+
+        user = User.objects.filter(
+            Q(username__iexact=ident) |
+            Q(employee_number__iexact=ident) |
+            Q(email__iexact=ident)
+        ).first()
+
+        if not user:
+            # Prevent user enumeration by returning standard response
+            log_security_event(
+                event_type=SecurityAuditEvent.EventType.PASSWORD_RESET_REQUEST,
+                actor_username=ident,
+                ip_address=client_ip,
+                details={"status": "user_not_found"}
+            )
+            return Response({
+                "message": "If an active account matches the details provided, a 6-digit recovery OTP has been generated.",
+                "expires_in_minutes": 10,
+            }, status=status.HTTP_200_OK)
+
+        # Resend cooldown: 60 seconds
+        recent_otp = PasswordResetOTP.objects.filter(
+            user=user,
+            created_at__gte=timezone.now() - timedelta(seconds=60),
+            is_used=False
+        ).first()
+        if recent_otp:
+            return Response({
+                "detail": "A recovery code was recently requested. Please wait 60 seconds before requesting a new code.",
+            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        # Invalidate old unused OTPs
+        PasswordResetOTP.objects.filter(user=user, is_used=False).update(is_used=True)
+
+        otp_val = f"{secrets.randbelow(900000) + 100000}"
+        expires = timezone.now() + timedelta(minutes=10)
+        otp = PasswordResetOTP(
+            user=user,
+            expires_at=expires,
+        )
+        otp.set_otp(otp_val)
+        otp.save()
+
+        from apps.notifications.models import Notification
+        Notification.objects.create(
+            user=user,
+            title="Password Reset OTP Generated",
+            message=f"Your security recovery OTP code is: {otp_val}. Valid for 10 minutes.",
+            notification_type="SECURITY_ALERT",
+        )
+
+        log_security_event(
+            event_type=SecurityAuditEvent.EventType.PASSWORD_RESET_REQUEST,
+            actor=user,
+            actor_username=user.username,
+            ip_address=client_ip,
+            details={"status": "otp_generated"}
+        )
+
+        resp_data = {
+            "message": "If an active account matches the details provided, a 6-digit recovery OTP has been generated.",
+            "expires_in_minutes": 10,
+        }
+        import sys
+        if settings.DEBUG or "test" in sys.argv or getattr(settings, "TESTING", False):
+            resp_data["dev_otp"] = otp_val
+
+        return Response(resp_data, status=status.HTTP_200_OK)
+
+class PasswordResetConfirmView(APIView):
+    """
+    POST /auth/password_reset/confirm/
+    Verifies time-sensitive hashed OTP and resets password.
+    Enforces maximum 5 attempts per OTP.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ident = serializer.validated_data["identifier"].strip()
+        otp_code = serializer.validated_data["otp_code"].strip()
+        new_password = serializer.validated_data["new_password"]
+        client_ip = get_client_ip(request)
+
+        user = User.objects.filter(
+            Q(username__iexact=ident) |
+            Q(employee_number__iexact=ident) |
+            Q(email__iexact=ident)
+        ).first()
+
+        if not user:
+            log_security_event(
+                event_type=SecurityAuditEvent.EventType.PASSWORD_RESET_FAILED,
+                actor_username=ident,
+                ip_address=client_ip,
+                details={"reason": "User not found"}
+            )
+            return Response({"detail": "Invalid identifier or OTP code."}, status=status.HTTP_400_BAD_REQUEST)
+
+        otp = PasswordResetOTP.objects.filter(
+            user=user,
+            is_used=False,
+            expires_at__gt=timezone.now()
+        ).order_by("-created_at").first()
+
+        if not otp:
+            log_security_event(
+                event_type=SecurityAuditEvent.EventType.PASSWORD_RESET_FAILED,
+                actor=user,
+                actor_username=user.username,
+                ip_address=client_ip,
+                details={"reason": "No active unexpired OTP"}
+            )
+            return Response({"detail": "Invalid or expired OTP code. Please request a new code."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not otp.verify_otp(otp_code):
+            log_security_event(
+                event_type=SecurityAuditEvent.EventType.PASSWORD_RESET_FAILED,
+                actor=user,
+                actor_username=user.username,
+                ip_address=client_ip,
+                details={"reason": "Failed OTP verification", "attempts": otp.attempts_count}
+            )
+            if otp.is_used:
+                return Response({
+                    "detail": "Maximum 5 attempts exceeded for this recovery code. Please request a new code.",
+                }, status=status.HTTP_400_BAD_REQUEST)
+            remaining = otp.max_attempts - otp.attempts_count
+            return Response({
+                "detail": f"Invalid OTP code. {remaining} attempt(s) remaining.",
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save()
+
+        otp.is_used = True
+        otp.save(update_fields=["is_used"])
+
+        # Clear login lockout record on password recovery
+        LoginAttempt.objects.filter(identifier=user.username).update(failed_attempts=0, locked_until=None)
+        if user.employee_number:
+            LoginAttempt.objects.filter(identifier=user.employee_number).update(failed_attempts=0, locked_until=None)
+        if client_ip:
+            LoginAttempt.objects.filter(ip_address=client_ip).update(failed_attempts=0, locked_until=None)
+
+        log_security_event(
+            event_type=SecurityAuditEvent.EventType.PASSWORD_RESET_SUCCESS,
+            actor=user,
+            actor_username=user.username,
+            ip_address=client_ip,
+            details={"status": "password_reset_success"}
+        )
+
+        return Response({
+            "message": "Password successfully reset. You may now log in with your new password.",
+            "status": "success",
+        }, status=status.HTTP_200_OK)
+
+class CustomTokenRefreshView(TokenRefreshView):
+    permission_classes = [AllowAny]
+
 class CurrentUserView(APIView):
-    """
-    GET /accounts/users/me/
-    PATCH /accounts/users/me/
-    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -56,6 +341,7 @@ class UserViewSet(viewsets.ModelViewSet):
     CRUD for User accounts.
     Administrators have full management.
     Supervisors can view guards.
+    Deactivating a guard account requires explicit Admin approval plus a mandatory audit reason log.
     """
     queryset = User.objects.all().select_related("station")
     permission_classes = [IsSupervisorOrAdmin]
@@ -79,16 +365,42 @@ class UserViewSet(viewsets.ModelViewSet):
         if active is not None:
             qs = qs.filter(is_active=active.lower() in ("true", "1"))
 
-        # Supervisors only see guards within their scope or unassigned guards
         if user.role == UserRole.SUPERVISOR:
             if user.station:
-                from django.db.models import Q
                 qs = qs.filter(Q(station=user.station) | Q(role=UserRole.GUARD, station__isnull=True))
             else:
                 qs = qs.filter(role=UserRole.GUARD)
         return qs
 
     def get_permissions(self):
-        if self.action in ["create", "destroy"]:
+        if self.action in ["create", "destroy", "deactivate"]:
             return [IsAdministrator()]
         return [IsSupervisorOrAdmin()]
+
+    @action(detail=True, methods=["post"], url_path="deactivate", permission_classes=[IsAdministrator])
+    def deactivate(self, request, pk=None):
+        target_user = self.get_object()
+        serializer = UserDeactivateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reason = serializer.validated_data["reason"].strip()
+
+        if not target_user.is_active:
+            return Response({"detail": "User account is already deactivated."}, status=status.HTTP_400_BAD_REQUEST)
+
+        target_user.is_active = False
+        target_user.save()
+
+        UserDeactivationAudit.objects.create(
+            target_user=target_user,
+            performed_by=request.user,
+            reason=reason,
+        )
+
+        return Response({
+            "message": f"Account for {target_user.username} successfully deactivated.",
+            "user": UserSerializer(target_user).data,
+        }, status=status.HTTP_200_OK)
+
+    def perform_destroy(self, instance):
+        # Prevent irreversible deletion of accounts; route to audit deactivation
+        raise ValidationError({"detail": "Hard deletion of accounts is prohibited. Use the admin deactivation endpoint with audit justification."})

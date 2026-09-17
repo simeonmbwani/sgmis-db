@@ -29,6 +29,13 @@ class LeaveBalanceViewSet(viewsets.ReadOnlyModelViewSet):
         balance.accrue_to_date()
         return Response(self.get_serializer(balance).data)
 
+    @action(detail=True, methods=["post"], url_path="credit_holiday", permission_classes=[IsSupervisorOrAdmin])
+    def credit_holiday(self, request, pk=None):
+        balance = self.get_object()
+        days = float(request.data.get("days", 2.0))
+        balance.credit_public_holiday_duty(days=days)
+        return Response(self.get_serializer(balance).data, status=status.HTTP_200_OK)
+
 class LeaveApplicationViewSet(viewsets.ModelViewSet):
     queryset = LeaveApplication.objects.all().select_related("guard", "reviewer")
     serializer_class = LeaveApplicationSerializer
@@ -44,7 +51,20 @@ class LeaveApplicationViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        serializer.save(guard=self.request.user)
+        application = serializer.save(guard=self.request.user)
+        try:
+            from apps.accounts.models import User, UserRole
+            from apps.notifications.models import Notification
+            admins = User.objects.filter(role=UserRole.ADMINISTRATOR, is_active=True)
+            for admin in admins:
+                Notification.objects.create(
+                    user=admin,
+                    title=f"Leave Request: {self.request.user.get_full_name() or self.request.user.username}",
+                    message=f"New leave application for {application.get_leave_type_display()} ({application.start_date} to {application.end_date}) routed to Administration.",
+                    notification_type="LEAVE_REQUEST",
+                )
+        except Exception:
+            pass
 
     @action(detail=True, methods=["post"], url_path="review", permission_classes=[IsSupervisorOrAdmin])
     def review(self, request, pk=None):
@@ -56,6 +76,13 @@ class LeaveApplicationViewSet(viewsets.ModelViewSet):
         allowed = [LeaveStatus.APPROVED, LeaveStatus.REJECTED, LeaveStatus.CHANGES_REQUESTED]
         if new_status not in allowed:
             return Response({"detail": f"Invalid status '{new_status}'. Allowed: APPROVED, REJECTED, CHANGES_REQUESTED."}, status=status.HTTP_400_BAD_REQUEST)
+
+        rejection_reason = request.data.get("rejection_reason", "").strip()
+        if new_status == LeaveStatus.REJECTED and not rejection_reason:
+            return Response(
+                {"detail": "A structured rejection reason (e.g., Manpower shortage, Critical Schedule, Insufficient days, Special Upcoming functions) is mandatory when rejecting leave."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         with transaction.atomic():
             if new_status == LeaveStatus.APPROVED:
@@ -88,6 +115,19 @@ class LeaveApplicationViewSet(viewsets.ModelViewSet):
             application.status = new_status
             application.reviewer = request.user
             application.reviewer_notes = notes
+            if new_status == LeaveStatus.REJECTED:
+                application.rejection_reason = rejection_reason
             application.save()
+
+            try:
+                from apps.notifications.models import Notification
+                Notification.objects.create(
+                    user=application.guard,
+                    title=f"Leave Application {application.status.capitalize()}",
+                    message=f"Your {application.get_leave_type_display()} request has been {application.status.lower()} by {request.user.get_full_name() or request.user.username}. Notes: {notes or 'No notes provided.'}",
+                    notification_type="LEAVE_DECISION",
+                )
+            except Exception:
+                pass
 
         return Response(self.get_serializer(application).data, status=status.HTTP_200_OK)

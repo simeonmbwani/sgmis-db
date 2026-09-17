@@ -13,6 +13,12 @@ interface ApiService {
     @POST("auth/refresh/")
     suspend fun refreshToken(@Body request: TokenRefreshRequest): Response<TokenRefreshResponse>
 
+    @POST("auth/password_reset/request/")
+    suspend fun requestPasswordReset(@Body request: PasswordResetRequest): Response<NotificationActionResponse>
+
+    @POST("auth/password_reset/confirm/")
+    suspend fun confirmPasswordReset(@Body request: PasswordResetConfirmRequest): Response<NotificationActionResponse>
+
     @GET("accounts/users/me/")
     suspend fun getCurrentUser(): Response<User>
 
@@ -35,7 +41,7 @@ interface ApiService {
     @PATCH("accounts/users/{id}/")
     suspend fun updateUser(
         @Path("id") id: String,
-        @Body updates: Map<String, @JvmSuppressWildcards Any?>
+        @Body request: UpdateUserRequest
     ): Response<User>
 
     @DELETE("accounts/users/{id}/")
@@ -56,7 +62,10 @@ interface ApiService {
 
     // --- Shifts & Today's Shift ---
     @GET("shifts/shifts/today/")
-    suspend fun getTodayShift(): Response<Shift>
+    suspend fun getTodayShift(
+        @Query("station") station: String? = null,
+        @Query("guard") guard: String? = null
+    ): Response<Shift>
 
     @GET("shifts/shifts/")
     suspend fun getShifts(
@@ -65,7 +74,28 @@ interface ApiService {
     ): Response<List<Shift>>
 
     @POST("shifts/shifts/generate/")
-    suspend fun generateRoster(@Body request: RosterGenerateRequest): Response<Map<String, Any>>
+    suspend fun generateRoster(@Body request: GenerateRosterRequest): Response<GenerateRosterResponse>
+
+    @POST("shifts/shifts/approve_roster/")
+    suspend fun approveRoster(@Body request: ApproveRosterRequest): Response<NotificationActionResponse>
+
+    @POST("shifts/shifts/detect_conflicts/")
+    suspend fun detectConflicts(@Body request: DetectConflictsRequest): Response<ConflictReport>
+
+    @POST("shifts/shifts/schedule_escort/")
+    suspend fun scheduleEscort(@Body request: ScheduleExamEscortRequest): Response<ScheduleExamEscortResponse>
+
+    @POST("shifts/shifts/resume_normal/")
+    suspend fun resumeNormalRoster(@Body request: ResumeNormalRosterRequest): Response<NotificationActionResponse>
+
+    @GET("shifts/shifts/temporary_assignments/")
+    suspend fun getTemporaryAssignments(@Query("station") station: String? = null): Response<List<TemporaryAssignmentAudit>>
+
+    @GET("shifts/examination-periods/")
+    suspend fun getExaminationPeriods(@Query("station") station: String? = null): Response<List<ExaminationPeriod>>
+
+    @POST("shifts/examination-periods/")
+    suspend fun createExaminationPeriod(@Body request: CreateExaminationPeriodRequest): Response<ExaminationPeriod>
 
     // --- Attendance Clock-In & Clock-Out ---
     @POST("shifts/attendance/clock_in/")
@@ -90,6 +120,12 @@ interface ApiService {
     @POST("shifts/handovers/{id}/accept/")
     suspend fun acceptHandover(@Path("id") id: String): Response<ShiftHandover>
 
+    @POST("shifts/handovers/{id}/reject/")
+    suspend fun rejectHandover(
+        @Path("id") id: String,
+        @Body request: RejectHandoverRequest = RejectHandoverRequest()
+    ): Response<ShiftHandover>
+
     // --- Occurrence Book (OB) ---
     @GET("occurrence_book/entries/")
     suspend fun getOBEntries(
@@ -99,6 +135,12 @@ interface ApiService {
 
     @POST("occurrence_book/entries/")
     suspend fun createOBEntry(@Body request: CreateOBEntryRequest): Response<OccurrenceBookEntry>
+
+    @POST("occurrence_book/entries/{id}/amend/")
+    suspend fun amendOBEntry(
+        @Path("id") id: String,
+        @Body request: AmendOBRequest
+    ): Response<AmendOBResponse>
 
     // --- Incident Reporting ---
     @GET("incidents/reports/")
@@ -110,6 +152,12 @@ interface ApiService {
 
     @POST("incidents/reports/")
     suspend fun reportIncident(@Body request: CreateIncidentRequest): Response<IncidentReport>
+
+    @POST("incidents/reports/{id}/amend/")
+    suspend fun amendIncident(
+        @Path("id") id: String,
+        @Body request: AmendIncidentRequest
+    ): Response<AmendIncidentResponse>
 
     @POST("incidents/reports/{id}/acknowledge/")
     suspend fun acknowledgeIncident(@Path("id") id: String): Response<IncidentReport>
@@ -125,24 +173,24 @@ interface ApiService {
     suspend fun getCheckpoints(@Query("station") station: String? = null): Response<List<Checkpoint>>
 
     @POST("patrols/checkpoints/")
-    suspend fun createCheckpoint(@Body body: Map<String, @JvmSuppressWildcards Any>): Response<Checkpoint>
+    suspend fun createCheckpoint(@Body request: CreateCheckpointRequest): Response<Checkpoint>
 
     @GET("patrols/logs/")
     suspend fun getPatrolLogs(): Response<List<PatrolLog>>
 
     @POST("patrols/logs/")
-    suspend fun startPatrol(@Body body: Map<String, String>): Response<PatrolLog>
+    suspend fun startPatrol(@Body request: StartPatrolRequest = StartPatrolRequest()): Response<PatrolLog>
 
     @POST("patrols/logs/{id}/scan/")
     suspend fun scanCheckpoint(
         @Path("id") patrolId: String,
         @Body request: CheckpointScanRequest
-    ): Response<Map<String, Any>>
+    ): Response<CheckpointScanResponse>
 
     @POST("patrols/logs/{id}/finish/")
     suspend fun finishPatrol(
         @Path("id") patrolId: String,
-        @Body body: Map<String, String> = emptyMap()
+        @Body request: FinishPatrolRequest = FinishPatrolRequest()
     ): Response<PatrolLog>
 
     // --- Leave Applications ---
@@ -161,6 +209,12 @@ interface ApiService {
         @Body request: LeaveReviewRequest
     ): Response<LeaveApplication>
 
+    @POST("leave/balances/{id}/credit_holiday/")
+    suspend fun creditHoliday(
+        @Path("id") id: String,
+        @Body request: Map<String, Double>
+    ): Response<LeaveBalance>
+
     // --- Escorts (Vehicle & Security) ---
     @GET("escorts/duties/")
     suspend fun getEscortDuties(): Response<List<EscortDuty>>
@@ -168,10 +222,13 @@ interface ApiService {
     @POST("escorts/duties/")
     suspend fun createEscortDuty(@Body request: CreateEscortDutyRequest): Response<EscortDuty>
 
+    @POST("escorts/duties/auto_allocate/")
+    suspend fun autoAllocateEscortDuties(@Body request: AutoAllocateDutyRequest): Response<AutoAllocateResponse>
+
     @PATCH("escorts/duties/{id}/")
     suspend fun updateEscortDuty(
         @Path("id") id: String,
-        @Body updates: Map<String, String>
+        @Body request: UpdateDutyStatusRequest
     ): Response<EscortDuty>
 
     // --- Exams ---
@@ -181,10 +238,13 @@ interface ApiService {
     @POST("exams/duties/")
     suspend fun createExamDuty(@Body request: CreateExamDutyRequest): Response<ExamDuty>
 
+    @POST("exams/duties/auto_allocate/")
+    suspend fun autoAllocateExamDuties(@Body request: AutoAllocateDutyRequest): Response<AutoAllocateResponse>
+
     @PATCH("exams/duties/{id}/")
     suspend fun updateExamDuty(
         @Path("id") id: String,
-        @Body updates: Map<String, String>
+        @Body request: UpdateDutyStatusRequest
     ): Response<ExamDuty>
 
     // --- Notifications ---
@@ -192,8 +252,12 @@ interface ApiService {
     suspend fun getNotifications(): Response<List<NotificationAlert>>
 
     @POST("notifications/alerts/{id}/read/")
-    suspend fun markNotificationRead(@Path("id") id: String): Response<Map<String, Any>>
+    suspend fun markNotificationRead(@Path("id") id: String): Response<NotificationActionResponse>
 
     @POST("notifications/alerts/read_all/")
-    suspend fun markAllNotificationsRead(): Response<Map<String, Any>>
+    suspend fun markAllNotificationsRead(): Response<NotificationActionResponse>
+
+    @POST("notifications/alerts/broadcast/")
+    suspend fun broadcastNotice(@Body request: BroadcastNoticeRequest): Response<BroadcastNoticeResponse>
 }
+

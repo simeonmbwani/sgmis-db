@@ -15,7 +15,7 @@ class StationViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy"]:
-            return [IsAdministrator()]
+            return [IsSupervisorOrAdmin()]
         return [IsAuthenticated()]
 
     def get_queryset(self):

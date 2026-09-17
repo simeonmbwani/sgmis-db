@@ -53,13 +53,34 @@ private val LightColorScheme =
     onError = Color.White
   )
 
+enum class ThemeMode(val label: String) {
+    SYSTEM("System default"),
+    LIGHT("Light"),
+    DARK("Dark")
+}
+
+@Composable
+fun SmartSecurityTheme(
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    content: @Composable () -> Unit
+) {
+    val darkTheme = when (themeMode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
+    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+}
+
 @Composable
 fun MyApplicationTheme(
-  darkTheme: Boolean = true, // Default to command center dark navy theme
-  dynamicColor: Boolean = false, // Keep distinct security brand identity
-  content: @Composable () -> Unit,
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    dynamicColor: Boolean = false,
+    content: @Composable () -> Unit,
 ) {
-  val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
-
-  MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+    SmartSecurityTheme(
+        themeMode = if (darkTheme) ThemeMode.DARK else ThemeMode.LIGHT,
+        content = content
+    )
 }

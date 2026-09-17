@@ -9,15 +9,19 @@ import androidx.room.RoomDatabase
     entities = [
         CachedShiftEntity::class,
         CachedOBEntity::class,
-        CachedIncidentEntity::class
+        CachedIncidentEntity::class,
+        CachedStationEntity::class,
+        CachedCheckpointEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class SgmisDatabase : RoomDatabase() {
     abstract fun shiftDao(): ShiftDao
     abstract fun obDao(): OBDao
     abstract fun incidentDao(): IncidentDao
+    abstract fun stationDao(): StationDao
+    abstract fun checkpointDao(): CheckpointDao
 
     companion object {
         @Volatile

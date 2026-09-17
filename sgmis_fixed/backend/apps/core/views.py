@@ -28,14 +28,15 @@ def health_check(request):
 def telemetry_overview(request):
     """
     Returns real-time operational telemetry across all security operations.
-    Authoritative database metrics scoped appropriately to user role.
+    Authoritative database metrics scoped appropriately to user role,
+    with structured breakdowns for expandable dashboard cards.
     """
     user = request.user
     today = timezone.localdate()
 
     # Querysets scoped by user role & station assignment
-    incident_qs = IncidentReport.objects.all()
-    ob_qs = OccurrenceBookEntry.objects.all()
+    incident_qs = IncidentReport.objects.filter(is_archived=False)
+    ob_qs = OccurrenceBookEntry.objects.filter(is_archived=False)
     patrol_qs = PatrolLog.objects.all()
     shift_qs = Shift.objects.all()
     escort_qs = EscortDuty.objects.all()
@@ -64,7 +65,7 @@ def telemetry_overview(request):
         attendance_qs = attendance_qs.filter(shift__station=user.station)
 
     total_incidents = incident_qs.count()
-    open_incidents = incident_qs.filter(status__in=[IncidentStatus.REPORTED, IncidentStatus.ACKNOWLEDGED]).count()
+    open_incidents = incident_qs.filter(status__in=[IncidentStatus.REPORTED, IncidentStatus.ACKNOWLEDGED, IncidentStatus.INVESTIGATING]).count()
     critical_incidents = incident_qs.filter(priority=IncidentPriority.CRITICAL).count()
 
     total_ob = ob_qs.count()
@@ -81,6 +82,39 @@ def telemetry_overview(request):
     today_attendance = attendance_qs.filter(shift__date=today, clock_in__isnull=False).count()
     pending_leaves = leave_qs.filter(status=LeaveStatus.PENDING).count()
 
+    # Detailed expandable breakdowns
+    incident_breakdown = {
+        "critical": critical_incidents,
+        "high": incident_qs.filter(priority=IncidentPriority.HIGH).count(),
+        "medium": incident_qs.filter(priority=IncidentPriority.MEDIUM).count(),
+        "low": incident_qs.filter(priority=IncidentPriority.LOW).count(),
+        "reported": incident_qs.filter(status=IncidentStatus.REPORTED).count(),
+        "acknowledged": incident_qs.filter(status=IncidentStatus.ACKNOWLEDGED).count(),
+        "investigating": incident_qs.filter(status=IncidentStatus.INVESTIGATING).count(),
+        "resolved": incident_qs.filter(status=IncidentStatus.RESOLVED).count(),
+    }
+
+    patrol_breakdown = {
+        "in_progress": active_patrols,
+        "completed": completed_patrols,
+    }
+
+    attendance_breakdown = {
+        "clocked_in": today_attendance,
+        "clocked_out": attendance_qs.filter(shift__date=today, clock_out__isnull=False).count(),
+        "late": attendance_qs.filter(shift__date=today, is_late=True).count(),
+    }
+
+    station_breakdown = [
+        {
+            "id": str(s.id),
+            "name": s.name,
+            "active_guards": s.assigned_guards.filter(is_active=True).count(),
+            "today_shifts": s.shifts.filter(date=today).count(),
+        }
+        for s in Station.objects.filter(is_active=True)[:10]
+    ]
+
     return Response({
         "total_incidents": total_incidents,
         "open_incidents": open_incidents,
@@ -95,5 +129,44 @@ def telemetry_overview(request):
         "today_shifts": today_shifts,
         "today_attendance": today_attendance,
         "pending_leaves": pending_leaves,
+        "incident_breakdown": incident_breakdown,
+        "patrol_breakdown": patrol_breakdown,
+        "attendance_breakdown": attendance_breakdown,
+        "station_breakdown": station_breakdown,
     })
+
+
+from django.http import JsonResponse
+
+def api_bad_request(request, exception=None):
+    return JsonResponse({
+        "detail": "Bad request.",
+        "error": "HTTP_400",
+        "status_code": 400,
+        "path": request.path,
+    }, status=400)
+
+def api_permission_denied(request, exception=None):
+    return JsonResponse({
+        "detail": "Permission denied.",
+        "error": "HTTP_403",
+        "status_code": 403,
+        "path": request.path,
+    }, status=403)
+
+def api_not_found(request, exception=None):
+    return JsonResponse({
+        "detail": f"Resource not found at {request.path}",
+        "error": "HTTP_404",
+        "status_code": 404,
+        "path": request.path,
+    }, status=404)
+
+def api_server_error(request):
+    return JsonResponse({
+        "detail": "An internal server error occurred.",
+        "error": "HTTP_500",
+        "status_code": 500,
+        "path": request.path,
+    }, status=500)
 

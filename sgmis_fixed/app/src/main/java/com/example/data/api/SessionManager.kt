@@ -19,8 +19,25 @@ class SessionManager(context: Context) {
         private const val KEY_REFRESH_TOKEN = "refresh_token"
         private const val KEY_USER_JSON = "user_json"
         private const val KEY_SERVER_URL = "server_url"
+        private const val KEY_THEME_MODE = "theme_mode"
         
         val DEFAULT_SERVER_URL = BuildConfig.DEFAULT_API_URL
+    }
+
+    var themeMode: String
+        get() = prefs.getString(KEY_THEME_MODE, "SYSTEM") ?: "SYSTEM"
+        set(value) = prefs.edit().putString(KEY_THEME_MODE, value).apply()
+
+    fun getThemeMode(): com.example.ui.theme.ThemeMode {
+        return try {
+            com.example.ui.theme.ThemeMode.valueOf(themeMode)
+        } catch (e: Exception) {
+            com.example.ui.theme.ThemeMode.SYSTEM
+        }
+    }
+
+    fun setThemeMode(mode: com.example.ui.theme.ThemeMode) {
+        themeMode = mode.name
     }
 
     var serverUrl: String

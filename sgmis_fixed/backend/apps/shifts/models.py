@@ -5,6 +5,60 @@ from django.conf import settings
 class ShiftType(models.TextChoices):
     DAY = "DAY", "Day Shift"
     NIGHT = "NIGHT", "Night Shift"
+    OFF = "OFF", "Time Off"
+
+class AssignmentType(models.TextChoices):
+    NORMAL = "NORMAL", "Normal Duty"
+    EXAM = "EXAM", "Exam Duty"
+    ESCORT = "ESCORT", "Escort Duty"
+    TIME_OFF = "TIME_OFF", "Time Off"
+    RELIEF = "RELIEF", "Relief Duty"
+
+class ExaminationPeriod(models.Model):
+    """
+    Authorized examination period (typically ~2 weeks) during which
+    examination venue duties and collection escorts are active.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    station = models.ForeignKey("stations.Station", on_delete=models.CASCADE, related_name="examination_periods")
+    name = models.CharField(max_length=150, default="University Examinations")
+    venue_name = models.CharField(max_length=150, default="Examination Center")
+    start_date = models.DateField(db_index=True)
+    end_date = models.DateField(db_index=True)
+    is_active = models.BooleanField(default=True)
+    authorized_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="authorized_exam_periods")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-start_date"]
+
+    def __str__(self):
+        return f"{self.name} ({self.start_date} to {self.end_date}) @ {self.station.name}"
+
+class TemporaryAssignmentAudit(models.Model):
+    """
+    Audit log of temporary operational reassignments (e.g. during examination periods).
+    Preserves original pair relationships and normal assignment history.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    guard = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="temporary_reassignments")
+    original_pair = models.ForeignKey("stations.GuardPair", on_delete=models.SET_NULL, null=True, blank=True, related_name="temp_reassignments")
+    original_assignment = models.CharField(max_length=50, default="NORMAL")
+    temporary_assignment = models.CharField(max_length=50, default="EXAM")
+    location = models.CharField(max_length=150, default="Exam Venue")
+    start_date = models.DateField()
+    end_date = models.DateField()
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
+    reason = models.TextField(help_text="Mandatory justification / operational directive")
+    authorized_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="approved_reassignments")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Reassignment: {self.guard.username} -> {self.temporary_assignment} ({self.start_date} to {self.end_date})"
 
 class DutyRosterCycle(models.Model):
     """
@@ -34,6 +88,9 @@ class Shift(models.Model):
     start_time = models.TimeField()
     end_time = models.TimeField()
     shift_type = models.CharField(max_length=10, choices=ShiftType.choices, db_index=True)
+    assignment_type = models.CharField(max_length=20, choices=AssignmentType.choices, default=AssignmentType.NORMAL, db_index=True)
+    duty_location = models.CharField(max_length=150, default="Main Campus")
+    examination_period = models.ForeignKey(ExaminationPeriod, on_delete=models.SET_NULL, null=True, blank=True, related_name="shifts")
     pair = models.ForeignKey("stations.GuardPair", on_delete=models.SET_NULL, null=True, blank=True, related_name="shifts")
     is_override = models.BooleanField(default=False)
     override_reason = models.TextField(blank=True, default="")

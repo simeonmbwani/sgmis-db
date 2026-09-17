@@ -6,11 +6,18 @@ import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 class ApiClient(private val sessionManager: SessionManager) {
 
     private val moshi = Moshi.Builder()
+        .add(ShiftJsonAdapterFactory())
+        .add(PaginatedListJsonAdapterFactory())
         .add(KotlinJsonAdapterFactory())
         .build()
 
@@ -20,7 +27,28 @@ class ApiClient(private val sessionManager: SessionManager) {
 
     private val authInterceptor = AuthInterceptor(sessionManager)
 
-    private val okHttpClient = OkHttpClient.Builder()
+    private fun getUnsafeOkHttpClientBuilder(): OkHttpClient.Builder {
+        return try {
+            val trustAllCerts = arrayOf<TrustManager>(
+                object : X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                    override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                }
+            )
+            val sslContext = SSLContext.getInstance("SSL")
+            sslContext.init(null, trustAllCerts, SecureRandom())
+            val sslSocketFactory = sslContext.socketFactory
+
+            OkHttpClient.Builder()
+                .sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
+                .hostnameVerifier { _, _ -> true }
+        } catch (e: Exception) {
+            throw RuntimeException(e)
+        }
+    }
+
+    private val okHttpClient = getUnsafeOkHttpClientBuilder()
         .addInterceptor(authInterceptor)
         .addInterceptor(loggingInterceptor)
         .connectTimeout(30, TimeUnit.SECONDS)

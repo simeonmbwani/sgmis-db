@@ -53,3 +53,9 @@ urlpatterns = [
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
     path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
 ]
+
+handler400 = "apps.core.views.api_bad_request"
+handler403 = "apps.core.views.api_permission_denied"
+handler404 = "apps.core.views.api_not_found"
+handler500 = "apps.core.views.api_server_error"
+

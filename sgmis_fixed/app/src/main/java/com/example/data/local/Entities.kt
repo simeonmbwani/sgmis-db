@@ -47,3 +47,30 @@ data class CachedIncidentEntity(
     val status: String,
     val createdAt: String
 )
+
+@Entity(tableName = "cached_stations")
+data class CachedStationEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val code: String?,
+    val address: String?,
+    val latitude: Double?,
+    val longitude: Double?,
+    val geofenceRadius: Double?,
+    val createdAt: String?
+)
+
+@Entity(tableName = "cached_checkpoints")
+data class CachedCheckpointEntity(
+    @PrimaryKey val id: String,
+    val stationId: String,
+    val stationName: String,
+    val name: String,
+    val code: String,
+    val qrCode: String,
+    val latitude: Double,
+    val longitude: Double,
+    val order: Int,
+    val isActive: Boolean
+)
+

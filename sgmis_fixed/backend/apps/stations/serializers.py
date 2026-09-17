@@ -5,6 +5,7 @@ from apps.accounts.serializers import UserSerializer
 class StationSerializer(serializers.ModelSerializer):
     guards_count = serializers.IntegerField(source="assigned_guards.count", read_only=True)
     pairs_count = serializers.IntegerField(source="pairs.count", read_only=True)
+    geofence_radius = serializers.FloatField(source="geofence_radius_meters", required=False)
 
     class Meta:
         model = Station
@@ -16,12 +17,16 @@ class StationSerializer(serializers.ModelSerializer):
             "latitude",
             "longitude",
             "geofence_radius_meters",
+            "geofence_radius",
             "is_active",
             "guards_count",
             "pairs_count",
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
+
+    def validate_code(self, value):
+        return value.strip().upper()
 
 class GuardPairSerializer(serializers.ModelSerializer):
     station_name = serializers.CharField(source="station.name", read_only=True)

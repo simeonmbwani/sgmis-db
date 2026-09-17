@@ -80,3 +80,17 @@ class LoginSerializer(serializers.Serializer):
             raise serializers.ValidationError("Account is inactive. Please contact an administrator.")
         attrs["user"] = user
         return attrs
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    identifier = serializers.CharField(required=True, help_text="Username, employee number, or email")
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    identifier = serializers.CharField(required=True)
+    otp_code = serializers.CharField(required=True, min_length=6, max_length=6)
+    new_password = serializers.CharField(required=True, min_length=8, write_only=True)
+
+
+class UserDeactivateSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=True, min_length=5, help_text="Mandatory audit justification for account deactivation")

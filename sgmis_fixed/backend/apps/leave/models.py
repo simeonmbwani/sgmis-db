@@ -98,8 +98,25 @@ class LeaveBalance(models.Model):
     def remaining_vacation(self):
         return max(0.0, float(self.vacation_days) - float(self.used_vacation))
 
+    def credit_public_holiday_duty(self, days=2.0, save=True):
+        """
+        A guard who works on a public holiday receives 2 days of leave compensation,
+        credited toward vacation balance subject to the authoritative 90-day ceiling.
+        """
+        self.vacation_days = min(float(self.vacation_cap), float(self.vacation_days) + float(days))
+        if save:
+            self.save(update_fields=["vacation_days"])
+        return self
+
     def __str__(self):
         return f"{self.guard.username} ({self.year}) Leave Balance"
+
+class LeaveRejectionReason(models.TextChoices):
+    MANPOWER_SHORTAGE = "MANPOWER_SHORTAGE", "Manpower shortage"
+    CRITICAL_SCHEDULE = "CRITICAL_SCHEDULE", "Critical Schedule"
+    INSUFFICIENT_DAYS = "INSUFFICIENT_DAYS", "Insufficient days"
+    SPECIAL_FUNCTIONS = "SPECIAL_FUNCTIONS", "Special Upcoming functions"
+    OTHER = "OTHER", "Other operational grounds"
 
 class LeaveApplication(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -108,9 +125,12 @@ class LeaveApplication(models.Model):
     start_date = models.DateField()
     end_date = models.DateField()
     reason = models.TextField()
+    emergency_phone = models.CharField(max_length=50, blank=True, default="")
+    emergency_address = models.TextField(blank=True, default="")
     status = models.CharField(max_length=20, choices=LeaveStatus.choices, default=LeaveStatus.PENDING, db_index=True)
     reviewer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="reviewed_leaves")
     reviewer_notes = models.TextField(blank=True, default="")
+    rejection_reason = models.CharField(max_length=50, choices=LeaveRejectionReason.choices, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

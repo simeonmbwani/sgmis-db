@@ -14,7 +14,11 @@ import kotlinx.coroutines.launch
 data class SgmisUiState(
     val currentUser: User? = null,
     val isLoggedIn: Boolean = false,
+    val isLockedOut: Boolean = false,
+    val lockoutRemainingMinutes: Int = 0,
+    val isAppLocked: Boolean = false,
     val serverUrl: String = "",
+    val themeMode: com.example.ui.theme.ThemeMode = com.example.ui.theme.ThemeMode.SYSTEM,
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val successMessage: String? = null,
@@ -31,6 +35,10 @@ data class SgmisUiState(
     // Occurrence Book
     val obEntries: List<OccurrenceBookEntry> = emptyList(),
     val obLoading: Boolean = false,
+
+    // Visitor Register
+    val visitors: List<OccurrenceBookEntry> = emptyList(),
+    val visitorsLoading: Boolean = false,
 
     // Incidents
     val incidents: List<IncidentReport> = emptyList(),
@@ -63,11 +71,14 @@ data class SgmisUiState(
     val guardPairs: List<GuardPair> = emptyList(),
     val rosterShifts: List<Shift> = emptyList(),
     val attendanceRecords: List<Attendance> = emptyList(),
+    val examinationPeriods: List<ExaminationPeriod> = emptyList(),
+    val temporaryAssignments: List<TemporaryAssignmentAudit> = emptyList(),
+    val conflictReport: ConflictReport? = null,
+    val rosterConflictsLoading: Boolean = false,
     val adminLoading: Boolean = false,
 
     // Telemetry & Settings
-    val telemetry: TelemetryOverview = TelemetryOverview(),
-    val themeMode: String = "SYSTEM" // "SYSTEM", "LIGHT", "DARK"
+    val telemetry: TelemetryOverview = TelemetryOverview()
 )
 
 class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
@@ -76,10 +87,16 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         SgmisUiState(
             currentUser = repository.currentUser,
             isLoggedIn = repository.isLoggedIn,
-            serverUrl = repository.serverUrl
+            serverUrl = repository.serverUrl,
+            themeMode = repository.themeMode
         )
     )
     val uiState: StateFlow<SgmisUiState> = _uiState.asStateFlow()
+
+    fun setThemeMode(mode: com.example.ui.theme.ThemeMode) {
+        repository.themeMode = mode
+        _uiState.update { it.copy(themeMode = mode) }
+    }
 
     init {
         if (repository.isLoggedIn) {
@@ -104,6 +121,60 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         _uiState.update { it.copy(successMessage = null) }
     }
 
+    private var inactivityJob: kotlinx.coroutines.Job? = null
+
+    fun onUserInteraction() {
+        if (_uiState.value.isLoggedIn && !_uiState.value.isAppLocked) {
+            resetInactivityTimer()
+        }
+    }
+
+    fun resetInactivityTimer() {
+        inactivityJob?.cancel()
+        inactivityJob = viewModelScope.launch {
+            // Non-destructive Idle Lock: 3 minutes inactivity timer (180 seconds)
+            kotlinx.coroutines.delay(3 * 60 * 1000L)
+            if (_uiState.value.isLoggedIn) {
+                _uiState.update {
+                    it.copy(isAppLocked = true)
+                }
+            }
+        }
+    }
+
+    fun lockApp() {
+        if (_uiState.value.isLoggedIn) {
+            inactivityJob?.cancel()
+            _uiState.update { it.copy(isAppLocked = true) }
+        }
+    }
+
+    fun unlockApp(password: String, onResult: (Boolean, String?) -> Unit) {
+        val user = _uiState.value.currentUser
+        if (user == null) {
+            onResult(false, "User session not found.")
+            return
+        }
+        if (password.isBlank()) {
+            onResult(false, "Password cannot be empty.")
+            return
+        }
+
+        viewModelScope.launch {
+            val result = repository.login(user.username, password)
+            result.onSuccess {
+                _uiState.update {
+                    it.copy(isAppLocked = false)
+                }
+                resetInactivityTimer()
+                onResult(true, null)
+            }.onFailure { err ->
+                val msg = err.message ?: "Incorrect password. Please try again."
+                onResult(false, msg)
+            }
+        }
+    }
+
     // --- Authentication ---
     fun login(identifier: String, pass: String, onSuccess: () -> Unit = {}) {
         if (identifier.isBlank() || pass.isBlank()) {
@@ -120,23 +191,60 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                         currentUser = user,
                         isLoggedIn = true,
                         isLoading = false,
+                        isLockedOut = false,
+                        lockoutRemainingMinutes = 0,
                         successMessage = "Authenticated as ${user.fullName ?: user.username}"
                     )
                 }
+                resetInactivityTimer()
                 refreshAllData()
                 onSuccess()
             }.onFailure { err ->
+                val msg = err.message ?: "Authentication failed."
+                val isLocked = msg.contains("locked", ignoreCase = true) || msg.contains("lockout", ignoreCase = true)
+                val remainingMin = if (isLocked) 15 else 0
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        errorMessage = err.message ?: "Authentication failed."
+                        isLockedOut = isLocked,
+                        lockoutRemainingMinutes = remainingMin,
+                        errorMessage = msg
                     )
                 }
             }
         }
     }
 
+    fun requestPasswordReset(identifier: String, onSuccess: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.requestPasswordReset(identifier)
+            res.onSuccess { msg ->
+                _uiState.update { it.copy(isLoading = false, successMessage = msg) }
+                onSuccess(msg)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun confirmPasswordReset(identifier: String, otp: String, newPass: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.confirmPasswordReset(identifier, otp, newPass)
+            res.onSuccess { msg ->
+                _uiState.update {
+                    it.copy(isLoading = false, isLockedOut = false, successMessage = msg)
+                }
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
     fun logout() {
+        inactivityJob?.cancel()
         repository.logout()
         _uiState.update {
             SgmisUiState(
@@ -148,10 +256,12 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     }
 
     fun refreshAllData() {
+        resetInactivityTimer()
         fetchCurrentUser()
         fetchTodayShift()
         fetchHandovers()
         fetchOBEntries()
+        fetchVisitors()
         fetchIncidents()
         fetchCheckpoints()
         fetchPatrolLogs()
@@ -181,14 +291,14 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     }
 
     // --- Shifts & Attendance ---
-    fun fetchTodayShift() {
+    fun fetchTodayShift(stationId: String? = null, guardId: String? = null) {
         viewModelScope.launch {
             _uiState.update { it.copy(shiftLoading = true) }
-            val res = repository.fetchTodayShift()
+            val res = repository.fetchTodayShift(stationId, guardId)
             res.onSuccess { shift ->
                 _uiState.update { it.copy(todayShift = shift, shiftLoading = false) }
-            }.onFailure {
-                _uiState.update { it.copy(shiftLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(shiftLoading = false, errorMessage = err.message) }
             }
         }
     }
@@ -246,8 +356,8 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             val res = repository.fetchHandovers()
             res.onSuccess { list ->
                 _uiState.update { it.copy(handovers = list, handoversLoading = false) }
-            }.onFailure {
-                _uiState.update { it.copy(handoversLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(handoversLoading = false, errorMessage = it.errorMessage ?: err.message) }
             }
         }
     }
@@ -258,11 +368,12 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         equipment: String,
         keys: String,
         pending: String,
+        emergencyOverride: Boolean = false,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val res = repository.submitHandover(outgoingShiftId, occurrence, equipment, keys, pending)
+            val res = repository.submitHandover(outgoingShiftId, occurrence, equipment, keys, pending, emergencyOverride)
             res.onSuccess { h ->
                 _uiState.update {
                     it.copy(
@@ -287,10 +398,14 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             val res = repository.acceptHandover(handoverId)
-            res.onSuccess {
-                _uiState.update {
-                    it.copy(
+            res.onSuccess { updatedHandover ->
+                _uiState.update { state ->
+                    val updatedList = state.handovers.map {
+                        if (it.id == handoverId) updatedHandover else it
+                    }
+                    state.copy(
                         isLoading = false,
+                        handovers = updatedList,
                         successMessage = "Handover acknowledged and accepted."
                     )
                 }
@@ -303,6 +418,31 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
+    fun rejectHandover(handoverId: String, reason: String = "", onSuccess: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.rejectHandover(handoverId, reason)
+            res.onSuccess { updatedHandover ->
+                _uiState.update { state ->
+                    val updatedList = state.handovers.map {
+                        if (it.id == handoverId) updatedHandover else it
+                    }
+                    state.copy(
+                        isLoading = false,
+                        handovers = updatedList,
+                        successMessage = "Handover rejected and flagged for review."
+                    )
+                }
+                fetchHandovers()
+                onSuccess?.invoke()
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = err.message ?: "Rejection failed.")
+                }
+            }
+        }
+    }
+
     // --- Occurrence Book ---
     fun fetchOBEntries() {
         viewModelScope.launch {
@@ -310,16 +450,16 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             val res = repository.fetchOBEntries()
             res.onSuccess { entries ->
                 _uiState.update { it.copy(obEntries = entries, obLoading = false) }
-            }.onFailure {
-                _uiState.update { it.copy(obLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(obLoading = false, errorMessage = it.errorMessage ?: err.message) }
             }
         }
     }
 
-    fun submitOBEntry(category: String, text: String, checkRecord: String, onSuccess: () -> Unit) {
+    fun submitOBEntry(category: String, text: String, checkRecord: String, crossReference: String? = null, onSuccess: () -> Unit) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val res = repository.submitOBEntry(category, text, checkRecord)
+            val res = repository.submitOBEntry(category, text, checkRecord, crossReference)
             res.onSuccess { entry ->
                 _uiState.update {
                     it.copy(
@@ -337,6 +477,67 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
+    fun amendOBEntry(id: String, reason: String, amendedText: String, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.amendOBEntry(id, reason, amendedText)
+            res.onSuccess { response ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        successMessage = response.message
+                    )
+                }
+                fetchOBEntries()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = err.message ?: "Failed to amend OB entry.")
+                }
+            }
+        }
+    }
+
+    // --- Visitor Register ---
+    fun fetchVisitors() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(visitorsLoading = true) }
+            val res = repository.fetchVisitors()
+            res.onSuccess { list ->
+                _uiState.update { it.copy(visitors = list, visitorsLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(visitorsLoading = false, errorMessage = it.errorMessage ?: err.message) }
+            }
+        }
+    }
+
+    fun logVisitor(
+        name: String,
+        idNumber: String?,
+        personToVisit: String,
+        purpose: String,
+        timeIn: String,
+        timeOut: String?,
+        vehicleRegNumber: String? = null,
+        onSuccess: () -> Unit
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.logVisitor(name, idNumber, personToVisit, purpose, timeIn, timeOut, vehicleRegNumber)
+            res.onSuccess {
+                _uiState.update {
+                    it.copy(isLoading = false, successMessage = "Visitor $name logged in official register.")
+                }
+                fetchVisitors()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = err.message ?: "Failed to log visitor.")
+                }
+            }
+        }
+    }
+
     // --- Incidents ---
     fun fetchIncidents() {
         viewModelScope.launch {
@@ -344,8 +545,8 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             val res = repository.fetchIncidents()
             res.onSuccess { list ->
                 _uiState.update { it.copy(incidents = list, incidentsLoading = false) }
-            }.onFailure {
-                _uiState.update { it.copy(incidentsLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(incidentsLoading = false, errorMessage = it.errorMessage ?: err.message) }
             }
         }
     }
@@ -363,6 +564,27 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             }.onFailure { err ->
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = err.message ?: "Failed to file report.")
+                }
+            }
+        }
+    }
+
+    fun amendIncident(id: String, reason: String, amendedDescription: String, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.amendIncident(id, reason, amendedDescription)
+            res.onSuccess { response ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        successMessage = response.message
+                    )
+                }
+                fetchIncidents()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = err.message ?: "Failed to amend incident.")
                 }
             }
         }
@@ -386,10 +608,10 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
-    fun startPatrol() {
+    fun startPatrol(stationId: String? = null, notes: String = "Patrol round initiated") {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val res = repository.startPatrol()
+            val res = repository.startPatrol(stationId, notes)
             res.onSuccess { patrol ->
                 _uiState.update {
                     it.copy(
@@ -429,7 +651,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                     it.copy(
                         activePatrol = null,
                         isLoading = false,
-                        successMessage = "Patrol patrol debrief completed."
+                        successMessage = "Patrol debrief completed."
                     )
                 }
                 fetchPatrolLogs()
@@ -455,10 +677,18 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
-    fun applyForLeave(type: String, start: String, end: String, reason: String, onSuccess: () -> Unit) {
+    fun applyForLeave(
+        type: String,
+        start: String,
+        end: String,
+        reason: String,
+        emergencyPhone: String? = null,
+        emergencyAddress: String? = null,
+        onSuccess: () -> Unit
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val res = repository.applyForLeave(type, start, end, reason)
+            val res = repository.applyForLeave(type, start, end, reason, emergencyPhone, emergencyAddress)
             res.onSuccess {
                 _uiState.update {
                     it.copy(isLoading = false, successMessage = "Leave application submitted.")
@@ -471,15 +701,76 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
-    fun reviewLeaveApplication(id: String, status: String, notes: String) {
+    fun reviewLeaveApplication(id: String, status: String, notes: String, rejectionReason: String? = null) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val res = repository.reviewLeaveApplication(id, status, notes)
+            val res = repository.reviewLeaveApplication(id, status, notes, rejectionReason)
             res.onSuccess {
                 _uiState.update {
                     it.copy(isLoading = false, successMessage = "Leave application $status successfully.")
                 }
                 fetchLeave()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun creditHoliday(days: Double = 2.0) {
+        val balId = _uiState.value.leaveBalance?.id ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.creditHoliday(balId, days)
+            res.onSuccess { updated ->
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        leaveBalance = updated,
+                        successMessage = "Successfully credited $days holiday compensation days."
+                    )
+                }
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun autoAllocateExams(date: String, strategy: String, count: Int, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.autoAllocateExams(date, strategy, count)
+            res.onSuccess { msg ->
+                _uiState.update { it.copy(isLoading = false, successMessage = msg) }
+                fetchExamDuties()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun autoAllocateEscorts(startTime: String, endTime: String, strategy: String, count: Int, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.autoAllocateEscorts(startTime, endTime, strategy, count)
+            res.onSuccess { msg ->
+                _uiState.update { it.copy(isLoading = false, successMessage = msg) }
+                fetchEscortDuties()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun approveRoster(stationId: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.approveRoster(stationId)
+            res.onSuccess { msg ->
+                _uiState.update { it.copy(isLoading = false, successMessage = msg) }
+                fetchRosterShifts()
+                onSuccess()
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
             }
@@ -640,8 +931,8 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             val res = repository.fetchUsers(role, station)
             res.onSuccess { userList ->
                 _uiState.update { it.copy(users = userList, adminLoading = false) }
-            }.onFailure {
-                _uiState.update { it.copy(adminLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(adminLoading = false, errorMessage = it.errorMessage ?: err.message) }
             }
         }
     }
@@ -676,18 +967,21 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
-    fun assignUserStation(userId: String, stationId: String?) {
+    fun assignUserStation(userId: String, stationId: String?, onSuccess: () -> Unit = {}) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             val res = repository.assignUserStation(userId, stationId)
-            res.onSuccess { updated ->
-                _uiState.update {
-                    it.copy(
+            res.onSuccess { updatedUser ->
+                _uiState.update { state ->
+                    val updatedList = state.users.map { if (it.id == userId) updatedUser else it }
+                    state.copy(
                         isLoading = false,
-                        successMessage = "Assigned ${updated.username} to ${updated.stationName ?: "station"}."
+                        users = updatedList,
+                        successMessage = "Station assigned to ${updatedUser.fullName ?: updatedUser.username}."
                     )
                 }
                 fetchUsers()
+                onSuccess()
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
             }
@@ -700,11 +994,13 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             val res = repository.fetchStations()
             res.onSuccess { list ->
                 _uiState.update { it.copy(stations = list) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = it.errorMessage ?: err.message) }
             }
         }
     }
 
-    fun createStation(name: String, code: String, address: String, lat: Double, lon: Double, geofence: Int, onSuccess: () -> Unit) {
+    fun createStation(name: String, code: String, address: String, lat: Double, lon: Double, geofence: Double = 200.0, onSuccess: () -> Unit) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             val res = repository.createStation(name, code, address, lat, lon, geofence)
@@ -726,6 +1022,8 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             val res = repository.fetchGuardPairs(stationId)
             res.onSuccess { list ->
                 _uiState.update { it.copy(guardPairs = list) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = it.errorMessage ?: err.message) }
             }
         }
     }
@@ -753,22 +1051,151 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             val res = repository.fetchShifts(date, station)
             res.onSuccess { list ->
                 _uiState.update { it.copy(rosterShifts = list, adminLoading = false) }
-            }.onFailure {
-                _uiState.update { it.copy(adminLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(adminLoading = false, errorMessage = it.errorMessage ?: err.message) }
             }
         }
     }
 
-    fun generateRoster(stationId: String, startDate: String, cycleDays: Int, onSuccess: () -> Unit) {
+    fun generateRoster(
+        stationId: String,
+        startDate: String,
+        cycleDays: Int = 12,
+        mode: String = "NORMAL",
+        examinationPeriodId: String? = null,
+        examVenueName: String? = null,
+        examGuardIds: List<String> = emptyList(),
+        onSuccess: () -> Unit = {}
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val res = repository.generateRoster(stationId, startDate, cycleDays)
-            res.onSuccess {
+            val res = repository.generateRoster(
+                stationId = stationId,
+                startDate = startDate,
+                cycleDays = cycleDays,
+                mode = mode,
+                examinationPeriodId = examinationPeriodId,
+                examVenueName = examVenueName,
+                examGuardIds = examGuardIds
+            )
+            res.onSuccess { resp ->
+                val msg = if (resp.message.isNotBlank()) resp.message else "Shift roster generated successfully in $mode mode."
                 _uiState.update {
-                    it.copy(isLoading = false, successMessage = "Automated shift roster generated successfully.")
+                    it.copy(isLoading = false, successMessage = msg)
                 }
                 fetchRosterShifts(station = stationId)
                 fetchTodayShift()
+                detectConflicts(stationId, startDate)
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun detectConflicts(stationId: String, startDate: String? = null, endDate: String? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(rosterConflictsLoading = true) }
+            val res = repository.detectConflicts(stationId, startDate, endDate)
+            res.onSuccess { report ->
+                _uiState.update { it.copy(conflictReport = report, rosterConflictsLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(rosterConflictsLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun approveRoster(stationId: String, startDate: String? = null, endDate: String? = null, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.approveRoster(stationId, startDate, endDate)
+            res.onSuccess { msg ->
+                _uiState.update { it.copy(isLoading = false, successMessage = msg) }
+                fetchRosterShifts(station = stationId)
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun scheduleExamEscort(
+        stationId: String,
+        date: String,
+        guardIds: List<String>,
+        startTime: String = "06:00:00",
+        endTime: String = "17:00:00",
+        reason: String = "Examination paper collection escort to University National Centre",
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.scheduleExamEscort(stationId, date, guardIds, startTime, endTime, reason)
+            res.onSuccess {
+                _uiState.update { state ->
+                    state.copy(isLoading = false, successMessage = "Examination collection escort (06:00-17:00) scheduled.")
+                }
+                fetchRosterShifts(station = stationId)
+                fetchTemporaryAssignments(stationId)
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun resumeNormalRoster(stationId: String, afterDate: String, cycleDays: Int = 12, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.resumeNormalRoster(stationId, afterDate, cycleDays)
+            res.onSuccess {
+                _uiState.update { state ->
+                    state.copy(isLoading = false, successMessage = "Resumed normal 4-day rotating roster from $afterDate.")
+                }
+                fetchRosterShifts(station = stationId)
+                fetchExaminationPeriods(stationId)
+                detectConflicts(stationId, afterDate)
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun fetchTemporaryAssignments(stationId: String? = null) {
+        viewModelScope.launch {
+            val res = repository.fetchTemporaryAssignments(stationId)
+            res.onSuccess { list ->
+                _uiState.update { it.copy(temporaryAssignments = list) }
+            }
+        }
+    }
+
+    fun fetchExaminationPeriods(stationId: String? = null) {
+        viewModelScope.launch {
+            val res = repository.fetchExaminationPeriods(stationId)
+            res.onSuccess { list ->
+                _uiState.update { it.copy(examinationPeriods = list) }
+            }
+        }
+    }
+
+    fun createExaminationPeriod(
+        stationId: String,
+        name: String,
+        venueName: String,
+        startDate: String,
+        endDate: String,
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.createExaminationPeriod(stationId, name, venueName, startDate, endDate)
+            res.onSuccess { ep ->
+                _uiState.update { state ->
+                    state.copy(isLoading = false, successMessage = "Examination period '${ep.name}' created.")
+                }
+                fetchExaminationPeriods(stationId)
                 onSuccess()
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
@@ -783,8 +1210,8 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             val res = repository.fetchAttendanceRecords(date, shift)
             res.onSuccess { list ->
                 _uiState.update { it.copy(attendanceRecords = list, adminLoading = false) }
-            }.onFailure {
-                _uiState.update { it.copy(adminLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(adminLoading = false, errorMessage = it.errorMessage ?: err.message) }
             }
         }
     }
@@ -825,7 +1252,28 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     }
 
     fun setThemeMode(mode: String) {
-        _uiState.update { it.copy(themeMode = mode) }
+        val theme = try {
+            com.example.ui.theme.ThemeMode.valueOf(mode)
+        } catch (e: Exception) {
+            com.example.ui.theme.ThemeMode.SYSTEM
+        }
+        setThemeMode(theme)
+    }
+
+    fun broadcastNotice(title: String, message: String, targetRole: String? = null, stationId: String? = null, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.broadcastNotice(title, message, targetRole, stationId)
+            res.onSuccess {
+                _uiState.update {
+                    it.copy(isLoading = false, successMessage = "Broadcast notification dispatched.")
+                }
+                fetchNotifications()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
     }
 }
 

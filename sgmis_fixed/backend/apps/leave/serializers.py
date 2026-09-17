@@ -23,10 +23,18 @@ class LeaveApplicationSerializer(serializers.ModelSerializer):
     reviewer_name = serializers.SerializerMethodField()
     leave_type_display = serializers.CharField(source="get_leave_type_display", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    rejection_reason_display = serializers.CharField(source="get_rejection_reason_display", read_only=True)
 
     class Meta:
         model = LeaveApplication
-        fields = ["id", "guard", "guard_name", "guard_employee_number", "leave_type", "leave_type_display", "start_date", "end_date", "reason", "status", "status_display", "reviewer", "reviewer_name", "reviewer_notes", "created_at", "updated_at"]
+        fields = [
+            "id", "guard", "guard_name", "guard_employee_number",
+            "leave_type", "leave_type_display", "start_date", "end_date",
+            "reason", "emergency_phone", "emergency_address",
+            "status", "status_display", "reviewer", "reviewer_name",
+            "reviewer_notes", "rejection_reason", "rejection_reason_display",
+            "created_at", "updated_at"
+        ]
         read_only_fields = ["id", "guard", "reviewer", "created_at", "updated_at"]
 
     def validate(self, attrs):

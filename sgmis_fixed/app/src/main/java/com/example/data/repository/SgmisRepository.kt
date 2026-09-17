@@ -2,9 +2,11 @@ package com.example.data.repository
 
 import com.example.data.api.ApiClient
 import com.example.data.api.SessionManager
+import com.example.data.local.CachedCheckpointEntity
 import com.example.data.local.CachedIncidentEntity
 import com.example.data.local.CachedOBEntity
 import com.example.data.local.CachedShiftEntity
+import com.example.data.local.CachedStationEntity
 import com.example.data.local.SgmisDatabase
 import com.example.data.model.*
 import kotlinx.coroutines.flow.Flow
@@ -12,7 +14,7 @@ import kotlinx.coroutines.flow.map
 
 class SgmisRepository(
     private val apiClient: ApiClient,
-    private val sessionManager: SessionManager,
+    val sessionManager: SessionManager,
     private val database: SgmisDatabase
 ) {
     private val api get() = apiClient.getApiService()
@@ -24,6 +26,12 @@ class SgmisRepository(
         set(value) {
             sessionManager.serverUrl = value
             apiClient.invalidateClient()
+        }
+
+    var themeMode: com.example.ui.theme.ThemeMode
+        get() = sessionManager.getThemeMode()
+        set(value) {
+            sessionManager.setThemeMode(value)
         }
 
     // --- Error Parser Helper ---
@@ -95,9 +103,9 @@ class SgmisRepository(
     }
 
     // --- Today's Shift ---
-    suspend fun fetchTodayShift(): Result<Shift?> {
+    suspend fun fetchTodayShift(stationId: String? = null, guardId: String? = null): Result<Shift?> {
         return try {
-            val response = api.getTodayShift()
+            val response = api.getTodayShift(station = stationId, guard = guardId)
             if (response.isSuccessful) {
                 val shift = response.body()
                 if (shift != null) {
@@ -200,7 +208,8 @@ class SgmisRepository(
         occurrenceSummary: String,
         equipment: String,
         keys: String,
-        pendingIssues: String
+        pendingIssues: String,
+        emergencyOverride: Boolean = false
     ): Result<ShiftHandover> {
         return try {
             val response = api.createHandover(
@@ -209,13 +218,14 @@ class SgmisRepository(
                     occurrenceSummary = occurrenceSummary,
                     equipmentIssued = equipment,
                     keysHandedOver = keys,
-                    pendingIssues = pendingIssues
+                    pendingIssues = pendingIssues,
+                    supervisorEmergencyOverride = emergencyOverride
                 )
             )
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                val err = response.errorBody()?.string() ?: "Failed to submit handover"
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to submit handover")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -229,7 +239,21 @@ class SgmisRepository(
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                val err = response.errorBody()?.string() ?: "Failed to accept handover"
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to accept handover")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun rejectHandover(handoverId: String, reason: String = ""): Result<ShiftHandover> {
+        return try {
+            val response = api.rejectHandover(handoverId, RejectHandoverRequest(reason = reason))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to reject handover")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -267,10 +291,16 @@ class SgmisRepository(
         }
     }
 
-    suspend fun submitOBEntry(category: String, text: String, checkRecord: String): Result<OccurrenceBookEntry> {
+    suspend fun submitOBEntry(category: String, text: String, checkRecord: String, crossReference: String? = null): Result<OccurrenceBookEntry> {
         return try {
             val response = api.createOBEntry(
-                CreateOBEntryRequest(category = category, occurrenceText = text, checkRecord = checkRecord)
+                CreateOBEntryRequest(
+                    category = category,
+                    occurrenceText = text,
+                    checkRecord = checkRecord,
+                    crossReference = crossReference,
+                    station = currentUser?.station
+                )
             )
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
@@ -281,6 +311,62 @@ class SgmisRepository(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun amendOBEntry(id: String, reason: String, amendedText: String): Result<AmendOBResponse> {
+        return try {
+            val response = api.amendOBEntry(
+                id = id,
+                request = AmendOBRequest(reason = reason, amendedText = amendedText)
+            )
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to amend Occurrence Book entry")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // --- Visitor Register ---
+    suspend fun fetchVisitors(): Result<List<OccurrenceBookEntry>> {
+        return try {
+            val response = api.getOBEntries(category = "VISITOR")
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to fetch visitors register"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun logVisitor(
+        visitorName: String,
+        idNumber: String?,
+        personToVisit: String,
+        purpose: String,
+        timeIn: String,
+        timeOut: String?,
+        vehicleRegNumber: String? = null
+    ): Result<OccurrenceBookEntry> {
+        val details = buildString {
+            append("VISITOR: $visitorName")
+            if (!idNumber.isNullOrBlank()) append(" | National ID/Passport: $idNumber")
+            if (!vehicleRegNumber.isNullOrBlank()) append(" | Vehicle Reg: $vehicleRegNumber")
+            append(" | Person Visited: $personToVisit")
+            append(" | Purpose: $purpose")
+            append(" | Time In: $timeIn")
+            if (!timeOut.isNullOrBlank()) append(" | Time Out: $timeOut") else append(" | Status: ACTIVE ON SITE")
+        }
+        return submitOBEntry(
+            category = "VISITOR",
+            text = details,
+            checkRecord = "Identity verified & visitor pass issued"
+        )
     }
 
     // --- Incidents ---
@@ -322,7 +408,24 @@ class SgmisRepository(
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                val err = response.errorBody()?.string() ?: "Failed to file incident report"
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to file incident report")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun amendIncident(id: String, reason: String, amendedDescription: String): Result<AmendIncidentResponse> {
+        return try {
+            val response = api.amendIncident(
+                id = id,
+                request = AmendIncidentRequest(reason = reason, amendedDescription = amendedDescription)
+            )
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to amend incident report")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -333,16 +436,87 @@ class SgmisRepository(
     // --- Patrols ---
     suspend fun fetchCheckpoints(): Result<List<Checkpoint>> {
         return try {
+            val cached = database.checkpointDao().getAllCheckpoints()
             val response = api.getCheckpoints()
             if (response.isSuccessful && response.body() != null) {
-                Result.success(response.body()!!)
+                val checkpoints = response.body()!!
+                database.checkpointDao().clearCheckpoints()
+                database.checkpointDao().insertCheckpoints(checkpoints.map {
+                    CachedCheckpointEntity(
+                        id = it.id,
+                        stationId = it.station,
+                        stationName = it.stationName,
+                        name = it.name,
+                        code = it.code,
+                        qrCode = it.qrCode,
+                        latitude = it.latitude,
+                        longitude = it.longitude,
+                        order = it.order,
+                        isActive = it.isActive
+                    )
+                })
+                Result.success(checkpoints)
+            } else if (cached.isNotEmpty()) {
+                Result.success(cached.map {
+                    Checkpoint(
+                        id = it.id,
+                        station = it.stationId,
+                        stationName = it.stationName,
+                        name = it.name,
+                        code = it.code,
+                        qrCode = it.qrCode,
+                        latitude = it.latitude,
+                        longitude = it.longitude,
+                        order = it.order,
+                        isActive = it.isActive
+                    )
+                })
             } else {
-                Result.failure(Exception("Failed to fetch station checkpoints"))
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch station checkpoints")
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            val cached = database.checkpointDao().getAllCheckpoints()
+            if (cached.isNotEmpty()) {
+                Result.success(cached.map {
+                    Checkpoint(
+                        id = it.id,
+                        station = it.stationId,
+                        stationName = it.stationName,
+                        name = it.name,
+                        code = it.code,
+                        qrCode = it.qrCode,
+                        latitude = it.latitude,
+                        longitude = it.longitude,
+                        order = it.order,
+                        isActive = it.isActive
+                    )
+                })
+            } else {
+                Result.failure(e)
+            }
         }
     }
+
+    fun getCachedCheckpoints(): Flow<List<Checkpoint>> {
+        return database.checkpointDao().getAllCheckpointsFlow().map { list ->
+            list.map {
+                Checkpoint(
+                    id = it.id,
+                    station = it.stationId,
+                    stationName = it.stationName,
+                    name = it.name,
+                    code = it.code,
+                    qrCode = it.qrCode,
+                    latitude = it.latitude,
+                    longitude = it.longitude,
+                    order = it.order,
+                    isActive = it.isActive
+                )
+            }
+        }
+    }
+
 
     suspend fun fetchPatrolLogs(): Result<List<PatrolLog>> {
         return try {
@@ -350,20 +524,22 @@ class SgmisRepository(
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                Result.failure(Exception("Failed to fetch patrol history"))
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch patrol history")
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    suspend fun startPatrol(): Result<PatrolLog> {
+    suspend fun startPatrol(stationId: String? = null, notes: String = "Patrol round initiated"): Result<PatrolLog> {
         return try {
-            val response = api.startPatrol(emptyMap())
+            val targetStation = stationId ?: currentUser?.station
+            val response = api.startPatrol(StartPatrolRequest(station = targetStation, notes = notes))
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                val err = response.errorBody()?.string() ?: "Failed to initiate patrol"
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to initiate patrol")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -377,7 +553,7 @@ class SgmisRepository(
             if (response.isSuccessful) {
                 Result.success(Unit)
             } else {
-                val err = response.errorBody()?.string() ?: "Checkpoint scan verification failed"
+                val err = parseDrfError(response.errorBody()?.string(), "Checkpoint scan verification failed")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -387,11 +563,11 @@ class SgmisRepository(
 
     suspend fun finishPatrol(patrolId: String, notes: String): Result<PatrolLog> {
         return try {
-            val response = api.finishPatrol(patrolId, mapOf("notes" to notes))
+            val response = api.finishPatrol(patrolId, FinishPatrolRequest(notes = notes))
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                val err = response.errorBody()?.string() ?: "Failed to complete patrol"
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to complete patrol")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -426,9 +602,25 @@ class SgmisRepository(
         }
     }
 
-    suspend fun applyForLeave(type: String, start: String, end: String, reason: String): Result<LeaveApplication> {
+    suspend fun applyForLeave(
+        type: String,
+        start: String,
+        end: String,
+        reason: String,
+        emergencyPhone: String? = null,
+        emergencyAddress: String? = null
+    ): Result<LeaveApplication> {
         return try {
-            val response = api.applyForLeave(CreateLeaveRequest(type, start, end, reason))
+            val response = api.applyForLeave(
+                CreateLeaveRequest(
+                    leaveType = type,
+                    startDate = start,
+                    endDate = end,
+                    reason = reason,
+                    emergencyPhone = emergencyPhone,
+                    emergencyAddress = emergencyAddress
+                )
+            )
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
@@ -440,13 +632,102 @@ class SgmisRepository(
         }
     }
 
-    suspend fun reviewLeaveApplication(id: String, status: String, reviewerNotes: String): Result<LeaveApplication> {
+    suspend fun reviewLeaveApplication(
+        id: String,
+        status: String,
+        reviewerNotes: String,
+        rejectionReason: String? = null
+    ): Result<LeaveApplication> {
         return try {
-            val response = api.reviewLeaveApplication(id, LeaveReviewRequest(status, reviewerNotes))
+            val response = api.reviewLeaveApplication(id, LeaveReviewRequest(status, reviewerNotes, rejectionReason))
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
                 val err = parseDrfError(response.errorBody()?.string(), "Failed to review leave application")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun creditHoliday(balanceId: String, days: Double = 2.0): Result<LeaveBalance> {
+        return try {
+            val response = api.creditHoliday(balanceId, mapOf("days" to days))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to credit holiday leave")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun requestPasswordReset(identifier: String): Result<String> {
+        return try {
+            val response = api.requestPasswordReset(PasswordResetRequest(identifier))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()?.message ?: "OTP generated successfully.")
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to request password reset")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun confirmPasswordReset(identifier: String, otp: String, newPass: String): Result<String> {
+        return try {
+            val response = api.confirmPasswordReset(PasswordResetConfirmRequest(identifier, otp, newPass))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()?.message ?: "Password successfully reset.")
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to reset password")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun autoAllocateExams(date: String, strategy: String, count: Int): Result<String> {
+        return try {
+            val response = api.autoAllocateExamDuties(AutoAllocateDutyRequest(date = date, strategy = strategy, count = count))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()?.message ?: "Exam duties auto-allocated.")
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to auto-allocate exam duties")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun autoAllocateEscorts(startTime: String, endTime: String, strategy: String, count: Int): Result<String> {
+        return try {
+            val response = api.autoAllocateEscortDuties(AutoAllocateDutyRequest(startTime = startTime, endTime = endTime, strategy = strategy, count = count))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()?.message ?: "Escort duties auto-allocated.")
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to auto-allocate escort duties")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun approveRoster(stationId: String, startDate: String? = null, endDate: String? = null): Result<String> {
+        return try {
+            val response = api.approveRoster(ApproveRosterRequest(stationId = stationId, startDate = startDate, endDate = endDate))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()?.message ?: "Roster approved.")
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to approve roster")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -484,7 +765,7 @@ class SgmisRepository(
 
     suspend fun toggleUserActive(userId: String, currentActive: Boolean): Result<User> {
         return try {
-            val response = api.updateUser(userId, mapOf("is_active" to !currentActive))
+            val response = api.updateUser(userId, UpdateUserRequest(isActive = !currentActive))
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
@@ -498,7 +779,7 @@ class SgmisRepository(
 
     suspend fun assignUserStation(userId: String, stationId: String?): Result<User> {
         return try {
-            val response = api.updateUser(userId, mapOf("station" to stationId))
+            val response = api.updateUser(userId, UpdateUserRequest(station = stationId))
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
@@ -513,20 +794,96 @@ class SgmisRepository(
     // --- Station & Guard Pair Management ---
     suspend fun fetchStations(): Result<List<Station>> {
         return try {
+            val cached = database.stationDao().getAllStations()
             val response = api.getStations()
             if (response.isSuccessful && response.body() != null) {
-                Result.success(response.body()!!)
+                val stations = response.body()!!
+                database.stationDao().clearStations()
+                database.stationDao().insertStations(stations.map {
+                    CachedStationEntity(
+                        id = it.id,
+                        name = it.name,
+                        code = it.code,
+                        address = it.address,
+                        latitude = it.latitude,
+                        longitude = it.longitude,
+                        geofenceRadius = it.geofenceRadiusMeters ?: it.geofenceRadius,
+                        createdAt = it.createdAt
+                    )
+                })
+                Result.success(stations)
+            } else if (cached.isNotEmpty()) {
+                Result.success(cached.map {
+                    Station(
+                        id = it.id,
+                        name = it.name,
+                        code = it.code,
+                        address = it.address,
+                        latitude = it.latitude,
+                        longitude = it.longitude,
+                        geofenceRadiusMeters = it.geofenceRadius,
+                        geofenceRadius = it.geofenceRadius,
+                        createdAt = it.createdAt
+                    )
+                })
             } else {
-                Result.failure(Exception("Failed to fetch stations"))
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch stations")
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            val cached = database.stationDao().getAllStations()
+            if (cached.isNotEmpty()) {
+                Result.success(cached.map {
+                    Station(
+                        id = it.id,
+                        name = it.name,
+                        code = it.code,
+                        address = it.address,
+                        latitude = it.latitude,
+                        longitude = it.longitude,
+                        geofenceRadiusMeters = it.geofenceRadius,
+                        geofenceRadius = it.geofenceRadius,
+                        createdAt = it.createdAt
+                    )
+                })
+            } else {
+                Result.failure(e)
+            }
         }
     }
 
-    suspend fun createStation(name: String, code: String, address: String, lat: Double, lon: Double, geofence: Int): Result<Station> {
+    fun getCachedStations(): Flow<List<Station>> {
+        return database.stationDao().getAllStationsFlow().map { list ->
+            list.map {
+                Station(
+                    id = it.id,
+                    name = it.name,
+                    code = it.code,
+                    address = it.address,
+                    latitude = it.latitude,
+                    longitude = it.longitude,
+                    geofenceRadiusMeters = it.geofenceRadius,
+                    geofenceRadius = it.geofenceRadius,
+                    createdAt = it.createdAt
+                )
+            }
+        }
+    }
+
+
+    suspend fun createStation(name: String, code: String, address: String, lat: Double, lon: Double, geofence: Double): Result<Station> {
         return try {
-            val response = api.createStation(CreateStationRequest(name, code, address, lat, lon, geofence))
+            val response = api.createStation(
+                CreateStationRequest(
+                    name = name,
+                    code = code,
+                    address = address,
+                    latitude = lat,
+                    longitude = lon,
+                    geofenceRadiusMeters = geofence,
+                    geofenceRadius = geofence
+                )
+            )
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
@@ -579,13 +936,155 @@ class SgmisRepository(
         }
     }
 
-    suspend fun generateRoster(stationId: String, startDate: String, cycleDays: Int): Result<Map<String, Any>> {
+    suspend fun generateRoster(
+        stationId: String,
+        startDate: String,
+        cycleDays: Int = 12,
+        mode: String = "NORMAL",
+        examinationPeriodId: String? = null,
+        examVenueName: String? = null,
+        examGuardIds: List<String> = emptyList()
+    ): Result<GenerateRosterResponse> {
         return try {
-            val response = api.generateRoster(RosterGenerateRequest(stationId, startDate, cycleDays))
+            val response = api.generateRoster(
+                GenerateRosterRequest(
+                    stationId = stationId,
+                    startDate = startDate,
+                    cycleDays = cycleDays,
+                    mode = mode,
+                    examinationPeriodId = examinationPeriodId,
+                    examVenueName = examVenueName,
+                    examGuardIds = examGuardIds
+                )
+            )
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
                 val err = parseDrfError(response.errorBody()?.string(), "Roster generation failed")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun detectConflicts(
+        stationId: String,
+        startDate: String? = null,
+        endDate: String? = null
+    ): Result<ConflictReport> {
+        return try {
+            val response = api.detectConflicts(
+                DetectConflictsRequest(stationId = stationId, startDate = startDate, endDate = endDate)
+            )
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Conflict detection failed")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun scheduleExamEscort(
+        stationId: String,
+        date: String,
+        guardIds: List<String>,
+        startTime: String = "06:00:00",
+        endTime: String = "17:00:00",
+        reason: String = "Examination paper collection escort to University National Centre"
+    ): Result<ScheduleExamEscortResponse> {
+        return try {
+            val response = api.scheduleEscort(
+                ScheduleExamEscortRequest(
+                    stationId = stationId,
+                    date = date,
+                    guardIds = guardIds,
+                    startTime = startTime,
+                    endTime = endTime,
+                    reason = reason
+                )
+            )
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Escort scheduling failed")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun resumeNormalRoster(
+        stationId: String,
+        afterDate: String,
+        cycleDays: Int = 12
+    ): Result<NotificationActionResponse> {
+        return try {
+            val response = api.resumeNormalRoster(
+                ResumeNormalRosterRequest(stationId = stationId, afterDate = afterDate, cycleDays = cycleDays)
+            )
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Resume normal roster failed")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchTemporaryAssignments(stationId: String? = null): Result<List<TemporaryAssignmentAudit>> {
+        return try {
+            val response = api.getTemporaryAssignments(stationId)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to fetch temporary assignment audits"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchExaminationPeriods(stationId: String? = null): Result<List<ExaminationPeriod>> {
+        return try {
+            val response = api.getExaminationPeriods(stationId)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to fetch examination periods"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createExaminationPeriod(
+        stationId: String,
+        name: String,
+        venueName: String,
+        startDate: String,
+        endDate: String
+    ): Result<ExaminationPeriod> {
+        return try {
+            val response = api.createExaminationPeriod(
+                CreateExaminationPeriodRequest(
+                    station = stationId,
+                    name = name,
+                    venueName = venueName,
+                    startDate = startDate,
+                    endDate = endDate
+                )
+            )
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to create examination period")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -666,7 +1165,7 @@ class SgmisRepository(
 
     suspend fun updateEscortStatus(id: String, status: String): Result<EscortDuty> {
         return try {
-            val response = api.updateEscortDuty(id, mapOf("status" to status))
+            val response = api.updateEscortDuty(id, UpdateDutyStatusRequest(status = status))
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
@@ -708,7 +1207,7 @@ class SgmisRepository(
 
     suspend fun updateExamStatus(id: String, status: String): Result<ExamDuty> {
         return try {
-            val response = api.updateExamDuty(id, mapOf("status" to status))
+            val response = api.updateExamDuty(id, UpdateDutyStatusRequest(status = status))
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
@@ -760,6 +1259,9 @@ class SgmisRepository(
             val response = api.getTelemetry()
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
+            } else if (response.code() == 404) {
+                // Not deployed on remote server yet; dashboard computes metrics from domain models
+                Result.success(TelemetryOverview())
             } else {
                 val err = parseDrfError(response.errorBody()?.string(), "Failed to load operational telemetry")
                 Result.failure(Exception(err))
@@ -789,6 +1291,20 @@ class SgmisRepository(
                 Result.success(updatedUser)
             } else {
                 val err = parseDrfError(response.errorBody()?.string(), "Failed to update profile")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun broadcastNotice(title: String, message: String, targetRole: String? = null, stationId: String? = null): Result<Unit> {
+        return try {
+            val response = api.broadcastNotice(BroadcastNoticeRequest(title, message, targetRole, stationId))
+            if (response.isSuccessful) {
+                Result.success(Unit)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to broadcast notice")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {

@@ -17,14 +17,22 @@ import com.example.data.api.ApiClient
 import com.example.data.api.SessionManager
 import com.example.data.local.SgmisDatabase
 import com.example.data.repository.SgmisRepository
+import android.view.WindowManager
 import com.example.ui.screens.*
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.SgmisViewModel
 import com.example.ui.viewmodel.SgmisViewModelFactory
 
 class MainActivity : ComponentActivity() {
+    private var viewModelRef: SgmisViewModel? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Screen Protection: Enforce FLAG_SECURE window flags to prevent sensitive operational data exposure
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE
+        )
         enableEdgeToEdge()
 
         val database = SgmisDatabase.getDatabase(applicationContext)
@@ -34,11 +42,19 @@ class MainActivity : ComponentActivity() {
         val factory = SgmisViewModelFactory(repository)
 
         setContent {
-            MyApplicationTheme {
-                val vm: SgmisViewModel = viewModel(factory = factory)
+            val vm: SgmisViewModel = viewModel(factory = factory)
+            viewModelRef = vm
+            val uiState by vm.uiState.collectAsState()
+            com.example.ui.theme.SmartSecurityTheme(themeMode = uiState.themeMode) {
                 SgmisApp(viewModel = vm)
             }
         }
+    }
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        // Signal user interaction to reset 3-minute idle inactivity auto-logout timer
+        viewModelRef?.onUserInteraction()
     }
 }
 
@@ -76,25 +92,46 @@ fun SgmisApp(viewModel: SgmisViewModel) {
                 )
             }
             composable("today_shift") {
-                TodayShiftScreen(viewModel = viewModel)
+                TodayShiftScreen(viewModel = viewModel) { navController.popBackStack() }
             }
             composable("handover") {
-                HandoverScreen(viewModel = viewModel)
+                HandoverScreen(viewModel = viewModel) { navController.popBackStack() }
             }
             composable("occurrence_book") {
-                OccurrenceBookScreen(viewModel = viewModel)
+                OccurrenceBookScreen(viewModel = viewModel) { navController.popBackStack() }
             }
             composable("incidents") {
-                IncidentReportScreen(viewModel = viewModel)
+                IncidentReportScreen(viewModel = viewModel) { navController.popBackStack() }
             }
             composable("patrol") {
-                PatrolScreen(viewModel = viewModel)
+                PatrolScreen(viewModel = viewModel) { navController.popBackStack() }
             }
             composable("leave") {
-                LeaveScreen(viewModel = viewModel)
+                LeaveScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
+            composable("visitors") {
+                VisitorScreen(viewModel = viewModel) { navController.popBackStack() }
             }
             composable("additional_duties") {
                 AdditionalDutiesScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
+            composable("reports") {
+                ReportsScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
+            composable("emergency_sos") {
+                EmergencySosScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
+            composable("settings") {
+                SettingsScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
+            composable("users") {
+                UserManagementScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
+            composable("stations") {
+                StationManagementScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
+            composable("roster") {
+                RosterManagementScreen(viewModel = viewModel) { navController.popBackStack() }
             }
             composable("notifications") {
                 NotificationsScreen(viewModel = viewModel) { navController.popBackStack() }
@@ -103,11 +140,11 @@ fun SgmisApp(viewModel: SgmisViewModel) {
                 ProfileScreen(viewModel = viewModel) { navController.popBackStack() }
             }
         }
-    }
-}
 
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    androidx.compose.material3.Text(text = "Hello $name!", modifier = modifier)
+        // App Lock Overlay: Non-destructive 3-minute inactivity protection
+        if (uiState.isLoggedIn && uiState.isAppLocked) {
+            AppLockOverlay(viewModel = viewModel)
+        }
+    }
 }
 

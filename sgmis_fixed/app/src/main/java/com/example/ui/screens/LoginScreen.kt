@@ -41,6 +41,7 @@ fun LoginScreen(
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var showServerDialog by remember { mutableStateOf(false) }
+    var showForgotPasswordDialog by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
 
@@ -147,8 +148,76 @@ fun LoginScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
+                        // Lockout Warning Banner
+                        if (uiState.isLockedOut) {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = "Account Locked",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                        Text(
+                                            text = "Security lockout active (5 failed attempts). Try again in ${uiState.lockoutRemainingMinutes.coerceAtLeast(1)} minutes or reset your password.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Success Banner
+                        if (uiState.successMessage != null) {
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = uiState.successMessage ?: "",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+                        }
+
                         // Error Banner
-                        if (uiState.errorMessage != null) {
+                        if (uiState.errorMessage != null && !uiState.isLockedOut) {
                             Card(
                                 colors = CardDefaults.cardColors(
                                     containerColor = MaterialTheme.colorScheme.errorContainer
@@ -185,7 +254,7 @@ fun LoginScreen(
                                 viewModel.clearMessages()
                             },
                             label = { Text(stringResource(R.string.username_or_id_label)) },
-                            placeholder = { Text("e.g. guard_a or SEC-1001") },
+                            placeholder = { Text("Username or Employee ID") },
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Default.Badge,
@@ -232,7 +301,9 @@ fun LoginScreen(
                             ),
                             keyboardActions = KeyboardActions(
                                 onDone = {
-                                    viewModel.login(identifier, password)
+                                    if (!uiState.isLockedOut) {
+                                        viewModel.login(identifier, password)
+                                    }
                                 }
                             ),
                             modifier = Modifier
@@ -240,14 +311,32 @@ fun LoginScreen(
                                 .testTag("password_input")
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        // Forgot Password Link
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    viewModel.clearMessages()
+                                    showForgotPasswordDialog = true
+                                },
+                                modifier = Modifier.testTag("forgot_password_button")
+                            ) {
+                                Text(
+                                    text = "Forgot Password?",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
 
                         // Submit Button
                         Button(
                             onClick = {
                                 viewModel.login(identifier, password)
                             },
-                            enabled = !uiState.isLoading,
+                            enabled = !uiState.isLoading && !uiState.isLockedOut,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.primary,
                                 contentColor = MaterialTheme.colorScheme.onPrimary
@@ -305,6 +394,28 @@ fun LoginScreen(
             }
         )
     }
+
+    if (showForgotPasswordDialog) {
+        ForgotPasswordDialog(
+            initialIdentifier = identifier,
+            isLoading = uiState.isLoading,
+            errorMessage = uiState.errorMessage,
+            onRequestOtp = { id, onSent ->
+                viewModel.requestPasswordReset(id) {
+                    onSent(it)
+                }
+            },
+            onConfirmReset = { id, otp, newPass, onComplete ->
+                viewModel.confirmPasswordReset(id, otp, newPass) {
+                    onComplete()
+                }
+            },
+            onDismiss = {
+                showForgotPasswordDialog = false
+                viewModel.clearMessages()
+            }
+        )
+    }
 }
 
 @Composable
@@ -321,7 +432,7 @@ fun ServerConfigDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "Configure the Django REST API base address. On Android Studio emulator use http://10.0.2.2:8000.",
+                    text = "Configure the secure operational backend API gateway endpoint.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 OutlinedTextField(
@@ -339,6 +450,154 @@ fun ServerConfigDialog(
                 modifier = Modifier.testTag("save_server_url_button")
             ) {
                 Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun ForgotPasswordDialog(
+    initialIdentifier: String,
+    isLoading: Boolean,
+    errorMessage: String?,
+    onRequestOtp: (String, (String) -> Unit) -> Unit,
+    onConfirmReset: (String, String, String, () -> Unit) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var identifier by remember { mutableStateOf(initialIdentifier) }
+    var otp by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var otpSent by remember { mutableStateOf(false) }
+    var validationError by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = if (!otpSent) "Reset Password" else "Enter OTP & New Password",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                val err = validationError ?: errorMessage
+                if (err != null) {
+                    Text(
+                        text = err,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                if (!otpSent) {
+                    Text(
+                        text = "Enter your Username or Guard ID. A 6-digit one-time passcode (OTP) valid for 10 minutes will be generated.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = identifier,
+                        onValueChange = {
+                            identifier = it
+                            validationError = null
+                        },
+                        label = { Text("Username or Guard ID") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    Text(
+                        text = "Enter the 6-digit OTP code received, and enter a new secure password (minimum 8 characters).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = otp,
+                        onValueChange = {
+                            otp = it.filter { ch -> ch.isDigit() }.take(6)
+                            validationError = null
+                        },
+                        label = { Text("6-Digit OTP Code") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = newPassword,
+                        onValueChange = {
+                            newPassword = it
+                            validationError = null
+                        },
+                        label = { Text("New Password (min 8 chars)") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = confirmPassword,
+                        onValueChange = {
+                            confirmPassword = it
+                            validationError = null
+                        },
+                        label = { Text("Confirm New Password") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (!otpSent) {
+                        if (identifier.isBlank()) {
+                            validationError = "Identifier is required."
+                            return@Button
+                        }
+                        onRequestOtp(identifier) {
+                            otpSent = true
+                        }
+                    } else {
+                        if (otp.length < 6) {
+                            validationError = "Please enter a valid 6-digit OTP."
+                            return@Button
+                        }
+                        if (newPassword.length < 8) {
+                            validationError = "Password must be at least 8 characters."
+                            return@Button
+                        }
+                        if (newPassword != confirmPassword) {
+                            validationError = "Passwords do not match."
+                            return@Button
+                        }
+                        onConfirmReset(identifier, otp, newPassword) {
+                            onDismiss()
+                        }
+                    }
+                },
+                enabled = !isLoading
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                } else {
+                    Text(if (!otpSent) "Request OTP" else "Reset Password")
+                }
             }
         },
         dismissButton = {

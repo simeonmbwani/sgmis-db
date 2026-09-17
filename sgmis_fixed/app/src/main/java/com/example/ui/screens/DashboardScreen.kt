@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -51,7 +52,7 @@ fun DashboardScreen(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "SGMIS COMMAND",
+                            text = "SMART SECURITY",
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.sp
                         )
@@ -63,6 +64,12 @@ fun DashboardScreen(
                         modifier = Modifier.testTag("refresh_dashboard_button")
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh Data")
+                    }
+                    IconButton(
+                        onClick = { onNavigate("settings") },
+                        modifier = Modifier.testTag("dashboard_settings_button")
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings & About")
                     }
                     IconButton(
                         onClick = { viewModel.logout() },
@@ -228,25 +235,217 @@ fun DashboardScreen(
                 }
             }
 
+            val role = user?.role?.uppercase() ?: "GUARD"
+            val isSupervisorOrAdmin = role in listOf("SUPERVISOR", "ADMINISTRATOR", "ADMIN")
+
+            // Supervisory / Administrative Command Overview Card
+            if (isSupervisorOrAdmin) {
+                var isTelemetryExpanded by remember { mutableStateOf(false) }
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { isTelemetryExpanded = !isTelemetryExpanded }
+                        .testTag("telemetry_overview_card"),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (role == "SUPERVISOR") "SUPERVISOR COMMAND STATUS" else "SYSTEM TELEMETRY & OPERATIONS",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Icon(
+                                imageVector = if (isTelemetryExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = if (isTelemetryExpanded) "Collapse" else "Expand",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("${uiState.telemetry.totalGuards.coerceAtLeast(uiState.users.size)}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text("Personnel", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("${uiState.incidents.count { it.status != "RESOLVED" }}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                                Text("Open Incidents", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("${uiState.leaveApplications.count { it.status == "PENDING" }}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.tertiary)
+                                Text("Pending Leave", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("${uiState.stations.size}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text("Stations", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+
+                        AnimatedVisibility(visible = isTelemetryExpanded) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 10.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                                // Incident Breakdown
+                                val incBreakdown = uiState.telemetry.incidentBreakdown
+                                if (!incBreakdown.isNullOrEmpty()) {
+                                    Text(
+                                        text = "Incidents Breakdown",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        incBreakdown.forEach { (k, v) ->
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.surface,
+                                                shape = RoundedCornerShape(6.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.padding(6.dp),
+                                                    horizontalAlignment = Alignment.CenterHorizontally
+                                                ) {
+                                                    Text(
+                                                        text = "$v",
+                                                        fontWeight = FontWeight.Bold,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    )
+                                                    Text(
+                                                        text = k.replace("_", " "),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Patrol Breakdown
+                                val patrolBreakdown = uiState.telemetry.patrolBreakdown
+                                if (!patrolBreakdown.isNullOrEmpty()) {
+                                    Text(
+                                        text = "Patrols Breakdown",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        patrolBreakdown.forEach { (k, v) ->
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.surface,
+                                                shape = RoundedCornerShape(6.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.padding(6.dp),
+                                                    horizontalAlignment = Alignment.CenterHorizontally
+                                                ) {
+                                                    Text(
+                                                        text = "$v",
+                                                        fontWeight = FontWeight.Bold,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = MaterialTheme.colorScheme.secondary
+                                                    )
+                                                    Text(
+                                                        text = k.replace("_", " "),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Attendance Breakdown
+                                val attBreakdown = uiState.telemetry.attendanceBreakdown
+                                if (!attBreakdown.isNullOrEmpty()) {
+                                    Text(
+                                        text = "Attendance Breakdown",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        attBreakdown.forEach { (k, v) ->
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.surface,
+                                                shape = RoundedCornerShape(6.dp),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.padding(6.dp),
+                                                    horizontalAlignment = Alignment.CenterHorizontally
+                                                ) {
+                                                    Text(
+                                                        text = "$v",
+                                                        fontWeight = FontWeight.Bold,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = StatusSuccess
+                                                    )
+                                                    Text(
+                                                        text = k.replace("_", " "),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Command Operations Navigation Grid
             Text(
-                text = "Operational Modules",
+                text = if (isSupervisorOrAdmin) "Management & Operations Modules" else "Operational Modules",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            val menuItems = listOf(
+            val menuItems = mutableListOf(
                 ModuleNav("today_shift", "Today's Duty", "Clock in, view partner & post details", Icons.Default.Schedule, "nav_today_shift"),
                 ModuleNav("handover", "Shift Handover", "Transfer duties to incoming guard", Icons.Default.SwapHoriz, "nav_handover"),
                 ModuleNav("occurrence_book", "Occurrence Book", "Official OB records & logs", Icons.Default.MenuBook, "nav_ob"),
+                ModuleNav("visitors", "Visitor Register", "Official visitor logs & gate passes", Icons.Default.Badge, "nav_visitors"),
                 ModuleNav("incidents", "Incident Reports", "File & review station incidents", Icons.Default.Warning, "nav_incidents"),
                 ModuleNav("patrol", "Station Patrols", "Verify inspection checkpoints", Icons.Default.DirectionsWalk, "nav_patrol"),
                 ModuleNav("leave", "Leave Manager", "Entitlement balances & requests", Icons.Default.EventNote, "nav_leave"),
-                ModuleNav("additional_duties", "Escort & Exams", "Management travel and exam duties", Icons.Default.DirectionsCar, "nav_additional_duties"),
+                ModuleNav("additional_duties", "Escort Duties", "Vehicle & exam security escorts", Icons.Default.DirectionsCar, "nav_additional_duties"),
+                ModuleNav("reports", "Operations Reports", "Filter & analyze station records", Icons.Default.Assessment, "nav_reports"),
+                ModuleNav("emergency_sos", "Emergency SOS", "Immediate distress alert beacon", Icons.Default.Sos, "nav_emergency_sos"),
                 ModuleNav("notifications", "Notifications", "Operational alerts and messages", Icons.Default.Notifications, "nav_notifications"),
-                ModuleNav("profile", "My Profile", "View and update your profile", Icons.Default.AccountCircle, "nav_profile")
+                ModuleNav("profile", "My Profile", "View organizational credentials & info", Icons.Default.AccountCircle, "nav_profile"),
+                ModuleNav("settings", "Settings & About", "Theme, app version & preferences", Icons.Default.Settings, "nav_settings")
             )
+
+            if (isSupervisorOrAdmin) {
+                menuItems.add(3, ModuleNav("users", "Personnel & Guards", "Staff & station assignments", Icons.Default.People, "nav_users"))
+                menuItems.add(4, ModuleNav("stations", "Stations & Pairs", "Posts, checkpoints & pairs", Icons.Default.Business, "nav_stations"))
+                menuItems.add(5, ModuleNav("roster", "Duty Roster Engine", "Automated rotation & shifts", Icons.Default.CalendarMonth, "nav_roster"))
+            }
 
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 for (rowItems in menuItems.chunked(2)) {
