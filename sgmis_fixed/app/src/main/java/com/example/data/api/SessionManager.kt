@@ -21,7 +21,38 @@ class SessionManager(context: Context) {
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_THEME_MODE = "theme_mode"
         
+        private const val KEY_URL_MIGRATED_TO_PROD_V1 = "url_migrated_to_prod_v1"
+
         val DEFAULT_SERVER_URL = BuildConfig.DEFAULT_API_URL
+        const val PRODUCTION_SERVER_URL = "https://sgmis-db.onrender.com/"
+        const val EMULATOR_SERVER_URL = "http://10.0.2.2:8000/"
+    }
+
+    init {
+        migrateLegacyServerUrl()
+    }
+
+    private fun migrateLegacyServerUrl() {
+        val hasMigrated = prefs.getBoolean(KEY_URL_MIGRATED_TO_PROD_V1, false)
+        if (!hasMigrated) {
+            val savedUrl = prefs.getString(KEY_SERVER_URL, null)
+            if (savedUrl.isNullOrBlank() || isLegacyOrLoopbackUrl(savedUrl)) {
+                val prodUrl = DEFAULT_SERVER_URL.trim().trimEnd('/')
+                prefs.edit()
+                    .putString(KEY_SERVER_URL, prodUrl)
+                    .putBoolean(KEY_URL_MIGRATED_TO_PROD_V1, true)
+                    .apply()
+            } else {
+                prefs.edit().putBoolean(KEY_URL_MIGRATED_TO_PROD_V1, true).apply()
+            }
+        }
+    }
+
+    private fun isLegacyOrLoopbackUrl(url: String): Boolean {
+        val lower = url.lowercase().trim()
+        return lower.contains("10.0.2.2") ||
+               lower.contains("localhost") ||
+               lower.contains("127.0.0.1")
     }
 
     var themeMode: String
@@ -41,8 +72,19 @@ class SessionManager(context: Context) {
     }
 
     var serverUrl: String
-        get() = prefs.getString(KEY_SERVER_URL, DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL
-        set(value) = prefs.edit().putString(KEY_SERVER_URL, value.trim().trimEnd('/')).apply()
+        get() {
+            val saved = prefs.getString(KEY_SERVER_URL, null)
+            if (saved.isNullOrBlank()) {
+                val defaultUrl = DEFAULT_SERVER_URL.trim().trimEnd('/')
+                prefs.edit().putString(KEY_SERVER_URL, defaultUrl).apply()
+                return defaultUrl
+            }
+            return saved
+        }
+        set(value) {
+            val cleaned = value.trim().trimEnd('/')
+            prefs.edit().putString(KEY_SERVER_URL, cleaned).apply()
+        }
 
     var accessToken: String?
         get() = prefs.getString(KEY_ACCESS_TOKEN, null)

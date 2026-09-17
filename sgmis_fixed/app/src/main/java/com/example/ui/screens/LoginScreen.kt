@@ -442,6 +442,23 @@ fun ServerConfigDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("server_url_input")
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { urlText = "https://sgmis-db.onrender.com/" },
+                        modifier = Modifier.weight(1f).testTag("preset_production_button")
+                    ) {
+                        Text("Production", style = MaterialTheme.typography.labelSmall)
+                    }
+                    OutlinedButton(
+                        onClick = { urlText = "http://10.0.2.2:8000/" },
+                        modifier = Modifier.weight(1f).testTag("preset_emulator_button")
+                    ) {
+                        Text("Emulator", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
             }
         },
         confirmButton = {
