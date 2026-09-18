@@ -1,11 +1,13 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 from django.db import models
 from django.conf import settings
 
 class LeaveType(models.TextChoices):
     CASUAL = "CASUAL", "Casual Leave"
     VACATION = "VACATION", "Vacation Leave"
+    COMPENSATION = "COMPENSATION", "Public Holiday Compensation"
     # ANNUAL is retained for backward compatibility with existing records/clients.
     ANNUAL = "ANNUAL", "Vacation Leave (Legacy Annual)"
     SICK = "SICK", "Sick Leave"
@@ -98,6 +100,18 @@ class LeaveBalance(models.Model):
     def remaining_vacation(self):
         return max(0.0, float(self.vacation_days) - float(self.used_vacation))
 
+    @property
+    def compensation_earned(self):
+        return float(PublicHolidayCompensationLedger.get_total_earned_for_guard(self.guard))
+
+    @property
+    def compensation_used(self):
+        return float(PublicHolidayCompensationLedger.get_total_used_for_guard(self.guard))
+
+    @property
+    def remaining_compensation(self):
+        return float(PublicHolidayCompensationLedger.get_remaining_for_guard(self.guard))
+
     def credit_public_holiday_duty(self, days=2.0, save=True):
         """
         A guard who works on a public holiday receives 2 days of leave compensation,
@@ -139,3 +153,94 @@ class LeaveApplication(models.Model):
 
     def __str__(self):
         return f"{self.guard.username} - {self.get_leave_type_display()} ({self.start_date} to {self.end_date}): {self.status}"
+
+
+class CompensationLedgerEntryType(models.TextChoices):
+    EARNED = "EARNED", "Earned (Public Holiday Duty)"
+    USED = "USED", "Used (Compensatory Leave Taken)"
+
+
+class PublicHolidayCompensationLedger(models.Model):
+    """
+    Authoritative auditable transaction ledger for public-holiday duty compensation.
+    Guarantees:
+    - 2 days earned per verified/approved worked public holiday duty.
+    - Tracks EARNED and USED transactions with full audit trail.
+    - Prevents duplicate EARNED credits for the same duty record.
+    - Prevents duplicate USED deductions for the same leave application.
+    - Independent from vacation_days (no 90-day cap) and casual_days (no 12-day cap).
+    - Authoritative remaining balance = SUM(EARNED) - SUM(USED).
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    guard = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="compensation_ledger_entries",
+    )
+    entry_type = models.CharField(
+        max_length=20,
+        choices=CompensationLedgerEntryType.choices,
+        db_index=True,
+    )
+    days = models.DecimalField(max_digits=6, decimal_places=1)
+    duty_record = models.ForeignKey(
+        "shifts.PublicHolidayDutyRecord",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="compensation_ledger_entries",
+    )
+    leave_application = models.ForeignKey(
+        "leave.LeaveApplication",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="compensation_ledger_entries",
+    )
+    notes = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_compensation_ledger_entries",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["duty_record", "entry_type"],
+                condition=models.Q(entry_type="EARNED"),
+                name="unique_earned_entry_per_duty_record",
+            ),
+            models.UniqueConstraint(
+                fields=["leave_application", "entry_type"],
+                condition=models.Q(entry_type="USED"),
+                name="unique_used_entry_per_leave_application",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.guard.username} - {self.entry_type} {self.days} days ({self.created_at.strftime('%Y-%m-%d')})"
+
+    @classmethod
+    def get_total_earned_for_guard(cls, guard):
+        res = cls.objects.filter(guard=guard, entry_type=CompensationLedgerEntryType.EARNED).aggregate(
+            total=models.Sum("days")
+        )["total"]
+        return Decimal(str(res)) if res is not None else Decimal("0.0")
+
+    @classmethod
+    def get_total_used_for_guard(cls, guard):
+        res = cls.objects.filter(guard=guard, entry_type=CompensationLedgerEntryType.USED).aggregate(
+            total=models.Sum("days")
+        )["total"]
+        return Decimal(str(res)) if res is not None else Decimal("0.0")
+
+    @classmethod
+    def get_remaining_for_guard(cls, guard):
+        earned = cls.get_total_earned_for_guard(guard)
+        used = cls.get_total_used_for_guard(guard)
+        return max(Decimal("0.0"), earned - used)

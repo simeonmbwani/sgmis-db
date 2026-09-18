@@ -39,6 +39,10 @@ fun LeaveScreen(
     var appToReject by remember { mutableStateOf<LeaveApplication?>(null) }
     val currentUserRole = uiState.currentUser?.role
 
+    LaunchedEffect(Unit) {
+        viewModel.fetchLeave()
+    }
+
     // Auto-dismiss transient messages after 3.5 seconds
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
         if (uiState.successMessage != null || uiState.errorMessage != null) {
@@ -151,7 +155,8 @@ fun LeaveScreen(
                 }
             }
 
-            // Balance Card - Mandatory Smart Security Policy
+            // Authoritative Leave & Compensation Summary Table (Phase 5C)
+            val summary = uiState.leaveSummary
             val balance = uiState.leaveBalance
             Card(
                 modifier = Modifier.fillMaxWidth().testTag("leave_balance_card"),
@@ -159,32 +164,50 @@ fun LeaveScreen(
                 shape = RoundedCornerShape(16.dp),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
-                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Official Leave Entitlements (${balance?.year ?: 2026})",
+                        text = "Official Leave & Compensation Summary (${summary?.year ?: balance?.year ?: 2026})",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = "%.1f".format(balance?.remainingCasual ?: 0.0),
-                                style = MaterialTheme.typography.headlineMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text("Casual Days Left", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                            Text("1 day/mo • 12mo cycle", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = "%.1f".format(balance?.remainingVacation ?: 0.0),
-                                style = MaterialTheme.typography.headlineMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.secondary
-                            )
-                            Text("Vacation Days Left", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                            Text("2.5 days/mo • Max 90d", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                    // Table Header
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Category", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.8f))
+                        Text("Accrued/Earned", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.3f))
+                        Text("Used", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.9f))
+                        Text("Remaining", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.0f))
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    // Authoritative rows: Vacation, Casual, Public Holiday Compensation
+                    val rows = if (!summary?.categories.isNullOrEmpty()) {
+                        summary!!.categories
+                    } else {
+                        listOf(
+                            com.example.data.model.LeaveCategoryRow("Vacation Leave", "Accrued", balance?.vacationDays ?: 0.0, balance?.usedVacation ?: 0.0, balance?.remainingVacation ?: 0.0),
+                            com.example.data.model.LeaveCategoryRow("Casual Leave", "Accrued", balance?.casualDays ?: 0.0, balance?.usedCasual ?: 0.0, balance?.remainingCasual ?: 0.0),
+                            com.example.data.model.LeaveCategoryRow("Public Holiday Compensation", "Earned", 0.0, 0.0, 0.0)
+                        )
+                    }
+
+                    rows.forEach { row ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(row.category, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1.8f))
+                            Text("%.1f".format(row.accruedOrEarned), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1.3f))
+                            Text("%.1f".format(row.used), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(0.9f))
+                            Text("%.1f".format(row.remaining), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1.0f))
                         }
                     }
                 }
@@ -387,7 +410,7 @@ fun ApplyLeaveDialog(
     var emergencyPhone by remember { mutableStateOf("") }
     var emergencyAddress by remember { mutableStateOf("") }
 
-    val leaveTypes = listOf("VACATION", "CASUAL", "SICK", "EMERGENCY", "COMPASSIONATE")
+    val leaveTypes = listOf("VACATION", "CASUAL", "COMPENSATION", "SICK", "EMERGENCY", "COMPASSIONATE")
     val isValid = reason.isNotBlank() && start.isNotBlank() && end.isNotBlank()
 
     AlertDialog(

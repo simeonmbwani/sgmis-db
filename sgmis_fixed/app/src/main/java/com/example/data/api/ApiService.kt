@@ -73,6 +73,17 @@ interface ApiService {
         @Query("station") station: String? = null
     ): Response<List<Shift>>
 
+    @GET("shifts/shifts/operational/")
+    suspend fun getOperationalRoster(
+        @Query("station") station: String? = null,
+        @Query("start_date") startDate: String? = null,
+        @Query("end_date") endDate: String? = null,
+        @Query("guard") guard: String? = null,
+        @Query("pair") pair: String? = null,
+        @Query("assignment_type") assignmentType: String? = null,
+        @Query("shift_type") shiftType: String? = null
+    ): Response<List<Shift>>
+
     @POST("shifts/shifts/generate/")
     suspend fun generateRoster(@Body request: GenerateRosterRequest): Response<GenerateRosterResponse>
 
@@ -197,6 +208,9 @@ interface ApiService {
     @GET("leave/balances/my_balance/")
     suspend fun getLeaveBalance(): Response<LeaveBalance>
 
+    @GET("leave/my-summary/")
+    suspend fun getLeaveSummary(): Response<LeaveSummary>
+
     @GET("leave/applications/")
     suspend fun getLeaveApplications(): Response<List<LeaveApplication>>
 
@@ -256,6 +270,9 @@ interface ApiService {
 
     @POST("notifications/alerts/read_all/")
     suspend fun markAllNotificationsRead(): Response<NotificationActionResponse>
+
+    @GET("notifications/alerts/unread_count/")
+    suspend fun getUnreadNotificationCount(): Response<UnreadCountResponse>
 
     @POST("notifications/alerts/broadcast/")
     suspend fun broadcastNotice(@Body request: BroadcastNoticeRequest): Response<BroadcastNoticeResponse>

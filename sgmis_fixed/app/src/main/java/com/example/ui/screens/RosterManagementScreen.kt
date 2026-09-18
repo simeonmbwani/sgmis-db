@@ -17,10 +17,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.*
+import com.example.ui.theme.GoldAccent
 import com.example.ui.theme.StatusSuccess
 import com.example.ui.theme.StatusWarning
 import com.example.ui.viewmodel.SgmisViewModel
@@ -197,13 +199,66 @@ fun RosterManagementScreen(
                 }
             }
 
+            var selectedTabIndex by remember { mutableStateOf(0) }
+            val tabs = listOf("Operational Matrix", "Calendar & Audit", "Shift Records")
+
+            TabRow(
+                selectedTabIndex = selectedTabIndex,
+                containerColor = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
+                tabs.forEachIndexed { index, title ->
+                    Tab(
+                        selected = selectedTabIndex == index,
+                        onClick = { selectedTabIndex = index },
+                        text = { Text(title, fontWeight = if (selectedTabIndex == index) FontWeight.Bold else FontWeight.Normal) }
+                    )
+                }
+            }
+
+            val groupedDates = remember(uiState.rosterShifts) {
+                uiState.rosterShifts.groupBy { it.date }.toSortedMap()
+            }
+
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
                 contentPadding = PaddingValues(bottom = 88.dp, top = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // 1. Horizontal Calendar Matrix Section
-                item {
+                if (selectedTabIndex == 0) {
+                    item {
+                        Text(
+                            text = "Authoritative Operational Matrix (${groupedDates.size} Days)",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+
+                    if (uiState.adminLoading) {
+                        item {
+                            Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    } else if (groupedDates.isEmpty()) {
+                        item {
+                            Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                Text("No roster shifts generated. Tap 'Generate Roster' to calculate rotational duty schedule.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    } else {
+                        items(groupedDates.entries.toList()) { (dateStr, shiftsOnDate) ->
+                            DateOperationalMatrixCard(
+                                dateStr = dateStr,
+                                shiftsOnDate = shiftsOnDate,
+                                guardPairs = uiState.guardPairs
+                            )
+                        }
+                    }
+                } else if (selectedTabIndex == 1) {
+                    // 1. Horizontal Calendar Matrix Section
+                    item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -656,16 +711,16 @@ fun RosterManagementScreen(
                         }
                     }
                 }
-
-                // 4. Individual Shifts Header and List
-                item {
-                    Text(
-                        text = "Scheduled Shift Deployments (${uiState.rosterShifts.size})",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
+                } else {
+                    // Tab 2: Individual Shifts Header and List
+                    item {
+                        Text(
+                            text = "Scheduled Shift Deployments (${uiState.rosterShifts.size})",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
 
                 if (uiState.adminLoading) {
                     item {
@@ -687,6 +742,7 @@ fun RosterManagementScreen(
             }
         }
     }
+}
 
     if (showGenerateDialog) {
         GenerateRosterDialog(
@@ -1109,4 +1165,172 @@ fun ResumeNormalRosterDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+@Composable
+fun DateOperationalMatrixCard(
+    dateStr: String,
+    shiftsOnDate: List<Shift>,
+    guardPairs: List<GuardPair> = emptyList()
+) {
+    val dayShifts = shiftsOnDate.filter { it.shiftType == "DAY" && it.assignmentType != "TIME_OFF" }
+    val nightShifts = shiftsOnDate.filter { it.shiftType == "NIGHT" && it.assignmentType != "TIME_OFF" }
+    val timeOffShifts = shiftsOnDate.filter { it.shiftType == "OFF" || it.shiftType == "REST" || it.assignmentType == "TIME_OFF" }
+    val specialShifts = shiftsOnDate.filter { it.assignmentType in listOf("EXAM_ESCORT", "ESCORT") }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Date Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.DateRange,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = dateStr,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    val stName = shiftsOnDate.firstOrNull()?.stationName ?: "Station"
+                    Text(
+                        text = stName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+
+            // Day Shift Section
+            OperationalShiftBlock(
+                title = "DAY SHIFT (07:00 – 18:00)",
+                badgeText = "DAY DUTY",
+                badgeColor = GoldAccent,
+                icon = Icons.Default.WbSunny,
+                shifts = dayShifts
+            )
+
+            // Night Shift Section
+            OperationalShiftBlock(
+                title = "NIGHT SHIFT (18:00 – 07:00)",
+                badgeText = "NIGHT DUTY",
+                badgeColor = MaterialTheme.colorScheme.secondary,
+                icon = Icons.Default.Nightlight,
+                shifts = nightShifts
+            )
+
+            // Time Off Section
+            OperationalShiftBlock(
+                title = "SCHEDULED TIME-OFF (REST)",
+                badgeText = "TIME OFF",
+                badgeColor = MaterialTheme.colorScheme.outline,
+                icon = Icons.Default.Bedtime,
+                shifts = timeOffShifts
+            )
+
+            if (specialShifts.isNotEmpty()) {
+                OperationalShiftBlock(
+                    title = "SPECIAL ESCORT / EXAM DUTIES",
+                    badgeText = "SPECIAL DUTY",
+                    badgeColor = MaterialTheme.colorScheme.error,
+                    icon = Icons.Default.DirectionsCar,
+                    shifts = specialShifts
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun OperationalShiftBlock(
+    title: String,
+    badgeText: String,
+    badgeColor: androidx.compose.ui.graphics.Color,
+    icon: ImageVector,
+    shifts: List<Shift>
+) {
+    Surface(
+        color = badgeColor.copy(alpha = 0.08f),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(icon, contentDescription = null, tint = badgeColor, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = badgeColor
+                    )
+                }
+                Surface(
+                    color = badgeColor.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = badgeText,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = badgeColor,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            if (shifts.isEmpty()) {
+                Text(
+                    text = "No guards scheduled in this cycle",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                shifts.forEach { s ->
+                    val guardName = s.guardName
+                    val partnerStr = if (!s.partnerName.isNullOrBlank()) " • Partner: ${s.partnerName}" else ""
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "• $guardName$partnerStr",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium
+                        )
+                        if (s.attendanceStatus.isNotBlank()) {
+                            AttendanceStatusPill(status = s.attendanceStatus)
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

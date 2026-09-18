@@ -427,6 +427,7 @@ fun DashboardScreen(
 
             val menuItems = mutableListOf(
                 ModuleNav("today_shift", "Today's Duty", "Clock in, view partner & post details", Icons.Default.Schedule, "nav_today_shift"),
+                ModuleNav("guard_duty_plan", "Guard Duty Plan", "View upcoming rotation & schedule", Icons.Default.EventAvailable, "nav_guard_duty_plan"),
                 ModuleNav("handover", "Shift Handover", "Transfer duties to incoming guard", Icons.Default.SwapHoriz, "nav_handover"),
                 ModuleNav("occurrence_book", "Occurrence Book", "Official OB records & logs", Icons.Default.MenuBook, "nav_ob"),
                 ModuleNav("visitors", "Visitor Register", "Official visitor logs & gate passes", Icons.Default.Badge, "nav_visitors"),
@@ -442,9 +443,10 @@ fun DashboardScreen(
             )
 
             if (isSupervisorOrAdmin) {
-                menuItems.add(3, ModuleNav("users", "Personnel & Guards", "Staff & station assignments", Icons.Default.People, "nav_users"))
-                menuItems.add(4, ModuleNav("stations", "Stations & Pairs", "Posts, checkpoints & pairs", Icons.Default.Business, "nav_stations"))
-                menuItems.add(5, ModuleNav("roster", "Duty Roster Engine", "Automated rotation & shifts", Icons.Default.CalendarMonth, "nav_roster"))
+                menuItems.add(2, ModuleNav("attendance_management", "Attendance Console", "Real-time clock-in & post monitoring", Icons.Default.HowToReg, "nav_attendance_management"))
+                menuItems.add(5, ModuleNav("users", "Personnel & Guards", "Staff & station assignments", Icons.Default.People, "nav_users"))
+                menuItems.add(6, ModuleNav("stations", "Stations & Pairs", "Posts, checkpoints & pairs", Icons.Default.Business, "nav_stations"))
+                menuItems.add(7, ModuleNav("roster", "Duty Roster Engine", "Automated rotation & shifts", Icons.Default.CalendarMonth, "nav_roster"))
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -454,8 +456,10 @@ fun DashboardScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         for (item in rowItems) {
+                            val badge = if (item.route == "notifications") uiState.unreadNotificationCount else 0
                             ModuleCard(
                                 item = item,
+                                badgeCount = badge,
                                 onClick = { onNavigate(item.route) },
                                 modifier = Modifier.weight(1f)
                             )
@@ -478,6 +482,7 @@ data class ModuleNav(
 @Composable
 fun ModuleCard(
     item: ModuleNav,
+    badgeCount: Int = 0,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -498,21 +503,42 @@ fun ModuleCard(
                 .padding(14.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = RoundedCornerShape(8.dp)
-                    ),
-                contentAlignment = Alignment.Center
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = item.icon,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(8.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = item.icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                if (badgeCount > 0) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.error,
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text(
+                            text = if (badgeCount > 99) "99+" else "$badgeCount",
+                            color = MaterialTheme.colorScheme.onError,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
             }
 
             Column {

@@ -52,6 +52,7 @@ data class SgmisUiState(
 
     // Leave
     val leaveBalance: LeaveBalance? = null,
+    val leaveSummary: LeaveSummary? = null,
     val leaveApplications: List<LeaveApplication> = emptyList(),
     val leaveLoading: Boolean = false,
 
@@ -64,6 +65,7 @@ data class SgmisUiState(
     // Notifications
     val notifications: List<NotificationAlert> = emptyList(),
     val notificationsLoading: Boolean = false,
+    val unreadNotificationCount: Int = 0,
 
     // Supervisory & Administrative
     val users: List<User> = emptyList(),
@@ -100,7 +102,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
 
     init {
         if (repository.isLoggedIn) {
-            refreshAllData()
+            loadInitialDashboardData()
         }
     }
 
@@ -197,7 +199,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                     )
                 }
                 resetInactivityTimer()
-                refreshAllData()
+                loadInitialDashboardData()
                 onSuccess()
             }.onFailure { err ->
                 val msg = err.message ?: "Authentication failed."
@@ -252,6 +254,16 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                 isLoggedIn = false,
                 serverUrl = repository.serverUrl
             )
+        }
+    }
+
+    fun loadInitialDashboardData() {
+        resetInactivityTimer()
+        fetchTodayShift()
+        fetchUnreadNotificationCount()
+        val role = _uiState.value.currentUser?.role?.uppercase()
+        if (role == "SUPERVISOR" || role == "ADMIN" || role == "ADMINISTRATOR") {
+            fetchTelemetry()
         }
     }
 
@@ -326,10 +338,25 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
-    fun clockOut(shiftId: String, lat: Double?, lon: Double?) {
+    fun clockOut(
+        shiftId: String,
+        lat: Double?,
+        lon: Double?,
+        supervisorUsername: String? = null,
+        supervisorPassword: String? = null,
+        overrideReason: String? = null,
+        onSuccess: (() -> Unit)? = null
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(clockLoading = true, errorMessage = null) }
-            val res = repository.clockOut(shiftId, lat, lon)
+            val res = repository.clockOut(
+                shiftId = shiftId,
+                lat = lat,
+                lon = lon,
+                supervisorUsername = supervisorUsername,
+                supervisorPassword = supervisorPassword,
+                overrideReason = overrideReason
+            )
             res.onSuccess { att ->
                 _uiState.update {
                     it.copy(
@@ -338,6 +365,11 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                     )
                 }
                 fetchTodayShift()
+                val role = _uiState.value.currentUser?.role?.uppercase()
+                if (role == "SUPERVISOR" || role == "ADMIN" || role == "ADMINISTRATOR") {
+                    fetchAttendanceRecords()
+                }
+                onSuccess?.invoke()
             }.onFailure { err ->
                 _uiState.update {
                     it.copy(
@@ -668,6 +700,9 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             val balRes = repository.fetchLeaveBalance()
             balRes.onSuccess { b -> _uiState.update { it.copy(leaveBalance = b) } }
 
+            val sumRes = repository.fetchLeaveSummary()
+            sumRes.onSuccess { s -> _uiState.update { it.copy(leaveSummary = s) } }
+
             val appsRes = repository.fetchLeaveApplications()
             appsRes.onSuccess { apps ->
                 _uiState.update { it.copy(leaveApplications = apps, leaveLoading = false) }
@@ -895,12 +930,22 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     }
 
     // --- Notifications ---
+    fun fetchUnreadNotificationCount() {
+        viewModelScope.launch {
+            val res = repository.fetchUnreadNotificationCount()
+            res.onSuccess { count ->
+                _uiState.update { it.copy(unreadNotificationCount = count) }
+            }
+        }
+    }
+
     fun fetchNotifications() {
         viewModelScope.launch {
             _uiState.update { it.copy(notificationsLoading = true) }
             val res = repository.fetchNotifications()
             res.onSuccess { alerts ->
-                _uiState.update { it.copy(notifications = alerts, notificationsLoading = false) }
+                val unread = alerts.count { !it.read }
+                _uiState.update { it.copy(notifications = alerts, unreadNotificationCount = unread, notificationsLoading = false) }
             }.onFailure {
                 _uiState.update { it.copy(notificationsLoading = false) }
             }
@@ -910,7 +955,15 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     fun markNotificationRead(id: String) {
         viewModelScope.launch {
             val res = repository.markNotificationRead(id)
-            res.onSuccess { fetchNotifications() }
+            res.onSuccess {
+                _uiState.update { current ->
+                    val updated = current.notifications.map {
+                        if (it.id == id) it.copy(read = true) else it
+                    }
+                    val newCount = (current.unreadNotificationCount - 1).coerceAtLeast(0)
+                    current.copy(notifications = updated, unreadNotificationCount = newCount)
+                }
+            }
         }
     }
 
@@ -918,8 +971,14 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         viewModelScope.launch {
             val res = repository.markAllNotificationsRead()
             res.onSuccess {
-                _uiState.update { it.copy(successMessage = "All alerts marked as read.") }
-                fetchNotifications()
+                _uiState.update { current ->
+                    val updated = current.notifications.map { it.copy(read = true) }
+                    current.copy(
+                        notifications = updated,
+                        unreadNotificationCount = 0,
+                        successMessage = "All alerts marked as read."
+                    )
+                }
             }
         }
     }
@@ -1048,11 +1107,20 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     fun fetchRosterShifts(date: String? = null, station: String? = null) {
         viewModelScope.launch {
             _uiState.update { it.copy(adminLoading = true) }
-            val res = repository.fetchShifts(date, station)
+            val res = if (date != null) {
+                repository.fetchOperationalRoster(stationId = station, startDate = date, endDate = date)
+            } else {
+                repository.fetchOperationalRoster(stationId = station)
+            }
             res.onSuccess { list ->
                 _uiState.update { it.copy(rosterShifts = list, adminLoading = false) }
-            }.onFailure { err ->
-                _uiState.update { it.copy(adminLoading = false, errorMessage = it.errorMessage ?: err.message) }
+            }.onFailure { _ ->
+                val fallback = repository.fetchShifts(date, station)
+                fallback.onSuccess { list ->
+                    _uiState.update { it.copy(rosterShifts = list, adminLoading = false) }
+                }.onFailure { fallbackErr ->
+                    _uiState.update { it.copy(adminLoading = false, errorMessage = it.errorMessage ?: fallbackErr.message) }
+                }
             }
         }
     }

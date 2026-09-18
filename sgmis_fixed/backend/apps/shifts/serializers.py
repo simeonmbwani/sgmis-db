@@ -1,5 +1,19 @@
 from rest_framework import serializers
-from .models import Shift, ShiftHandover, Attendance, DutyRosterCycle, ExaminationPeriod, TemporaryAssignmentAudit
+from .models import (
+    Shift,
+    ShiftHandover,
+    Attendance,
+    DutyRosterCycle,
+    ExaminationPeriod,
+    TemporaryAssignmentAudit,
+    ShiftType,
+    AssignmentType,
+    DutyRoster,
+    RosterStatus,
+    PublicHoliday,
+    PublicHolidayDutyRecord,
+    HolidayCompensationStatus,
+)
 
 class ShiftSerializer(serializers.ModelSerializer):
     station_name = serializers.CharField(source="station.name", read_only=True)
@@ -62,6 +76,8 @@ class ShiftSerializer(serializers.ModelSerializer):
         return partner.employee_number if partner else None
 
     def get_attendance_status(self, obj):
+        if obj.assignment_type == AssignmentType.TIME_OFF or obj.shift_type == ShiftType.OFF:
+            return "OFF_DUTY"
         # Check if an attendance record exists for this shift
         att = getattr(obj, "_attendance_record", None)
         if att is None:
@@ -153,10 +169,12 @@ class AttendanceSerializer(serializers.ModelSerializer):
             "clock_in_gps",
             "clock_out_gps",
             "is_late",
+            "is_serious_late",
             "late_reason",
+            "escalation_notified",
             "created_at",
         ]
-        read_only_fields = ["id", "guard", "is_late", "created_at"]
+        read_only_fields = ["id", "guard", "is_late", "is_serious_late", "escalation_notified", "created_at"]
 
     def get_guard_name(self, obj):
         name = obj.guard.get_full_name().strip()
@@ -170,8 +188,11 @@ class ClockInRequestSerializer(serializers.Serializer):
 
 class ClockOutRequestSerializer(serializers.Serializer):
     shift_id = serializers.UUIDField(required=True)
-    latitude = serializers.FloatField(required=False, default=None)
-    longitude = serializers.FloatField(required=False, default=None)
+    latitude = serializers.FloatField(required=False, allow_null=True, default=None)
+    longitude = serializers.FloatField(required=False, allow_null=True, default=None)
+    supervisor_username = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    supervisor_password = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="", write_only=True)
+    override_reason = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
 
 class ExaminationPeriodSerializer(serializers.ModelSerializer):
     station_name = serializers.CharField(source="station.name", read_only=True)
@@ -276,3 +297,159 @@ class DetectConflictsRequestSerializer(serializers.Serializer):
     station_id = serializers.UUIDField(required=True)
     start_date = serializers.DateField(required=False, allow_null=True, default=None)
     end_date = serializers.DateField(required=False, allow_null=True, default=None)
+
+class DutyRosterSerializer(serializers.ModelSerializer):
+    station_name = serializers.CharField(source="station.name", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    approved_by_name = serializers.SerializerMethodField()
+    shift_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DutyRoster
+        fields = [
+            "id",
+            "station",
+            "station_name",
+            "start_date",
+            "end_date",
+            "status",
+            "status_display",
+            "approved_by",
+            "approved_by_name",
+            "approved_at",
+            "shift_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "station_name",
+            "status_display",
+            "approved_by",
+            "approved_by_name",
+            "approved_at",
+            "shift_count",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_approved_by_name(self, obj):
+        if obj.approved_by:
+            name = obj.approved_by.get_full_name().strip()
+            return name if name else obj.approved_by.username
+        return None
+
+    def get_shift_count(self, obj):
+        return obj.shifts.count()
+
+class RosterValidateRequestSerializer(serializers.Serializer):
+    roster_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+    station_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+    start_date = serializers.DateField(required=False, allow_null=True, default=None)
+    end_date = serializers.DateField(required=False, allow_null=True, default=None)
+
+    def validate(self, attrs):
+        if not attrs.get("roster_id") and not attrs.get("station_id"):
+            raise serializers.ValidationError("Either 'roster_id' or 'station_id' must be provided.")
+        return attrs
+
+class RosterApproveRequestSerializer(serializers.Serializer):
+    roster_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+    station_id = serializers.UUIDField(required=False, allow_null=True, default=None)
+    start_date = serializers.DateField(required=False, allow_null=True, default=None)
+    end_date = serializers.DateField(required=False, allow_null=True, default=None)
+
+    def validate(self, attrs):
+        if not attrs.get("roster_id") and not attrs.get("station_id"):
+            raise serializers.ValidationError("Either 'roster_id' or 'station_id' must be provided.")
+        return attrs
+
+
+class PublicHolidaySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PublicHoliday
+        fields = [
+            "id",
+            "name",
+            "date",
+            "country_code",
+            "description",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class PublicHolidayDutyRecordSerializer(serializers.ModelSerializer):
+    public_holiday_name = serializers.CharField(source="public_holiday.name", read_only=True)
+    public_holiday_date = serializers.DateField(source="public_holiday.date", read_only=True)
+    shift_date = serializers.DateField(source="shift.date", read_only=True)
+    shift_type = serializers.CharField(source="shift.shift_type", read_only=True)
+    station_id = serializers.UUIDField(source="shift.station.id", read_only=True)
+    station_name = serializers.CharField(source="shift.station.name", read_only=True)
+    guard_name = serializers.SerializerMethodField()
+    guard_employee_number = serializers.CharField(source="guard.employee_number", read_only=True)
+    approved_by_name = serializers.SerializerMethodField()
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = PublicHolidayDutyRecord
+        fields = [
+            "id",
+            "public_holiday",
+            "public_holiday_name",
+            "public_holiday_date",
+            "shift",
+            "shift_date",
+            "shift_type",
+            "station_id",
+            "station_name",
+            "guard",
+            "guard_name",
+            "guard_employee_number",
+            "attendance",
+            "compensated_days",
+            "status",
+            "status_display",
+            "approved_by",
+            "approved_by_name",
+            "approved_at",
+            "decision_reason",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "public_holiday_name",
+            "public_holiday_date",
+            "shift_date",
+            "shift_type",
+            "station_id",
+            "station_name",
+            "guard_name",
+            "guard_employee_number",
+            "approved_by",
+            "approved_by_name",
+            "approved_at",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_guard_name(self, obj):
+        name = obj.guard.get_full_name().strip()
+        return name if name else obj.guard.username
+
+    def get_approved_by_name(self, obj):
+        if obj.approved_by:
+            name = obj.approved_by.get_full_name().strip()
+            return name if name else obj.approved_by.username
+        return None
+
+
+class RecordHolidayDutyRequestSerializer(serializers.Serializer):
+    shift_id = serializers.UUIDField(required=True)
+
+
+class ReviewHolidayCompensationRequestSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=False, allow_blank=True, default="")

@@ -104,6 +104,23 @@ class SGMISBackendEndToEndTests(TestCase):
             station=self.station,
         )
 
+        self.guard_e = UserModel.objects.create_user(
+            username="guard_e",
+            email="guard_e@sgmis.local",
+            password=self.password,
+            employee_number="SEC-505",
+            role=UserRole.GUARD,
+            station=self.station,
+        )
+        self.guard_f = UserModel.objects.create_user(
+            username="guard_f",
+            email="guard_f@sgmis.local",
+            password=self.password,
+            employee_number="SEC-506",
+            role=UserRole.GUARD,
+            station=self.station,
+        )
+
         # Create Guard Pairs
         self.pair1 = GuardPair.objects.create(
             station=self.station,
@@ -116,6 +133,12 @@ class SGMISBackendEndToEndTests(TestCase):
             guard_a=self.guard_c,
             guard_b=self.guard_d,
             rotation_order=2,
+        )
+        self.pair3 = GuardPair.objects.create(
+            station=self.station,
+            guard_a=self.guard_e,
+            guard_b=self.guard_f,
+            rotation_order=3,
         )
 
     def test_health_check(self):

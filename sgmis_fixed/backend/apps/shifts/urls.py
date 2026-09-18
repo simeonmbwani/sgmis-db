@@ -6,10 +6,16 @@ from .views import (
     ShiftHandoverViewSet,
     ExaminationPeriodViewSet,
     TemporaryAssignmentAuditViewSet,
+    DutyRosterViewSet,
+    PublicHolidayViewSet,
+    PublicHolidayDutyRecordViewSet,
 )
 
 router = DefaultRouter()
 router.register(r"shifts", ShiftViewSet, basename="shift")
+router.register(r"duty-rosters", DutyRosterViewSet, basename="duty-roster")
+router.register(r"public-holidays", PublicHolidayViewSet, basename="public-holiday")
+router.register(r"holiday-duties", PublicHolidayDutyRecordViewSet, basename="holiday-duty")
 router.register(r"attendance", AttendanceViewSet, basename="attendance")
 router.register(r"handovers", ShiftHandoverViewSet, basename="handover")
 router.register(r"examination-periods", ExaminationPeriodViewSet, basename="examination-period")

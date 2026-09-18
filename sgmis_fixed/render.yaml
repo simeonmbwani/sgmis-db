@@ -32,3 +32,21 @@ services:
     rootDir: frontend
     buildCommand: "echo 'SGMIS static portal ready'"
     staticPublishPath: .
+
+  # Automated Daily Upcoming Duty Reminder Cron
+  # Runs once daily at 04:00 UTC (06:00 Africa/Harare)
+  - type: cron
+    name: sgmis-upcoming-duty-notifications
+    runtime: python
+    rootDir: backend
+    region: frankfurt
+    schedule: "0 4 * * *"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python manage.py send_upcoming_duty_notifications"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATABASE_URL
+        sync: false
+      - key: DJANGO_SECRET_KEY
+        generateValue: true

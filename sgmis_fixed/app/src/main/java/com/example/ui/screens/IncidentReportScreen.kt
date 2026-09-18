@@ -39,6 +39,10 @@ fun IncidentReportScreen(
     val currentUserRole = uiState.currentUser?.role
     val isSupervisor = currentUserRole == "SUPERVISOR"
 
+    LaunchedEffect(Unit) {
+        viewModel.fetchIncidents()
+    }
+
     // Auto-dismiss transient messages after 3.5 seconds
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
         if (uiState.successMessage != null || uiState.errorMessage != null) {

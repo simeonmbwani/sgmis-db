@@ -9,8 +9,12 @@ import com.example.data.local.CachedShiftEntity
 import com.example.data.local.CachedStationEntity
 import com.example.data.local.SgmisDatabase
 import com.example.data.model.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import android.util.Log
 
 class SgmisRepository(
     private val apiClient: ApiClient,
@@ -35,12 +39,30 @@ class SgmisRepository(
         }
 
     // --- Error Parser Helper ---
+    private fun sanitizeException(e: Throwable, fallback: String = "Server communication error"): Exception {
+        val msg = e.message ?: ""
+        if (msg.contains("setLenient", ignoreCase = true) || msg.contains("malformed JSON", ignoreCase = true) || msg.contains("Expected BEGIN_", ignoreCase = true)) {
+            return Exception("Invalid or unexpected response format from server. Please verify your connection or try again.")
+        }
+        if (msg.contains("End of input", ignoreCase = true)) {
+            return Exception("Empty response received from server.")
+        }
+        return if (e is Exception) e else Exception(fallback, e)
+    }
+
     private fun parseDrfError(errorBody: String?, fallback: String): String {
         if (errorBody.isNullOrBlank()) return fallback
+        val trimmed = errorBody.trim()
+        if (trimmed.startsWith("<") || trimmed.contains("<!DOCTYPE", ignoreCase = true) || trimmed.contains("<html", ignoreCase = true)) {
+            return fallback
+        }
         return try {
-            val jsonObj = org.json.JSONObject(errorBody)
+            val jsonObj = org.json.JSONObject(trimmed)
             if (jsonObj.has("detail")) {
                 return jsonObj.getString("detail")
+            }
+            if (jsonObj.has("message")) {
+                return jsonObj.getString("message")
             }
             if (jsonObj.has("non_field_errors")) {
                 val arr = jsonObj.getJSONArray("non_field_errors")
@@ -59,7 +81,7 @@ class SgmisRepository(
                 fallback
             }
         } catch (e: Exception) {
-            errorBody.take(160)
+            fallback
         }
     }
 
@@ -78,7 +100,7 @@ class SgmisRepository(
                 Result.failure(Exception(errorMsg))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e, "Authentication failed"))
         }
     }
 
@@ -93,13 +115,20 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch user profile (${response.code()})"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e, "Failed to fetch user profile"))
         }
     }
 
     fun logout() {
         sessionManager.clearSession()
         apiClient.invalidateClient()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                database.clearAllTables()
+            } catch (e: Exception) {
+                Log.e("SgmisRepository", "Error clearing local cache on logout", e)
+            }
+        }
     }
 
     // --- Today's Shift ---
@@ -167,25 +196,40 @@ class SgmisRepository(
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                val err = response.errorBody()?.string() ?: "Clock-in failed"
+                val err = parseDrfError(response.errorBody()?.string(), "Clock-in failed (${response.code()})")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e, "Clock-in failed"))
         }
     }
 
-    suspend fun clockOut(shiftId: String, lat: Double?, lon: Double?): Result<Attendance> {
+    suspend fun clockOut(
+        shiftId: String,
+        lat: Double?,
+        lon: Double?,
+        supervisorUsername: String? = null,
+        supervisorPassword: String? = null,
+        overrideReason: String? = null
+    ): Result<Attendance> {
         return try {
-            val response = api.clockOut(ClockOutRequest(shiftId, lat, lon))
+            val request = ClockOutRequest(
+                shiftId = shiftId,
+                latitude = lat,
+                longitude = lon,
+                supervisorUsername = supervisorUsername?.takeIf { it.isNotBlank() },
+                supervisorPassword = supervisorPassword?.takeIf { it.isNotBlank() },
+                overrideReason = overrideReason?.takeIf { it.isNotBlank() }
+            )
+            val response = api.clockOut(request)
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                val err = response.errorBody()?.string() ?: "Clock-out failed"
+                val err = parseDrfError(response.errorBody()?.string(), "Clock-out failed (${response.code()})")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e, "Clock-out failed"))
         }
     }
 
@@ -589,6 +633,19 @@ class SgmisRepository(
         }
     }
 
+    suspend fun fetchLeaveSummary(): Result<LeaveSummary> {
+        return try {
+            val response = api.getLeaveSummary()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                Result.failure(Exception("Failed to fetch leave & compensation summary"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun fetchLeaveApplications(): Result<List<LeaveApplication>> {
         return try {
             val response = api.getLeaveApplications()
@@ -929,10 +986,41 @@ class SgmisRepository(
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                Result.failure(Exception("Failed to fetch roster shifts"))
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch roster shifts (${response.code()})")
+                Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e, "Failed to fetch roster shifts"))
+        }
+    }
+
+    suspend fun fetchOperationalRoster(
+        stationId: String? = null,
+        startDate: String? = null,
+        endDate: String? = null,
+        guardId: String? = null,
+        pairId: String? = null,
+        assignmentType: String? = null,
+        shiftType: String? = null
+    ): Result<List<Shift>> {
+        return try {
+            val response = api.getOperationalRoster(
+                station = stationId,
+                startDate = startDate,
+                endDate = endDate,
+                guard = guardId,
+                pair = pairId,
+                assignmentType = assignmentType,
+                shiftType = shiftType
+            )
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val error = parseDrfError(response.errorBody()?.string(), "Failed to load operational roster (${response.code()})")
+                Result.failure(Exception(error))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to load operational roster"))
         }
     }
 
@@ -1298,17 +1386,44 @@ class SgmisRepository(
         }
     }
 
-    suspend fun broadcastNotice(title: String, message: String, targetRole: String? = null, stationId: String? = null): Result<Unit> {
+    suspend fun fetchUnreadNotificationCount(): Result<Int> {
         return try {
-            val response = api.broadcastNotice(BroadcastNoticeRequest(title, message, targetRole, stationId))
-            if (response.isSuccessful) {
-                Result.success(Unit)
+            val response = api.getUnreadNotificationCount()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!.unreadCount)
             } else {
-                val err = parseDrfError(response.errorBody()?.string(), "Failed to broadcast notice")
+                Result.success(0)
+            }
+        } catch (e: Exception) {
+            Result.success(0)
+        }
+    }
+
+    suspend fun broadcastNotice(
+        title: String,
+        message: String,
+        targetRole: String? = null,
+        stationId: String? = null,
+        userIds: List<String>? = null
+    ): Result<BroadcastNoticeResponse> {
+        return try {
+            val response = api.broadcastNotice(
+                BroadcastNoticeRequest(
+                    title = title,
+                    message = message,
+                    targetRole = targetRole,
+                    stationId = stationId,
+                    userIds = userIds
+                )
+            )
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to broadcast notice (${response.code()})")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e, "Failed to broadcast notice"))
         }
     }
 }

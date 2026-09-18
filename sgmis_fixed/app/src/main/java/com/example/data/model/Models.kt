@@ -81,7 +81,9 @@ data class Attendance(
     @Json(name = "clock_in_gps") val clockInGps: String? = null,
     @Json(name = "clock_out_gps") val clockOutGps: String? = null,
     @Json(name = "is_late") val isLate: Boolean = false,
-    @Json(name = "late_reason") val lateReason: String? = null
+    @Json(name = "is_serious_late") val isSeriousLate: Boolean = false,
+    @Json(name = "late_reason") val lateReason: String? = null,
+    @Json(name = "escalation_notified") val escalationNotified: Boolean = false
 )
 
 @JsonClass(generateAdapter = true)
@@ -96,7 +98,10 @@ data class ClockInRequest(
 data class ClockOutRequest(
     @Json(name = "shift_id") val shiftId: String,
     val latitude: Double? = null,
-    val longitude: Double? = null
+    val longitude: Double? = null,
+    @Json(name = "supervisor_username") val supervisorUsername: String? = null,
+    @Json(name = "supervisor_password") val supervisorPassword: String? = null,
+    @Json(name = "override_reason") val overrideReason: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -306,6 +311,25 @@ data class LeaveBalance(
 )
 
 @JsonClass(generateAdapter = true)
+data class LeaveCategoryRow(
+    val category: String,
+    @Json(name = "metric_label") val metricLabel: String = "Accrued",
+    @Json(name = "accrued_or_earned") val accruedOrEarned: Double = 0.0,
+    val used: Double = 0.0,
+    val remaining: Double = 0.0,
+    @Json(name = "policy_note") val policyNote: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class LeaveSummary(
+    @Json(name = "guard_id") val guardId: String,
+    @Json(name = "guard_name") val guardName: String,
+    @Json(name = "guard_employee_number") val guardEmployeeNumber: String = "",
+    val year: Int = 2026,
+    val categories: List<LeaveCategoryRow> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
 data class LeaveApplication(
     val id: String,
     val guard: String,
@@ -427,6 +451,7 @@ data class CreateStationRequest(
 data class GuardPair(
     val id: String,
     val station: String,
+    @Json(name = "station_name") val stationName: String? = null,
     @Json(name = "guard_a") val guardA: String,
     @Json(name = "guard_b") val guardB: String,
     @Json(name = "guard_a_name") val guardAName: String? = null,
@@ -441,7 +466,8 @@ data class CreateGuardPairRequest(
     val station: String,
     @Json(name = "guard_a") val guardA: String,
     @Json(name = "guard_b") val guardB: String,
-    val order: Int
+    @Json(name = "rotation_order") val rotationOrder: Int = 1,
+    val order: Int = 1
 )
 
 @JsonClass(generateAdapter = true)
@@ -707,18 +733,26 @@ data class BroadcastNoticeRequest(
     val title: String,
     val message: String,
     @Json(name = "target_role") val targetRole: String? = null,
-    @Json(name = "station_id") val stationId: String? = null
+    @Json(name = "station_id") val stationId: String? = null,
+    @Json(name = "user_ids") val userIds: List<String>? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class BroadcastNoticeResponse(
     val message: String? = null,
-    @Json(name = "recipients_count") val recipientsCount: Int? = null
+    @Json(name = "recipients_count") val recipientsCount: Int? = null,
+    val status: String? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class NotificationActionResponse(
     val message: String? = null,
+    val status: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class UnreadCountResponse(
+    @Json(name = "unread_count") val unreadCount: Int = 0,
     val status: String? = null
 )
 

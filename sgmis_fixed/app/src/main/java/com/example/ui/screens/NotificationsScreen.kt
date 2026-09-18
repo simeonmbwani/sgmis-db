@@ -43,6 +43,10 @@ fun NotificationsScreen(
     val currentUserRole = state.currentUser?.role?.uppercase()
     val isSupervisorOrAdmin = currentUserRole in listOf("SUPERVISOR", "ADMINISTRATOR", "ADMIN")
 
+    LaunchedEffect(Unit) {
+        viewModel.fetchNotifications()
+    }
+
     // Auto-dismiss transient messages after 3.5 seconds
     LaunchedEffect(state.successMessage, state.errorMessage) {
         if (state.successMessage != null || state.errorMessage != null) {

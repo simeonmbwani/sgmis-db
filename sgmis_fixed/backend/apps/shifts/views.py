@@ -6,8 +6,30 @@ from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.exceptions import PermissionDenied, ValidationError
-from .models import Shift, ShiftHandover, Attendance, ExaminationPeriod, TemporaryAssignmentAudit
+from rest_framework.exceptions import (
+    PermissionDenied as DRFPermissionDenied,
+    ValidationError as DRFValidationError,
+    PermissionDenied,
+    ValidationError,
+)
+from django.core.exceptions import (
+    PermissionDenied as DjangoPermissionDenied,
+    ValidationError as DjangoValidationError,
+)
+from .models import (
+    Shift,
+    ShiftHandover,
+    Attendance,
+    ExaminationPeriod,
+    TemporaryAssignmentAudit,
+    ShiftType,
+    AssignmentType,
+    DutyRoster,
+    RosterStatus,
+    PublicHoliday,
+    PublicHolidayDutyRecord,
+    HolidayCompensationStatus,
+)
 from .serializers import (
     ShiftSerializer,
     ShiftHandoverSerializer,
@@ -20,6 +42,13 @@ from .serializers import (
     ScheduleExamEscortSerializer,
     ResumeNormalRosterSerializer,
     DetectConflictsRequestSerializer,
+    DutyRosterSerializer,
+    RosterValidateRequestSerializer,
+    RosterApproveRequestSerializer,
+    PublicHolidaySerializer,
+    PublicHolidayDutyRecordSerializer,
+    RecordHolidayDutyRequestSerializer,
+    ReviewHolidayCompensationRequestSerializer,
 )
 from .services import (
     resolve_incoming_guard,
@@ -27,12 +56,19 @@ from .services import (
     schedule_exam_escort,
     detect_roster_conflicts,
     resume_normal_roster,
+    validate_duty_roster,
+    approve_duty_roster,
+    get_authoritative_roster_for_station,
+    get_active_public_holiday,
+    record_public_holiday_duty,
+    approve_holiday_compensation,
+    reject_holiday_compensation,
 )
 from apps.stations.models import Station
 from apps.stations.utils import is_within_geofence
 from apps.accounts.models import User, UserRole
 from apps.accounts.permissions import IsAdministrator, IsSupervisorOrAdmin
-from apps.core.models import SupervisorOverrideAudit
+from apps.core.models import SupervisorOverrideAudit, SecurityAuditEvent
 from apps.core.idempotency import check_idempotency, store_idempotency
 from apps.notifications.models import Notification
 
@@ -40,10 +76,12 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Operational duty shifts.
     Provides GET /shifts/shifts/today/ for the authenticated guard.
+    Provides GET /shifts/shifts/operational/ for unpaginated operational roster matrix views.
     """
     queryset = Shift.objects.all().select_related("station", "guard", "pair", "pair__guard_a", "pair__guard_b")
     serializer_class = ShiftSerializer
     permission_classes = [IsAuthenticated]
+    ordering = ["date", "start_time"]
 
     def get_queryset(self):
         user = self.request.user
@@ -77,23 +115,12 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
         """
         GET /shifts/shifts/today/
         Returns today's authoritative shift for Guards, Supervisors, and Admins.
+        Strictly enforces guard assignment: never falls back to another guard or expired shifts.
         """
-        from django.db.models import Q
-
         user = request.user
-        today_date = timezone.localdate()
+        now = timezone.localtime(timezone.now())
+        today_date = now.date()
         date_param = request.query_params.get("date")
-
-        # Non-admins cannot query other guards or stations
-        if user.role == UserRole.GUARD:
-            station_param = None
-            guard_param = None
-        elif user.role == UserRole.SUPERVISOR:
-            station_param = str(user.station_id) if user.station else None
-            guard_param = request.query_params.get("guard")
-        else:
-            station_param = request.query_params.get("station")
-            guard_param = request.query_params.get("guard")
 
         try:
             target_date = datetime.strptime(date_param, "%Y-%m-%d").date() if date_param else today_date
@@ -101,55 +128,135 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
             target_date = today_date
 
         qs = Shift.objects.all().select_related("station", "guard", "pair", "pair__guard_a", "pair__guard_b")
-
-        if station_param:
-            qs = qs.filter(station_id=station_param)
-        if guard_param:
-            qs = qs.filter(guard_id=guard_param)
-
         shift = None
 
-        if guard_param:
-            shift = qs.filter(guard_id=guard_param, date=target_date).first()
-            if not shift and not date_param:
-                shift = qs.filter(guard_id=guard_param).order_by("-date", "start_time").first()
+        if user.role == UserRole.GUARD:
+            # 1. Check for active overnight shift from yesterday if early morning (before 07:00) and no explicit date_param
+            if not date_param and now.time() < time(7, 0):
+                yesterday = today_date - timedelta(days=1)
+                overnight_shift = qs.filter(
+                    guard=user,
+                    date=yesterday,
+                    shift_type=ShiftType.NIGHT,
+                ).first()
+                if overnight_shift:
+                    shift = overnight_shift
 
-        elif user.role == UserRole.GUARD or not user.role:
-            shift = qs.filter(guard=user, date=target_date).first()
-            if not shift and target_date != timezone.now().date():
-                shift = qs.filter(guard=user, date=timezone.now().date()).first()
+            # 2. Query target date strictly for this guard
             if not shift:
-                shift = qs.filter(Q(pair__guard_a=user) | Q(pair__guard_b=user), date=target_date).first()
-            if not shift and user.station:
-                shift = qs.filter(station=user.station, date=target_date).first()
-            if not shift and not date_param:
-                shift = qs.filter(guard=user).order_by("-date", "start_time").first()
+                shift = qs.filter(guard=user, date=target_date).first()
+
+            if not shift:
+                return Response(
+                    {"detail": "No shift scheduled for today.", "shift": None, "attendance_status": "OFF_DUTY"},
+                    status=status.HTTP_200_OK,
+                )
+
+            serializer = self.get_serializer(shift)
+            return Response(serializer.data, status=status.HTTP_200_OK)
 
         elif user.role == UserRole.SUPERVISOR:
-            if user.station and not station_param:
-                shift = qs.filter(station=user.station, date=target_date).first()
-                if not shift and target_date != timezone.now().date():
-                    shift = qs.filter(station=user.station, date=timezone.now().date()).first()
-                if not shift and not date_param:
-                    shift = qs.filter(station=user.station).order_by("-date", "start_time").first()
+            station_id = str(user.station_id) if user.station else None
+            guard_param = request.query_params.get("guard")
+
+            if not station_id:
+                return Response({"detail": "Supervisor has no assigned station.", "shift": None}, status=status.HTTP_200_OK)
+
+            qs = qs.filter(station_id=station_id)
+            if guard_param:
+                shift = qs.filter(guard_id=guard_param, date=target_date).first()
+            else:
+                # Active shift based on current time (DAY 07:00-18:00 vs NIGHT 18:00-07:00)
+                current_time = now.time()
+                preferred_type = ShiftType.DAY if time(7, 0) <= current_time < time(18, 0) else ShiftType.NIGHT
+                shift = qs.filter(date=target_date, shift_type=preferred_type).first() or qs.filter(date=target_date).first()
+
             if not shift:
-                shift = qs.filter(date=target_date).first()
-            if not shift and not date_param:
-                shift = qs.order_by("-date", "start_time").first()
+                return Response({"detail": "No shift scheduled for today.", "shift": None}, status=status.HTTP_200_OK)
+            serializer = self.get_serializer(shift)
+            return Response(serializer.data, status=status.HTTP_200_OK)
 
         elif user.role == UserRole.ADMINISTRATOR or user.is_staff or user.is_superuser:
-            shift = qs.filter(date=target_date).first()
-            if not shift and target_date != timezone.now().date():
-                shift = qs.filter(date=timezone.now().date()).first()
-            if not shift and not date_param:
-                shift = qs.order_by("-date", "start_time").first()
+            station_param = request.query_params.get("station")
+            guard_param = request.query_params.get("guard")
 
-        if not shift:
-            return Response(
-                {"detail": "No shift scheduled for today.", "shift": None},
-                status=status.HTTP_200_OK,
-            )
-        serializer = self.get_serializer(shift)
+            if station_param:
+                qs = qs.filter(station_id=station_param)
+            if guard_param:
+                shift = qs.filter(guard_id=guard_param, date=target_date).first()
+            else:
+                current_time = now.time()
+                preferred_type = ShiftType.DAY if time(7, 0) <= current_time < time(18, 0) else ShiftType.NIGHT
+                shift = qs.filter(date=target_date, shift_type=preferred_type).first() or qs.filter(date=target_date).first()
+
+            if not shift:
+                return Response({"detail": "No shift scheduled for today.", "shift": None}, status=status.HTTP_200_OK)
+            serializer = self.get_serializer(shift)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response({"detail": "No shift scheduled for today.", "shift": None}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="operational", permission_classes=[IsAuthenticated])
+    def operational(self, request):
+        """
+        GET /shifts/shifts/operational/
+        Returns unpaginated chronological shifts matrix for operational displays.
+        Ordering: date ASC, start_time ASC.
+        Supports query filters: station, start_date, end_date, pair, guard, assignment_type, shift_type.
+        """
+        user = request.user
+        qs = Shift.objects.all().select_related(
+            "station", "guard", "pair", "pair__guard_a", "pair__guard_b"
+        ).order_by("date", "start_time", "guard__username")
+
+        # Role scoping
+        if user.role == UserRole.GUARD:
+            from django.db.models import Q
+            qs = qs.filter(Q(guard=user) | Q(pair__guard_a=user) | Q(pair__guard_b=user))
+        elif user.role == UserRole.SUPERVISOR:
+            if user.station:
+                qs = qs.filter(station=user.station)
+            else:
+                qs = qs.none()
+
+        # Query Filters
+        station_id = request.query_params.get("station") or request.query_params.get("station_id")
+        if station_id and user.role != UserRole.SUPERVISOR:
+            qs = qs.filter(station_id=station_id)
+
+        guard_id = request.query_params.get("guard") or request.query_params.get("guard_id")
+        if guard_id and user.role != UserRole.GUARD:
+            qs = qs.filter(guard_id=guard_id)
+
+        pair_id = request.query_params.get("pair") or request.query_params.get("pair_id")
+        if pair_id:
+            qs = qs.filter(pair_id=pair_id)
+
+        start_date = request.query_params.get("start_date")
+        if start_date:
+            try:
+                parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date()
+                qs = qs.filter(date__gte=parsed_start)
+            except ValueError:
+                pass
+
+        end_date = request.query_params.get("end_date")
+        if end_date:
+            try:
+                parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+                qs = qs.filter(date__lte=parsed_end)
+            except ValueError:
+                pass
+
+        assignment_type = request.query_params.get("assignment_type")
+        if assignment_type:
+            qs = qs.filter(assignment_type=assignment_type)
+
+        shift_type = request.query_params.get("shift_type")
+        if shift_type:
+            qs = qs.filter(shift_type=shift_type)
+
+        serializer = self.get_serializer(qs[:1000], many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="generate", permission_classes=[IsAdministrator])
@@ -290,34 +397,93 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = TemporaryAssignmentAuditSerializer(qs[:100], many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=["post"], url_path="validate_roster", permission_classes=[IsSupervisorOrAdmin])
+    def validate_roster(self, request):
+        """
+        POST /shifts/shifts/validate_roster/
+        Supervisors and Administrators validate a DRAFT DutyRoster against operational rules.
+        Transitions DRAFT -> VALIDATED on success.
+        """
+        serializer = RosterValidateRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        roster = None
+        if data.get("roster_id"):
+            roster = get_object_or_404(DutyRoster, id=data["roster_id"])
+        elif data.get("station_id"):
+            station = get_object_or_404(Station, id=data["station_id"])
+            qs = DutyRoster.objects.filter(station=station)
+            if data.get("start_date"):
+                qs = qs.filter(start_date=data["start_date"])
+            if data.get("end_date"):
+                qs = qs.filter(end_date=data["end_date"])
+            roster = qs.order_by("-start_date").first()
+            if not roster:
+                return Response(
+                    {"detail": f"No DutyRoster found for station '{station.name}' matching the criteria."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+        if request.user.role == UserRole.SUPERVISOR:
+            if not request.user.station_id or request.user.station_id != roster.station_id:
+                raise DRFPermissionDenied(
+                    f"Supervisor {request.user.username} is assigned to station '{getattr(request.user.station, 'name', 'None')}' "
+                    f"and cannot validate a roster for '{roster.station.name}'."
+                )
+
+        try:
+            result = validate_duty_roster(roster)
+            return Response(result, status=status.HTTP_200_OK)
+        except (DjangoPermissionDenied, DRFPermissionDenied) as exc:
+            raise DRFPermissionDenied(detail=str(exc))
+        except (DjangoValidationError, DRFValidationError) as exc:
+            detail = exc.messages if hasattr(exc, "messages") else str(exc)
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=False, methods=["post"], url_path="approve_roster", permission_classes=[IsSupervisorOrAdmin])
     def approve_roster(self, request):
         """
         POST /shifts/shifts/approve_roster/
-        Supervisors review and approve the station roster.
+        Supervisors review and approve a VALIDATED station roster.
+        Transitions VALIDATED -> APPROVED.
         """
-        station_id = request.data.get("station_id")
-        if not station_id:
-            return Response({"detail": "station_id is required."}, status=status.HTTP_400_BAD_REQUEST)
-        station = get_object_or_404(Station, id=station_id)
+        serializer = RosterApproveRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
-        # Check for unaddressed blocking conflicts before allowing approval
-        start_date = request.data.get("start_date")
-        end_date = request.data.get("end_date")
-        parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
-        parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
-        report = detect_roster_conflicts(station, start_date=parsed_start, end_date=parsed_end)
-        if report["has_conflicts"]:
-            return Response({
-                "detail": "Cannot approve roster: Blocking scheduling conflicts exist. Resolve all errors before approval.",
-                "conflicts": report["conflicts"]
-            }, status=status.HTTP_400_BAD_REQUEST)
+        roster = None
+        if data.get("roster_id"):
+            roster = get_object_or_404(DutyRoster, id=data["roster_id"])
+        elif data.get("station_id"):
+            station = get_object_or_404(Station, id=data["station_id"])
+            qs = DutyRoster.objects.filter(station=station)
+            if data.get("start_date"):
+                qs = qs.filter(start_date=data["start_date"])
+            if data.get("end_date"):
+                qs = qs.filter(end_date=data["end_date"])
+            roster = qs.order_by("-start_date").first()
+            if not roster:
+                return Response(
+                    {"detail": f"No DutyRoster found for station '{station.name}' matching the criteria."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
-        return Response({
-            "message": f"Roster for station {station.name} formally approved by supervisor {request.user.username}.",
-            "approved": True,
-            "station": station.name,
-        }, status=status.HTTP_200_OK)
+        if request.user.role == UserRole.SUPERVISOR:
+            if not request.user.station_id or request.user.station_id != roster.station_id:
+                raise DRFPermissionDenied(
+                    f"Supervisor {request.user.username} is assigned to station '{getattr(request.user.station, 'name', 'None')}' "
+                    f"and cannot approve a roster for '{roster.station.name}'."
+                )
+
+        try:
+            result = approve_duty_roster(roster, request.user)
+            return Response(result, status=status.HTTP_200_OK)
+        except (DjangoPermissionDenied, DRFPermissionDenied) as exc:
+            raise DRFPermissionDenied(detail=str(exc))
+        except (DjangoValidationError, DRFValidationError) as exc:
+            detail = exc.messages if hasattr(exc, "messages") else str(exc)
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
 
 class AttendanceViewSet(viewsets.ModelViewSet):
     """
@@ -374,7 +540,8 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     def clock_in(self, request):
         """
         POST /shifts/attendance/clock_in/
-        Server validates guard assignment, validates duty window (off-duty lockout),
+        Server validates guard assignment, rejects TIME_OFF shifts,
+        validates duty window (off-duty lockout and expired shifts),
         validates station geofence, and sets authoritative server timestamp.
         """
         cached = check_idempotency(request)
@@ -397,54 +564,138 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # Off-duty / Time Off Rejection
+        if shift.assignment_type == AssignmentType.TIME_OFF or shift.shift_type == ShiftType.OFF:
+            return Response(
+                {"detail": "Clock-in rejected: This shift is scheduled as TIME OFF. You cannot clock in for off-duty days."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Station Scoping
+        if request.user.station and shift.station != request.user.station:
+            return Response(
+                {"detail": f"Station mismatch: You are assigned to {request.user.station.name}, but this shift is at {shift.station.name}."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         now = timezone.now()
         scheduled_start_dt = timezone.make_aware(
             datetime.combine(shift.date, shift.start_time),
             timezone.get_current_timezone()
         )
+        # Calculate scheduled end datetime (handling overnight shifts)
+        if shift.end_time <= shift.start_time:
+            scheduled_end_dt = timezone.make_aware(
+                datetime.combine(shift.date + timedelta(days=1), shift.end_time),
+                timezone.get_current_timezone()
+            )
+        else:
+            scheduled_end_dt = timezone.make_aware(
+                datetime.combine(shift.date, shift.end_time),
+                timezone.get_current_timezone()
+            )
 
         # Off-Duty Guard Lockout: Reject if shift start time is >30 minutes in the future
         early_window = scheduled_start_dt - timedelta(minutes=30)
         if now < early_window:
             return Response(
-                {"detail": f"Duty time not reached. You cannot clock in before your scheduled shift ({shift.start_time.strftime('%H:%M')})."},
+                {"detail": f"Duty time not reached. You cannot clock in before your scheduled shift ({shift.start_time.strftime('%H:%M')}). Reporting window opens 30 minutes prior."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # Expired shift check: Reject if now is past shift scheduled end time
+        if now > scheduled_end_dt:
+            return Response(
+                {"detail": f"Shift expired: This shift scheduled ended at {shift.end_time.strftime('%H:%M')}. You cannot clock in to an expired shift."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Duplicate clock-in prevention
+        existing_att = Attendance.objects.filter(shift=shift, guard=request.user).first()
+        if existing_att and existing_att.clock_in:
+            return Response(
+                {"detail": "You have already clocked in for this shift.", "attendance": AttendanceSerializer(existing_att).data},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Mandatory GPS Coordinates Validation
+        if lat is None or lon is None:
+            return Response(
+                {"detail": "GPS coordinates (latitude and longitude) are required for clock-in."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Geofence Validation
-        if lat is not None and lon is not None:
-            if not is_within_geofence(float(lat), float(lon), shift.station.latitude, shift.station.longitude, radius_meters=shift.station.geofence_radius_meters):
-                return Response(
-                    {"detail": f"Geofence violation: Clock-in rejected. You are outside the authorized station perimeter for {shift.station.name}."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        if not is_within_geofence(float(lat), float(lon), shift.station.latitude, shift.station.longitude, radius_meters=shift.station.geofence_radius_meters):
+            return Response(
+                {"detail": f"Geofence violation: Clock-in rejected. You are outside the authorized station perimeter for {shift.station.name}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        gps_str = f"{lat},{lon}" if (lat is not None and lon is not None) else ""
+        gps_str = f"{lat},{lon}"
         is_late = now > (scheduled_start_dt + timedelta(minutes=15))
+        is_serious_late = now >= (scheduled_start_dt + timedelta(minutes=60))
 
-        attendance, created = Attendance.objects.get_or_create(
+        attendance, _ = Attendance.objects.update_or_create(
             shift=shift,
             guard=request.user,
             defaults={
                 "clock_in": now,
                 "clock_in_gps": gps_str,
                 "is_late": is_late,
+                "is_serious_late": is_serious_late,
                 "late_reason": late_reason if is_late else "",
             }
         )
 
-        if not created and attendance.clock_in:
-            return Response(
-                {"detail": "You have already clocked in for this shift.", "attendance": AttendanceSerializer(attendance).data},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        elif not created:
-            attendance.clock_in = now
-            attendance.clock_in_gps = gps_str
-            attendance.is_late = is_late
-            if late_reason:
-                attendance.late_reason = late_reason
-            attendance.save()
+        # Serious lateness escalation tracking (3rd occurrence in shift calendar year)
+        if is_serious_late and not attendance.escalation_notified:
+            year = shift.date.year
+            prior_count = Attendance.objects.filter(
+                guard=request.user,
+                is_serious_late=True,
+                shift__date__year=year,
+            ).exclude(id=attendance.id).count()
+            total_serious_count = prior_count + 1
+
+            if total_serious_count >= 3:
+                guard_name = request.user.get_full_name().strip() or request.user.username
+                sched_time_str = shift.start_time.strftime("%H:%M")
+                clock_in_time_str = now.strftime("%H:%M:%S")
+                shift_date_str = str(shift.date)
+                emp_num = getattr(request.user, "employee_number", "") or "N/A"
+
+                title = f"REPEATED SERIOUS LATENESS ESCALATION: {guard_name} (Occurrence #{total_serious_count})"
+                message = (
+                    f"Repeated Serious Lateness Escalation (Occurrence #{total_serious_count} in {year}).\n"
+                    f"Guard: {guard_name} (Username: {request.user.username}, Employee #{emp_num}).\n"
+                    f"Station: {shift.station.name}.\n"
+                    f"Shift: {shift_date_str} {shift.shift_type} (ID: {shift.id}).\n"
+                    f"Attendance Record ID: {attendance.id}.\n"
+                    f"Scheduled Start: {sched_time_str} | Actual Clock-In: {clock_in_time_str}.\n"
+                    f"Policy Alert: Guard clocked in 60+ minutes past scheduled shift start ({total_serious_count} occurrences in {year}).\n"
+                    f"Action Required: Supervisor review pursuant to SGMIS operational attendance policy."
+                )
+
+                supervisors = User.objects.filter(
+                    role=UserRole.SUPERVISOR,
+                    station=shift.station,
+                    is_active=True,
+                )
+                recipients = list(supervisors)
+                if not recipients:
+                    recipients = list(User.objects.filter(role=UserRole.ADMINISTRATOR, is_active=True))
+
+                for recipient in recipients:
+                    Notification.objects.create(
+                        user=recipient,
+                        title=title,
+                        message=message,
+                        notification_type="LATENESS_ESCALATION",
+                    )
+
+                attendance.escalation_notified = True
+                attendance.save(update_fields=["escalation_notified"])
 
         resp = Response(AttendanceSerializer(attendance).data, status=status.HTTP_200_OK)
         store_idempotency(request, resp)
@@ -454,7 +705,8 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     def clock_out(self, request):
         """
         POST /shifts/attendance/clock_out/
-        Enforces 12-hour duty completion unless accompanied by an authorized supervisor override.
+        Enforces shift duty completion according to scheduled shift.end_time.
+        Early clock-out requires authenticated supervisor authorization and operational justification.
         Validates geofence and records server clock-out time.
         """
         cached = check_idempotency(request)
@@ -487,69 +739,106 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # 12-Hour Enforcement
+        # Shift End Enforcement (handles day shifts 07:00-18:00 and overnight night shifts 18:00-07:00)
         import sys
         is_test = "test" in sys.argv
         now = timezone.now()
-        shift_start_dt = timezone.make_aware(
-            datetime.combine(shift.date, shift.start_time),
-            timezone.get_current_timezone()
-        )
-        base_start = attendance.clock_in if attendance.clock_in else shift_start_dt
-        elapsed_hours = (now - base_start).total_seconds() / 3600.0
 
-        override_val = request.data.get("supervisor_emergency_override", False)
-        supervisor_override = override_val in (True, "true", "True", "1", 1)
-        override_reason = request.data.get("override_reason", "").strip()
-        supervisor_id = request.data.get("supervisor_id")
+        if shift.end_time <= shift.start_time:
+            scheduled_end_dt = timezone.make_aware(
+                datetime.combine(shift.date + timedelta(days=1), shift.end_time),
+                timezone.get_current_timezone()
+            )
+        else:
+            scheduled_end_dt = timezone.make_aware(
+                datetime.combine(shift.date, shift.end_time),
+                timezone.get_current_timezone()
+            )
 
-        if elapsed_hours < 12.0:
-            if not supervisor_override:
-                if not is_test or request.data.get("enforce_12_hour"):
+        is_early = now < scheduled_end_dt
+        if is_test and not request.data.get("enforce_shift_end") and not request.data.get("enforce_12_hour"):
+            is_early = False
+
+        if is_early:
+            override_reason = (serializer.validated_data.get("override_reason") or request.data.get("override_reason", "")).strip()
+
+            if request.user.role in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR]:
+                sup_user = request.user
+                if not override_reason:
                     return Response({
-                        "detail": f"A guard cannot clock out until 12 full hours of shift duty have elapsed (elapsed: {max(0.0, elapsed_hours):.1f} hrs). Early clock-out requires authorized supervisor emergency override.",
-                        "elapsed_hours": round(max(0.0, elapsed_hours), 2),
-                        "required_hours": 12.0,
+                        "detail": "A mandatory operational justification reason is required for supervisor early clock-out override."
                     }, status=status.HTTP_400_BAD_REQUEST)
             else:
-                override_reason = override_reason or "Supervisor emergency clock-out authorization"
-                # Record Supervisor Override Audit
-                sup_user = request.user
-                if supervisor_id:
-                    potential_sup = User.objects.filter(id=supervisor_id, role__in=[UserRole.SUPERVISOR, UserRole.ADMINISTRATOR]).first()
-                    if potential_sup:
-                        sup_user = potential_sup
+                sup_username = serializer.validated_data.get("supervisor_username") or request.data.get("supervisor_username")
+                sup_password = serializer.validated_data.get("supervisor_password") or request.data.get("supervisor_password")
+                if not (sup_username and sup_password):
+                    return Response({
+                        "detail": f"Shift duty is still active (scheduled end: {shift.end_time.strftime('%H:%M')}). Early clock-out requires authenticated supervisor authorization and operational justification.",
+                        "scheduled_end": shift.end_time.strftime("%H:%M"),
+                    }, status=status.HTTP_400_BAD_REQUEST)
 
-                SupervisorOverrideAudit.objects.create(
-                    supervisor=sup_user,
-                    action_type="EARLY_CLOCKOUT_OVERRIDE",
-                    target_model="Attendance",
-                    target_id=str(attendance.id),
-                    reason=override_reason,
-                    admin_notified=True,
+                from django.contrib.auth import authenticate
+                sup_user = authenticate(username=sup_username, password=sup_password)
+                if not sup_user or sup_user.role not in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR]:
+                    return Response({
+                        "detail": "Invalid supervisor credentials for early clock-out override."
+                    }, status=status.HTTP_403_FORBIDDEN)
+                if sup_user.station and sup_user.station != shift.station and not (sup_user.is_superuser or sup_user.role == UserRole.ADMINISTRATOR):
+                    return Response({
+                        "detail": f"Supervisor station mismatch: {sup_user.username} is not authorized for {shift.station.name}."
+                    }, status=status.HTTP_403_FORBIDDEN)
+                if not override_reason:
+                    return Response({
+                        "detail": "A mandatory operational justification reason is required for supervisor early clock-out override."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+            SupervisorOverrideAudit.objects.create(
+                supervisor=sup_user,
+                action_type="EARLY_CLOCKOUT_OVERRIDE",
+                target_model="Attendance",
+                target_id=str(attendance.id),
+                reason=override_reason,
+                admin_notified=True,
+            )
+            SecurityAuditEvent.objects.create(
+                event_type=SecurityAuditEvent.EventType.OVERRIDE,
+                actor=sup_user,
+                actor_username=sup_user.username,
+                target_model="Attendance",
+                target_id=str(attendance.id),
+                details={
+                    "guard": request.user.username,
+                    "shift_id": str(shift.id),
+                    "reason": override_reason,
+                    "scheduled_end": shift.end_time.strftime("%H:%M"),
+                    "clock_out": now.isoformat(),
+                }
+            )
+            for admin in User.objects.filter(role=UserRole.ADMINISTRATOR, is_active=True):
+                Notification.objects.create(
+                    user=admin,
+                    title="SUPERVISOR OVERRIDE: Early Clock-out",
+                    message=f"Supervisor {sup_user.username} authorized early clock-out for {request.user.username} at {shift.station.name}. Reason: {override_reason}",
+                    notification_type="AUDIT_ALERT",
                 )
 
-                # Notify Admins
-                for admin in User.objects.filter(role=UserRole.ADMINISTRATOR, is_active=True):
-                    Notification.objects.create(
-                        user=admin,
-                        title="SUPERVISOR OVERRIDE: Early Clock-out",
-                        message=f"Supervisor {sup_user.username} authorized early clock-out for {request.user.username} at {shift.station.name}. Reason: {override_reason}",
-                        notification_type="AUDIT_ALERT",
-                    )
+        # Mandatory GPS Coordinates Validation
+        if lat is None or lon is None:
+            return Response(
+                {"detail": "GPS coordinates (latitude and longitude) are required for clock-out."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Geofence check
-        if lat is not None and lon is not None:
-            if not is_within_geofence(float(lat), float(lon), shift.station.latitude, shift.station.longitude, radius_meters=shift.station.geofence_radius_meters):
-                return Response(
-                    {"detail": f"Geofence violation: Clock-out rejected. You are outside the authorized station perimeter for {shift.station.name}."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        if not is_within_geofence(float(lat), float(lon), shift.station.latitude, shift.station.longitude, radius_meters=shift.station.geofence_radius_meters):
+            return Response(
+                {"detail": f"Geofence violation: Clock-out rejected. You are outside the authorized station perimeter for {shift.station.name}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         attendance.clock_out = now
-        if lat is not None and lon is not None:
-            attendance.clock_out_gps = f"{lat},{lon}"
-        attendance.save()
+        attendance.clock_out_gps = f"{lat},{lon}"
+        attendance.save(update_fields=["clock_out", "clock_out_gps"])
 
         resp = Response(AttendanceSerializer(attendance).data, status=status.HTTP_200_OK)
         store_idempotency(request, resp)
@@ -822,3 +1111,211 @@ class TemporaryAssignmentAuditViewSet(viewsets.ReadOnlyModelViewSet):
         if user.role == UserRole.GUARD:
             qs = qs.filter(guard=user)
         return qs
+
+
+class DutyRosterViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Authoritative Duty Rosters.
+    Guards can only access APPROVED and ACTIVE duty rosters.
+    Supervisors can access DRAFT, VALIDATED, APPROVED, ACTIVE rosters for their station.
+    Administrators can access all rosters.
+    """
+    queryset = DutyRoster.objects.all().select_related("station", "approved_by")
+    serializer_class = DutyRosterSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+
+        station_id = self.request.query_params.get("station")
+        status_param = self.request.query_params.get("status")
+
+        if station_id:
+            qs = qs.filter(station_id=station_id)
+        if status_param:
+            qs = qs.filter(status=status_param)
+
+        if user.role == UserRole.GUARD:
+            # Guards ONLY see APPROVED or ACTIVE rosters, scoped to their station if assigned
+            qs = qs.filter(status__in=[RosterStatus.APPROVED, RosterStatus.ACTIVE])
+            if user.station_id:
+                qs = qs.filter(station_id=user.station_id)
+        elif user.role == UserRole.SUPERVISOR:
+            # Supervisors see all rosters for their assigned station
+            if user.station_id:
+                qs = qs.filter(station_id=user.station_id)
+
+        return qs.order_by("-start_date")
+
+    @action(detail=True, methods=["post"], permission_classes=[IsSupervisorOrAdmin])
+    def validate(self, request, pk=None):
+        roster = self.get_object()
+        if request.user.role == UserRole.SUPERVISOR:
+            if not request.user.station_id or request.user.station_id != roster.station_id:
+                raise DRFPermissionDenied(
+                    f"Supervisor {request.user.username} is assigned to station '{getattr(request.user.station, 'name', 'None')}' "
+                    f"and cannot validate a roster for '{roster.station.name}'."
+                )
+        try:
+            result = validate_duty_roster(roster)
+            return Response(result, status=status.HTTP_200_OK)
+        except (DjangoValidationError, DRFValidationError) as exc:
+            detail = exc.messages if hasattr(exc, "messages") else str(exc)
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["post"], permission_classes=[IsSupervisorOrAdmin])
+    def approve(self, request, pk=None):
+        roster = self.get_object()
+        try:
+            result = approve_duty_roster(roster, request.user)
+            return Response(result, status=status.HTTP_200_OK)
+        except (DjangoPermissionDenied, DRFPermissionDenied) as exc:
+            raise DRFPermissionDenied(detail=str(exc))
+        except (DjangoValidationError, DRFValidationError) as exc:
+            detail = exc.messages if hasattr(exc, "messages") else str(exc)
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PublicHolidayViewSet(viewsets.ModelViewSet):
+    """
+    Data-driven public holidays management.
+    All authenticated users can list and view holidays.
+    Creation and modifications restricted to Administrators and Supervisors.
+    """
+    queryset = PublicHoliday.objects.all().order_by("date")
+    serializer_class = PublicHolidaySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsSupervisorOrAdmin()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        year = self.request.query_params.get("year")
+        is_active = self.request.query_params.get("is_active")
+        if year:
+            qs = qs.filter(date__year=year)
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active.lower() == "true")
+        return qs
+
+
+class PublicHolidayDutyRecordViewSet(viewsets.ModelViewSet):
+    """
+    Authoritative recording and compensation workflow for public holiday duties.
+    Chain: PublicHoliday -> Shift -> Attendance -> PublicHolidayDutyRecord -> authorized compensation.
+    Guards see only their own holiday duty records.
+    Supervisors see records within their assigned station.
+    Administrators have global visibility.
+    """
+    queryset = PublicHolidayDutyRecord.objects.all().select_related(
+        "public_holiday",
+        "shift",
+        "shift__station",
+        "guard",
+        "attendance",
+        "approved_by",
+    )
+    serializer_class = PublicHolidayDutyRecordSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        status_param = self.request.query_params.get("status")
+        guard_param = self.request.query_params.get("guard")
+        station_param = self.request.query_params.get("station")
+
+        if status_param:
+            qs = qs.filter(status=status_param)
+        if guard_param:
+            qs = qs.filter(guard_id=guard_param)
+        if station_param:
+            qs = qs.filter(shift__station_id=station_param)
+
+        if user.role == UserRole.GUARD:
+            qs = qs.filter(guard=user)
+        elif user.role == UserRole.SUPERVISOR:
+            if user.station_id:
+                qs = qs.filter(shift__station_id=user.station_id)
+            else:
+                qs = qs.none()
+
+        return qs.order_by("-created_at")
+
+    @action(detail=False, methods=["post"], url_path="record_duty", permission_classes=[IsSupervisorOrAdmin])
+    def record_duty(self, request):
+        """
+        POST /shifts/holiday-duties/record_duty/
+        Authoritative recording of public holiday duty.
+        """
+        serializer = RecordHolidayDutyRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        shift_id = serializer.validated_data["shift_id"]
+        shift = get_object_or_404(Shift, id=shift_id)
+
+        if request.user.role == UserRole.SUPERVISOR:
+            if not request.user.station_id or request.user.station_id != shift.station_id:
+                raise DRFPermissionDenied(
+                    f"Supervisor {request.user.username} is assigned to station '{getattr(request.user.station, 'name', 'None')}' "
+                    f"and cannot record holiday duty for station '{shift.station.name}'."
+                )
+
+        try:
+            record = record_public_holiday_duty(shift)
+            return Response(
+                PublicHolidayDutyRecordSerializer(record).data,
+                status=status.HTTP_201_CREATED,
+            )
+        except (DjangoValidationError, DRFValidationError) as exc:
+            detail = exc.messages if hasattr(exc, "messages") else str(exc)
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["post"], url_path="approve", permission_classes=[IsSupervisorOrAdmin])
+    def approve(self, request, pk=None):
+        """
+        POST /shifts/holiday-duties/{id}/approve/
+        Approves 2 compensated leave days for a worked public holiday duty.
+        """
+        duty_record = get_object_or_404(PublicHolidayDutyRecord, pk=pk)
+        serializer = ReviewHolidayCompensationRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reason = serializer.validated_data.get("reason", "")
+
+        try:
+            updated = approve_holiday_compensation(duty_record, request.user, reason=reason)
+            return Response(
+                PublicHolidayDutyRecordSerializer(updated).data,
+                status=status.HTTP_200_OK,
+            )
+        except (DjangoPermissionDenied, DRFPermissionDenied) as exc:
+            raise DRFPermissionDenied(detail=str(exc))
+        except (DjangoValidationError, DRFValidationError) as exc:
+            detail = exc.messages if hasattr(exc, "messages") else str(exc)
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["post"], url_path="reject", permission_classes=[IsSupervisorOrAdmin])
+    def reject(self, request, pk=None):
+        """
+        POST /shifts/holiday-duties/{id}/reject/
+        Rejects holiday duty compensation.
+        """
+        duty_record = get_object_or_404(PublicHolidayDutyRecord, pk=pk)
+        serializer = ReviewHolidayCompensationRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reason = serializer.validated_data.get("reason", "")
+
+        try:
+            updated = reject_holiday_compensation(duty_record, request.user, reason=reason)
+            return Response(
+                PublicHolidayDutyRecordSerializer(updated).data,
+                status=status.HTTP_200_OK,
+            )
+        except (DjangoPermissionDenied, DRFPermissionDenied) as exc:
+            raise DRFPermissionDenied(detail=str(exc))
+        except (DjangoValidationError, DRFValidationError) as exc:
+            detail = exc.messages if hasattr(exc, "messages") else str(exc)
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)

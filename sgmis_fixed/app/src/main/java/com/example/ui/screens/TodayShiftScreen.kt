@@ -31,10 +31,14 @@ import com.example.ui.viewmodel.SgmisViewModel
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.example.util.LocationHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Calendar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,11 +55,42 @@ fun TodayShiftScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var showLateReasonDialog by remember { mutableStateOf(false) }
+    var showEarlyClockOutDialog by remember { mutableStateOf(false) }
+    var earlySupervisorUsername by remember { mutableStateOf("") }
+    var earlySupervisorPassword by remember { mutableStateOf("") }
+    var earlyOverrideReason by remember { mutableStateOf("") }
+
+    fun isShiftEarly(s: Shift?): Boolean {
+        if (s == null) return false
+        return try {
+            val startH = s.startTime.take(5)
+            val endH = s.endTime.take(5)
+            val isOvernight = endH <= startH
+            val endCal = Calendar.getInstance()
+            val dateParts = s.date.split("-")
+            endCal.set(Calendar.YEAR, dateParts[0].toInt())
+            endCal.set(Calendar.MONTH, dateParts[1].toInt() - 1)
+            endCal.set(Calendar.DAY_OF_MONTH, dateParts[2].toInt())
+            val endParts = endH.split(":")
+            endCal.set(Calendar.HOUR_OF_DAY, endParts[0].toInt())
+            endCal.set(Calendar.MINUTE, endParts[1].toInt())
+            endCal.set(Calendar.SECOND, 0)
+            endCal.set(Calendar.MILLISECOND, 0)
+            if (isOvernight) {
+                endCal.add(Calendar.DAY_OF_MONTH, 1)
+            }
+            Calendar.getInstance().before(endCal)
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     // Auto-dismiss transient messages after 3.5 seconds
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
-        if (uiState.successMessage != null || uiState.errorMessage != null) {
+        if (uiState.errorMessage?.contains("requires authenticated supervisor authorization", ignoreCase = true) == true) {
+            showEarlyClockOutDialog = true
+        }
+        if (!showEarlyClockOutDialog && (uiState.successMessage != null || uiState.errorMessage != null)) {
             delay(3500)
             viewModel.clearMessages()
         }
@@ -582,13 +617,17 @@ fun TodayShiftScreen(
 
                                     Button(
                                         onClick = {
-                                            coroutineScope.launch {
-                                                val loc = LocationHelper.getDeviceLocation(context)
-                                                viewModel.clockOut(
-                                                    shiftId = shift.id,
-                                                    lat = loc?.first,
-                                                    lon = loc?.second
-                                                )
+                                            if (isShiftEarly(shift)) {
+                                                showEarlyClockOutDialog = true
+                                            } else {
+                                                coroutineScope.launch {
+                                                    val loc = LocationHelper.getDeviceLocation(context)
+                                                    viewModel.clockOut(
+                                                        shiftId = shift.id,
+                                                        lat = loc?.first,
+                                                        lon = loc?.second
+                                                    )
+                                                }
                                             }
                                         },
                                         enabled = shift.attendanceStatus == "CLOCKED_IN" && !uiState.clockLoading,
@@ -637,6 +676,156 @@ fun TodayShiftScreen(
                     Spacer(modifier = Modifier.height(88.dp))
                 }
             }
+        }
+
+        if (showEarlyClockOutDialog && shift != null) {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!uiState.clockLoading) {
+                        showEarlyClockOutDialog = false
+                        earlySupervisorPassword = ""
+                        viewModel.clearMessages()
+                    }
+                },
+                title = {
+                    Column {
+                        Text(
+                            text = "EARLY CLOCK-OUT",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "This shift is scheduled to end at ${shift.endTime.take(5)}.\nEarly clock-out requires supervisor authorization.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (uiState.errorMessage != null) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().testTag("early_clock_out_error")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Error,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = uiState.errorMessage!!,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = earlySupervisorUsername,
+                            onValueChange = { earlySupervisorUsername = it },
+                            label = { Text("Supervisor username") },
+                            placeholder = { Text("e.g. supervisor1") },
+                            singleLine = true,
+                            enabled = !uiState.clockLoading,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("early_supervisor_username")
+                        )
+
+                        OutlinedTextField(
+                            value = earlySupervisorPassword,
+                            onValueChange = { earlySupervisorPassword = it },
+                            label = { Text("Supervisor password") },
+                            placeholder = { Text("Enter password") },
+                            singleLine = true,
+                            enabled = !uiState.clockLoading,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("early_supervisor_password")
+                        )
+
+                        OutlinedTextField(
+                            value = earlyOverrideReason,
+                            onValueChange = { earlyOverrideReason = it },
+                            label = { Text("Reason / Justification") },
+                            placeholder = { Text("Operational justification for early departure") },
+                            minLines = 2,
+                            maxLines = 4,
+                            enabled = !uiState.clockLoading,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("early_override_reason")
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                val loc = LocationHelper.getDeviceLocation(context)
+                                viewModel.clockOut(
+                                    shiftId = shift.id,
+                                    lat = loc?.first,
+                                    lon = loc?.second,
+                                    supervisorUsername = earlySupervisorUsername.trim(),
+                                    supervisorPassword = earlySupervisorPassword,
+                                    overrideReason = earlyOverrideReason.trim(),
+                                    onSuccess = {
+                                        showEarlyClockOutDialog = false
+                                        earlySupervisorUsername = ""
+                                        earlySupervisorPassword = ""
+                                        earlyOverrideReason = ""
+                                    }
+                                )
+                            }
+                        },
+                        enabled = earlySupervisorUsername.isNotBlank() &&
+                                earlySupervisorPassword.isNotBlank() &&
+                                earlyOverrideReason.isNotBlank() &&
+                                !uiState.clockLoading,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("authorize_clock_out_button")
+                    ) {
+                        if (uiState.clockLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Text("Authorize & Clock Out")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            showEarlyClockOutDialog = false
+                            earlySupervisorPassword = ""
+                            viewModel.clearMessages()
+                        },
+                        enabled = !uiState.clockLoading,
+                        modifier = Modifier.testTag("cancel_early_clock_out_button")
+                    ) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 }

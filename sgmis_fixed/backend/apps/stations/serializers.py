@@ -1,4 +1,6 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
+from rest_framework.settings import api_settings
 from .models import Station, GuardPair
 from apps.accounts.serializers import UserSerializer
 
@@ -60,3 +62,32 @@ class GuardPairSerializer(serializers.ModelSerializer):
     def get_guard_b_name(self, obj):
         name = obj.guard_b.get_full_name().strip()
         return name if name else obj.guard_b.username
+
+    def validate(self, attrs):
+        if self.instance:
+            instance = GuardPair(
+                id=self.instance.id,
+                station=attrs.get("station", self.instance.station),
+                guard_a=attrs.get("guard_a", self.instance.guard_a),
+                guard_b=attrs.get("guard_b", self.instance.guard_b),
+                rotation_order=attrs.get("rotation_order", self.instance.rotation_order),
+                is_active=attrs.get("is_active", self.instance.is_active),
+            )
+        else:
+            instance = GuardPair(
+                station=attrs.get("station"),
+                guard_a=attrs.get("guard_a"),
+                guard_b=attrs.get("guard_b"),
+                rotation_order=attrs.get("rotation_order", 1),
+                is_active=attrs.get("is_active", True),
+            )
+
+        try:
+            instance.clean()
+        except DjangoValidationError as e:
+            serializer_error = serializers.as_serializer_error(e)
+            if "__all__" in serializer_error:
+                serializer_error[api_settings.NON_FIELD_ERRORS_KEY] = serializer_error.pop("__all__")
+            raise serializers.ValidationError(serializer_error)
+
+        return attrs

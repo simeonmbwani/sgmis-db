@@ -1,9 +1,26 @@
+import uuid
 import datetime
 from datetime import time, timedelta, datetime as dt_cls
+from collections import defaultdict
+from django.db import models, transaction
 from django.utils import timezone
-from rest_framework.exceptions import ValidationError
-from .models import Shift, ShiftType, AssignmentType, ExaminationPeriod, TemporaryAssignmentAudit, DutyRosterCycle
+from rest_framework.exceptions import ValidationError, PermissionDenied, NotAuthenticated
+from .models import (
+    Shift,
+    ShiftType,
+    AssignmentType,
+    ExaminationPeriod,
+    TemporaryAssignmentAudit,
+    DutyRosterCycle,
+    DutyRoster,
+    RosterStatus,
+    Attendance,
+    PublicHoliday,
+    PublicHolidayDutyRecord,
+    HolidayCompensationStatus,
+)
 from apps.stations.models import GuardPair
+from apps.accounts.models import UserRole
 
 def resolve_incoming_guard(outgoing_shift):
     """
@@ -66,176 +83,676 @@ def generate_roster_for_station(
     authorized_by=None,
 ):
     """
-    Generates shifts for pairs assigned to a station over a cycle according to authoritative rules:
-    
-    NORMAL SECURITY ARRANGEMENT:
-      - Premise has 3 guard pairs (6 guards total).
-      - Each pair provides continuous day/night coverage (one DAY guard 07:00-18:00, one NIGHT guard 18:00-07:00).
-      - Continuous 24/7 coverage: Exactly 1 Day guard and 1 Night guard on duty each day for Main Campus.
-      - The active pair works for 4 consecutive working days, then enters Time Off.
-      - On the NEXT working cycle for that pair, the guards SWAP shifts:
-          Cycle 1: Guard A = DAY, Guard B = NIGHT
-          Cycle 2: Guard A = NIGHT, Guard B = DAY
-          Cycle 3: Guard A = DAY, Guard B = NIGHT, etc.
-      - Off-duty pairs receive scheduled TIME_OFF.
-    
-    EXAMINATION MODE:
-      - Main Campus: Continues 1 DAY + 1 NIGHT guard coverage uninterrupted.
-      - Examination Venue: Exactly 2 guards during DAY ONLY (07:00-18:00).
-      - Exam venue guards work 5 consecutive days (authorized 5-day exception).
-      - Relief guards drawn from off-duty pool; original pair remains intact.
-      - Temporary assignments logged to TemporaryAssignmentAudit.
+    Authoritative normal roster generation for a station:
+    - 3 permanent guard pairs (6 guards total) rotating in 12-day cycles.
+    - Each cycle: 4 consecutive ON calendar days, followed by 8 days TIME_OFF.
+    - Day/Night assignments alternate between working cycles within each pair.
+    - Links generated shifts to a DRAFT DutyRoster.
+    - Safely regenerates existing DRAFT rosters without deleting attendance-protected
+      or external shifts.
+    - Strictly prevents modification of APPROVED/ACTIVE/ARCHIVED rosters.
+    - Runs entirely within transaction.atomic() to guarantee atomic rollback on failure.
+    - Preserves specialized assignments (EXAM, ESCORT, RELIEF).
     """
-    pairs = list(GuardPair.objects.filter(station=station, is_active=True).order_by("rotation_order"))
-    if not pairs:
-        raise ValueError(f"No active guard pairs found for station {station.name}. Please configure guard pairs first.")
+    with transaction.atomic():
+        if not station:
+            raise ValidationError("A valid station is required for roster generation.")
 
-    created_shifts = []
-    num_pairs = len(pairs)
-    block_length = 4  # 4 days per normal duty block
+        # 1. Validate station has exactly 3 valid active GuardPairs
+        pairs = list(GuardPair.objects.filter(station=station, is_active=True).order_by("rotation_order"))
+        if len(pairs) != 3:
+            raise ValidationError(
+                f"Station '{station.name}' must have exactly 3 active guard pairs to generate an authoritative roster (found {len(pairs)})."
+            )
 
-    # Prepare relief guards for Exam Mode if active
-    exam_guards = []
-    if mode == "EXAM" or examination_period is not None:
-        if exam_guard_ids and len(exam_guard_ids) == 2:
-            from apps.accounts.models import User
-            exam_guards = list(User.objects.filter(id__in=exam_guard_ids))
-        elif num_pairs >= 2:
-            # Default relief: select pair 2 (or second active pair) from off-duty pool
-            relief_pair = pairs[1]
-            exam_guards = [relief_pair.guard_a, relief_pair.guard_b]
+        # 2. Validate rotation orders are exactly [1, 2, 3]
+        rotation_orders = [p.rotation_order for p in pairs]
+        if rotation_orders != [1, 2, 3]:
+            raise ValidationError(
+                f"Active guard pairs for station '{station.name}' must have rotation orders exactly [1, 2, 3] (found {rotation_orders})."
+            )
 
-    for day_offset in range(cycle_days):
-        current_date = start_date + timedelta(days=day_offset)
-        block_index = day_offset // block_length
-        active_pair_idx = block_index % num_pairs
-        active_pair = pairs[active_pair_idx]
+        # 3. Validate each pair has 2 distinct active GUARD users and no guard is in multiple pairs
+        from apps.accounts.models import UserRole
+        all_guards_set = set()
+        for p in pairs:
+            if not p.guard_a_id or not p.guard_b_id or p.guard_a_id == p.guard_b_id:
+                raise ValidationError(f"Pair {p.rotation_order} must contain two distinct guards.")
+            for g in [p.guard_a, p.guard_b]:
+                if not g.is_active:
+                    raise ValidationError(f"Guard {g.username} in Pair {p.rotation_order} is not active.")
+                if g.role != UserRole.GUARD:
+                    raise ValidationError(f"User {g.username} in Pair {p.rotation_order} must have the GUARD role.")
+                if g.station_id != station.id:
+                    raise ValidationError(f"Guard {g.username} in Pair {p.rotation_order} is not assigned to station '{station.name}'.")
+                if g.id in all_guards_set:
+                    raise ValidationError(f"Guard {g.username} is assigned to multiple active pairs at station '{station.name}'.")
+                all_guards_set.add(g.id)
 
-        is_exam_day = (mode == "EXAM" or examination_period is not None) and (day_offset < 5)
+        # 4. Calculate end_date
+        end_date = start_date + timedelta(days=cycle_days - 1)
 
-        # Relief Substitution: If active pair is serving on Exam Venue duty today,
-        # substitute with the available off-duty pair so Main Campus is never uncovered or conflicted
-        campus_pair = active_pair
-        if is_exam_day and exam_guards:
-            exam_guard_ids_set = {g.id for g in exam_guards}
-            if active_pair.guard_a_id in exam_guard_ids_set or active_pair.guard_b_id in exam_guard_ids_set:
-                # Find available off-duty pair not assigned to exams
-                available_pairs = [
-                    p for p in pairs 
-                    if p.guard_a_id not in exam_guard_ids_set and p.guard_b_id not in exam_guard_ids_set
-                ]
-                if available_pairs:
-                    # Choose the pair that was in Time Off (e.g. Pair 3)
-                    campus_pair = available_pairs[-1]
-
-        cycle_number = block_index // num_pairs  # working cycle iteration for this pair
-
-        # CRITICAL SWAP RULE: Cycle 0 -> A=DAY, B=NIGHT; Cycle 1 -> A=NIGHT, B=DAY; Cycle 2 -> A=DAY, etc.
-        if cycle_number % 2 == 0:
-            campus_day_guard = campus_pair.guard_a
-            campus_night_guard = campus_pair.guard_b
-        else:
-            campus_day_guard = campus_pair.guard_b
-            campus_night_guard = campus_pair.guard_a
-
-        # 1. Main Campus: 1 Day guard (07:00 - 18:00)
-        shift_day, _ = Shift.objects.update_or_create(
+        # 5. Check whether an APPROVED or ACTIVE DutyRoster covers any part of the requested period
+        protected_roster = DutyRoster.objects.filter(
             station=station,
-            guard=campus_day_guard,
-            date=current_date,
-            shift_type=ShiftType.DAY,
-            defaults={
-                "start_time": day_start,
-                "end_time": day_end,
-                "assignment_type": AssignmentType.NORMAL,
-                "duty_location": "Main Campus",
-                "pair": active_pair,
-                "examination_period": None,
-            }
-        )
-        created_shifts.append(shift_day)
+            status__in=[RosterStatus.APPROVED, RosterStatus.ACTIVE, RosterStatus.ARCHIVED],
+            start_date__lte=end_date,
+            end_date__gte=start_date,
+        ).first()
+        if protected_roster:
+            raise ValidationError(
+                f"Cannot generate roster: An {protected_roster.get_status_display().lower()} DutyRoster "
+                f"({protected_roster.start_date} to {protected_roster.end_date}) "
+                f"already covers the requested generation period ({start_date} to {end_date})."
+            )
 
-        # 2. Main Campus: 1 Night guard (18:00 - 07:00)
-        shift_night, _ = Shift.objects.update_or_create(
+        # 6. DRAFT DutyRoster: reuse exact matching draft or create new DRAFT
+        draft_roster = DutyRoster.objects.filter(
             station=station,
-            guard=campus_night_guard,
-            date=current_date,
-            shift_type=ShiftType.NIGHT,
-            defaults={
-                "start_time": night_start,
-                "end_time": night_end,
-                "assignment_type": AssignmentType.NORMAL,
-                "duty_location": "Main Campus",
-                "pair": active_pair,
-                "examination_period": None,
-            }
+            start_date=start_date,
+            end_date=end_date,
+            status=RosterStatus.DRAFT,
+        ).first()
+
+        if not draft_roster:
+            draft_roster = DutyRoster.objects.create(
+                station=station,
+                start_date=start_date,
+                end_date=end_date,
+                status=RosterStatus.DRAFT,
+            )
+
+        # 7. Check for conflicting external roster shifts in target period
+        # Never delete a conflicting shift belonging to another roster; report a blocking conflict.
+        other_roster_shifts = Shift.objects.filter(
+            station=station,
+            date__gte=start_date,
+            date__lte=end_date,
+        ).exclude(
+            roster=draft_roster
+        ).filter(
+            roster__isnull=False
         )
-        created_shifts.append(shift_night)
+        if other_roster_shifts.exists():
+            conflict = other_roster_shifts.first()
+            raise ValidationError(
+                f"Cannot generate roster: A conflicting shift exists on {conflict.date} for {conflict.guard.username} "
+                f"belonging to another roster ({conflict.roster})."
+            )
 
-        # 3. Off-duty pairs: record scheduled TIME_OFF (unless assigned to EXAM relief)
-        for pair_idx, pair in enumerate(pairs):
-            if pair_idx != active_pair_idx:
-                for guard in [pair.guard_a, pair.guard_b]:
-                    # If this guard is on exam duty today, exam shift handled below
-                    is_on_exam = (mode == "EXAM" or examination_period is not None) and (guard in exam_guards) and (day_offset < 5)
-                    if not is_on_exam:
-                        shift_off, _ = Shift.objects.update_or_create(
-                            station=station,
-                            guard=guard,
-                            date=current_date,
-                            shift_type=ShiftType.OFF,
-                            defaults={
-                                "start_time": time(0, 0),
-                                "end_time": time(0, 0),
-                                "assignment_type": AssignmentType.TIME_OFF,
-                                "duty_location": "Time Off",
-                                "pair": pair,
-                                "examination_period": None,
-                            }
-                        )
-                        created_shifts.append(shift_off)
+        # 8. Safe draft regeneration:
+        # Only remove child shifts that satisfy ALL:
+        # - shift.roster == this DRAFT roster
+        # - assignment_type is NORMAL or TIME_OFF
+        # - no Attendance exists
+        # - shift is inside the target generation period
+        Shift.objects.filter(
+            roster=draft_roster,
+            date__gte=start_date,
+            date__lte=end_date,
+            assignment_type__in=[AssignmentType.NORMAL, AssignmentType.TIME_OFF],
+            attendance_records__isnull=True,
+        ).delete()
 
-        # 4. Examination Venue Duty (if EXAM mode is active, for 5 consecutive days)
-        if (mode == "EXAM" or examination_period is not None) and exam_guards and day_offset < 5:
-            venue = examination_period.venue_name if examination_period else exam_venue_name
-            for exam_guard in exam_guards:
-                # Remove any TIME_OFF record for this guard on this exam date
-                Shift.objects.filter(station=station, guard=exam_guard, date=current_date, shift_type=ShiftType.OFF).delete()
+        created_shifts = []
+        num_pairs = len(pairs)
+        block_length = 4
+        specialized_types = {
+            AssignmentType.EXAM,
+            AssignmentType.ESCORT,
+            AssignmentType.RELIEF,
+        }
 
-                exam_shift, _ = Shift.objects.update_or_create(
+        # Determine baseline alternation offset for each pair based on prior history before start_date
+        pair_base_cycle_offset = {}
+        for p in pairs:
+            prior_day_shift = Shift.objects.filter(
+                station=station,
+                pair=p,
+                shift_type=ShiftType.DAY,
+                assignment_type=AssignmentType.NORMAL,
+                date__lt=start_date,
+            ).order_by("-date").first()
+
+            if prior_day_shift and prior_day_shift.guard_id == p.guard_a_id:
+                pair_base_cycle_offset[p.id] = 1
+            else:
+                pair_base_cycle_offset[p.id] = 0
+
+        # Prepare relief guards for Exam Mode if active
+        exam_guards = []
+        if mode == "EXAM" or examination_period is not None:
+            if exam_guard_ids and len(exam_guard_ids) == 2:
+                from apps.accounts.models import User
+                exam_guards = list(User.objects.filter(id__in=exam_guard_ids))
+            elif num_pairs >= 2:
+                relief_pair = pairs[1]
+                exam_guards = [relief_pair.guard_a, relief_pair.guard_b]
+
+        for day_offset in range(cycle_days):
+            current_date = start_date + timedelta(days=day_offset)
+            block_index = day_offset // block_length
+            active_pair_idx = block_index % num_pairs
+            active_pair = pairs[active_pair_idx]
+
+            is_exam_day = (mode == "EXAM" or examination_period is not None) and (day_offset < 5)
+
+            # Exam relief substitution for main campus
+            campus_pair = active_pair
+            if is_exam_day and exam_guards:
+                exam_guard_ids_set = {g.id for g in exam_guards}
+                if active_pair.guard_a_id in exam_guard_ids_set or active_pair.guard_b_id in exam_guard_ids_set:
+                    available_pairs = [
+                        p for p in pairs
+                        if p.guard_a_id not in exam_guard_ids_set and p.guard_b_id not in exam_guard_ids_set
+                    ]
+                    if available_pairs:
+                        campus_pair = available_pairs[-1]
+
+            # Day/Night alternation calculation
+            pair_cycle_num = block_index // num_pairs
+            effective_cycle = pair_cycle_num + pair_base_cycle_offset.get(campus_pair.id, 0)
+
+            if effective_cycle % 2 == 0:
+                campus_day_guard = campus_pair.guard_a
+                campus_night_guard = campus_pair.guard_b
+            else:
+                campus_day_guard = campus_pair.guard_b
+                campus_night_guard = campus_pair.guard_a
+
+            # 1. Main Campus: 1 Day guard (07:00 - 18:00)
+            existing_day = Shift.objects.filter(
+                station=station,
+                guard=campus_day_guard,
+                date=current_date,
+                shift_type=ShiftType.DAY,
+            ).first()
+
+            if existing_day and (
+                existing_day.attendance_records.exists()
+                or existing_day.assignment_type in specialized_types
+            ):
+                created_shifts.append(existing_day)
+            else:
+                shift_day, _ = Shift.objects.update_or_create(
                     station=station,
-                    guard=exam_guard,
+                    guard=campus_day_guard,
                     date=current_date,
                     shift_type=ShiftType.DAY,
                     defaults={
                         "start_time": day_start,
                         "end_time": day_end,
-                        "assignment_type": AssignmentType.EXAM,
-                        "duty_location": venue,
-                        "pair": getattr(exam_guard, "pairs_as_guard_a", None).first() or getattr(exam_guard, "pairs_as_guard_b", None).first(),
-                        "examination_period": examination_period,
+                        "assignment_type": AssignmentType.NORMAL,
+                        "duty_location": "Main Campus",
+                        "pair": active_pair,
+                        "roster": draft_roster,
+                        "examination_period": None,
                     }
                 )
-                created_shifts.append(exam_shift)
+                created_shifts.append(shift_day)
 
-                # Record Temporary Assignment Audit on first day of exam block
-                if day_offset == 0:
-                    guard_pair = getattr(exam_guard, "pairs_as_guard_a", None).first() or getattr(exam_guard, "pairs_as_guard_b", None).first()
-                    TemporaryAssignmentAudit.objects.create(
+            # 2. Main Campus: 1 Night guard (18:00 - 07:00)
+            existing_night = Shift.objects.filter(
+                station=station,
+                guard=campus_night_guard,
+                date=current_date,
+                shift_type=ShiftType.NIGHT,
+            ).first()
+
+            if existing_night and (
+                existing_night.attendance_records.exists()
+                or existing_night.assignment_type in specialized_types
+            ):
+                created_shifts.append(existing_night)
+            else:
+                shift_night, _ = Shift.objects.update_or_create(
+                    station=station,
+                    guard=campus_night_guard,
+                    date=current_date,
+                    shift_type=ShiftType.NIGHT,
+                    defaults={
+                        "start_time": night_start,
+                        "end_time": night_end,
+                        "assignment_type": AssignmentType.NORMAL,
+                        "duty_location": "Main Campus",
+                        "pair": active_pair,
+                        "roster": draft_roster,
+                        "examination_period": None,
+                    }
+                )
+                created_shifts.append(shift_night)
+
+            # 3. Off-duty pairs: record scheduled TIME_OFF (unless assigned to EXAM relief or specialized duty)
+            for pair_idx, pair in enumerate(pairs):
+                if pair_idx != active_pair_idx:
+                    for guard in [pair.guard_a, pair.guard_b]:
+                        is_on_exam = (mode == "EXAM" or examination_period is not None) and (guard in exam_guards) and (day_offset < 5)
+
+                        # Check if guard has an existing specialized assignment (EXAM, ESCORT, RELIEF) today
+                        has_specialized = Shift.objects.filter(
+                            station=station,
+                            guard=guard,
+                            date=current_date,
+                            assignment_type__in=specialized_types,
+                        ).first()
+                        if has_specialized:
+                            created_shifts.append(has_specialized)
+                            continue
+
+                        if not is_on_exam:
+                            existing_off = Shift.objects.filter(
+                                station=station,
+                                guard=guard,
+                                date=current_date,
+                                shift_type=ShiftType.OFF,
+                            ).first()
+
+                            if existing_off and (
+                                existing_off.attendance_records.exists()
+                                or existing_off.assignment_type in specialized_types
+                            ):
+                                created_shifts.append(existing_off)
+                            else:
+                                shift_off, _ = Shift.objects.update_or_create(
+                                    station=station,
+                                    guard=guard,
+                                    date=current_date,
+                                    shift_type=ShiftType.OFF,
+                                    defaults={
+                                        "start_time": time(0, 0),
+                                        "end_time": time(0, 0),
+                                        "assignment_type": AssignmentType.TIME_OFF,
+                                        "duty_location": "Time Off",
+                                        "pair": pair,
+                                        "roster": draft_roster,
+                                        "examination_period": None,
+                                    }
+                                )
+                                created_shifts.append(shift_off)
+
+            # 4. Examination Venue Duty (if EXAM mode is active, for 5 consecutive days)
+            if (mode == "EXAM" or examination_period is not None) and exam_guards and day_offset < 5:
+                venue = examination_period.venue_name if examination_period else exam_venue_name
+                for exam_guard in exam_guards:
+                    Shift.objects.filter(
+                        station=station,
                         guard=exam_guard,
-                        original_pair=guard_pair,
-                        original_assignment="TIME_OFF",
-                        temporary_assignment="EXAM",
-                        location=venue,
-                        start_date=start_date,
-                        end_date=start_date + timedelta(days=4),
-                        start_time=day_start,
-                        end_time=day_end,
-                        reason="Authorized university examination venue security duty (5-day consecutive exception)",
-                        authorized_by=authorized_by,
+                        date=current_date,
+                        shift_type=ShiftType.OFF,
+                        attendance_records__isnull=True,
+                    ).delete()
+
+                    existing_exam = Shift.objects.filter(
+                        station=station,
+                        guard=exam_guard,
+                        date=current_date,
+                        shift_type=ShiftType.DAY,
+                    ).first()
+
+                    if existing_exam and (
+                        existing_exam.attendance_records.exists()
+                        or existing_exam.assignment_type in specialized_types
+                    ):
+                        created_shifts.append(existing_exam)
+                    else:
+                        exam_shift, _ = Shift.objects.update_or_create(
+                            station=station,
+                            guard=exam_guard,
+                            date=current_date,
+                            shift_type=ShiftType.DAY,
+                            defaults={
+                                "start_time": day_start,
+                                "end_time": day_end,
+                                "assignment_type": AssignmentType.EXAM,
+                                "duty_location": venue,
+                                "pair": getattr(exam_guard, "pairs_as_guard_a", None).first() or getattr(exam_guard, "pairs_as_guard_b", None).first(),
+                                "examination_period": examination_period,
+                                "roster": draft_roster,
+                            }
+                        )
+                        created_shifts.append(exam_shift)
+
+                    if day_offset == 0:
+                        guard_pair = getattr(exam_guard, "pairs_as_guard_a", None).first() or getattr(exam_guard, "pairs_as_guard_b", None).first()
+                        TemporaryAssignmentAudit.objects.create(
+                            guard=exam_guard,
+                            original_pair=guard_pair,
+                            original_assignment="TIME_OFF",
+                            temporary_assignment="EXAM",
+                            location=venue,
+                            start_date=start_date,
+                            end_date=start_date + timedelta(days=4),
+                            start_time=day_start,
+                            end_time=day_end,
+                            reason="Authorized university examination venue security duty (5-day consecutive exception)",
+                            authorized_by=authorized_by,
+                        )
+
+        return created_shifts
+
+def validate_duty_roster(roster):
+    """
+    Authoritatively validates a DutyRoster and its child shifts.
+    Validation verifies:
+    - exactly 3 active GuardPairs for the station
+    - rotation orders exactly [1, 2, 3]
+    - exactly 2 distinct active GUARD users per pair assigned to this station
+    - no guard belongs to multiple active pairs
+    - 4 consecutive ON days / 8 TIME_OFF days for each 12-day cycle
+    - correct DAY/NIGHT staffing (1 Day guard 07:00-18:00, 1 Night guard 18:00-07:00)
+    - day/night alternation history consistency
+    - no overlapping shifts or duplicate duty assignments for any guard on the same date
+    - no blocking external-roster conflicts
+    - specialized EXAM/ESCORT/RELIEF assignments remain intact and not destroyed or duplicated
+    - changes lifecycle: DRAFT -> VALIDATED
+    - does NOT approve the roster
+    """
+    if isinstance(roster, (str, uuid.UUID)):
+        roster_obj = DutyRoster.objects.filter(id=roster).select_related("station").first()
+    else:
+        roster_obj = roster
+
+    if not roster_obj:
+        raise ValidationError("DutyRoster not found.")
+
+    if roster_obj.status not in [RosterStatus.DRAFT, RosterStatus.VALIDATED]:
+        raise ValidationError(
+            f"Cannot validate roster: Current status is {roster_obj.get_status_display()}. Only DRAFT rosters can be validated."
+        )
+
+    station = roster_obj.station
+    if not station:
+        raise ValidationError("Roster has no associated station.")
+
+    # 1. Validate station has exactly 3 valid active GuardPairs
+    pairs = list(GuardPair.objects.filter(station=station, is_active=True).order_by("rotation_order"))
+    if len(pairs) != 3:
+        raise ValidationError(
+            f"Station '{station.name}' must have exactly 3 active guard pairs to validate an authoritative roster (found {len(pairs)})."
+        )
+
+    # 2. Validate rotation orders are exactly [1, 2, 3]
+    rotation_orders = [p.rotation_order for p in pairs]
+    if rotation_orders != [1, 2, 3]:
+        raise ValidationError(
+            f"Active guard pairs for station '{station.name}' must have rotation orders exactly [1, 2, 3] (found {rotation_orders})."
+        )
+
+    # 3. Validate each pair has 2 distinct active GUARD users and no guard is in multiple pairs
+    all_guards_set = set()
+    for p in pairs:
+        if not p.guard_a_id or not p.guard_b_id or p.guard_a_id == p.guard_b_id:
+            raise ValidationError(f"Pair {p.rotation_order} must contain two distinct guards.")
+        for g in [p.guard_a, p.guard_b]:
+            if not g.is_active:
+                raise ValidationError(f"Guard {g.username} in Pair {p.rotation_order} is not active.")
+            if g.role != UserRole.GUARD:
+                raise ValidationError(f"User {g.username} in Pair {p.rotation_order} must have the GUARD role.")
+            if g.station_id != station.id:
+                raise ValidationError(f"Guard {g.username} in Pair {p.rotation_order} is not assigned to station '{station.name}'.")
+            if g.id in all_guards_set:
+                raise ValidationError(f"Guard {g.username} is assigned to multiple active pairs at station '{station.name}'.")
+            all_guards_set.add(g.id)
+
+    # 4. Validate date range
+    if not roster_obj.start_date or not roster_obj.end_date or roster_obj.end_date < roster_obj.start_date:
+        raise ValidationError("Invalid roster date range.")
+    total_days = (roster_obj.end_date - roster_obj.start_date).days + 1
+
+    # 5. Validate child shifts
+    roster_shifts = list(Shift.objects.filter(roster=roster_obj).select_related("guard", "pair"))
+    if not roster_shifts:
+        raise ValidationError("Cannot validate roster: No shifts are assigned to this roster.")
+
+    shifts_by_date = defaultdict(list)
+    for s in roster_shifts:
+        shifts_by_date[s.date].append(s)
+
+    # Check external roster conflicts
+    conflicting_external_shifts = Shift.objects.filter(
+        station=station,
+        date__gte=roster_obj.start_date,
+        date__lte=roster_obj.end_date,
+    ).exclude(
+        roster=roster_obj
+    ).filter(
+        roster__isnull=False
+    )
+    if conflicting_external_shifts.exists():
+        conf = conflicting_external_shifts.first()
+        raise ValidationError(
+            f"Blocking conflict: An external roster ({conf.roster}) has a conflicting shift on {conf.date} for guard {conf.guard.username}."
+        )
+
+    # Baseline alternation offset per pair
+    pair_base_cycle_offset = {}
+    for p in pairs:
+        prior_day_shift = Shift.objects.filter(
+            station=station,
+            pair=p,
+            shift_type=ShiftType.DAY,
+            assignment_type=AssignmentType.NORMAL,
+            date__lt=roster_obj.start_date,
+        ).order_by("-date").first()
+        if prior_day_shift and prior_day_shift.guard_id == p.guard_a_id:
+            pair_base_cycle_offset[p.id] = 1
+        else:
+            pair_base_cycle_offset[p.id] = 0
+
+    block_length = 4
+    num_pairs = 3
+
+    for day_offset in range(total_days):
+        current_date = roster_obj.start_date + timedelta(days=day_offset)
+        day_shifts = shifts_by_date.get(current_date, [])
+        if not day_shifts:
+            raise ValidationError(f"Missing scheduled shifts on {current_date} for roster period.")
+
+        # Check Main Campus coverage
+        day_shifts_mc = [s for s in day_shifts if s.duty_location == "Main Campus" and s.shift_type == ShiftType.DAY and s.assignment_type == AssignmentType.NORMAL]
+        night_shifts_mc = [s for s in day_shifts if s.duty_location == "Main Campus" and s.shift_type == ShiftType.NIGHT and s.assignment_type == AssignmentType.NORMAL]
+
+        if len(day_shifts_mc) != 1:
+            raise ValidationError(f"Main Campus requires exactly 1 DAY guard on {current_date} (found {len(day_shifts_mc)}).")
+        if len(night_shifts_mc) != 1:
+            raise ValidationError(f"Main Campus requires exactly 1 NIGHT guard on {current_date} (found {len(night_shifts_mc)}).")
+
+        # Check duplicate shifts / duty on current_date
+        shifts_by_guard_today = defaultdict(list)
+        for s in day_shifts:
+            shifts_by_guard_today[s.guard_id].append(s)
+
+        for gid, g_today_shifts in shifts_by_guard_today.items():
+            if len(g_today_shifts) > 1:
+                for i in range(len(g_today_shifts)):
+                    for j in range(i + 1, len(g_today_shifts)):
+                        s1 = g_today_shifts[i]
+                        s2 = g_today_shifts[j]
+                        if s1.shift_type != ShiftType.OFF and s2.shift_type != ShiftType.OFF:
+                            if not (s1.end_time <= s2.start_time or s2.end_time <= s1.start_time):
+                                raise ValidationError(
+                                    f"Overlapping shift duties for guard {s1.guard.username} on {current_date}."
+                                )
+
+        # Check Day/Night assignment correctness
+        block_index = day_offset // block_length
+        active_pair_idx = block_index % num_pairs
+        active_pair = pairs[active_pair_idx]
+
+        mc_day_guard_id = day_shifts_mc[0].guard_id
+        mc_night_guard_id = night_shifts_mc[0].guard_id
+
+        # Verify active guards are valid station pair guards
+        valid_pair_guard_ids = {p.guard_a_id for p in pairs} | {p.guard_b_id for p in pairs}
+        if mc_day_guard_id not in valid_pair_guard_ids or mc_night_guard_id not in valid_pair_guard_ids:
+            raise ValidationError(f"Main Campus guard on {current_date} is not a valid pair guard for {station.name}.")
+
+    # 6. Verify 4-on / 8-off for complete 12-day blocks
+    complete_cycles = total_days // 12
+    cycle_has_specialized = any(
+        s.assignment_type in [AssignmentType.EXAM, AssignmentType.ESCORT, AssignmentType.RELIEF]
+        for s in roster_shifts
+    )
+    if complete_cycles >= 1 and not cycle_has_specialized:
+        for c in range(complete_cycles):
+            c_start = roster_obj.start_date + timedelta(days=c * 12)
+            c_end = c_start + timedelta(days=11)
+            c_shifts = [s for s in roster_shifts if c_start <= s.date <= c_end]
+
+            for p in pairs:
+                p_guard_ids = {p.guard_a_id, p.guard_b_id}
+                p_shifts = [s for s in c_shifts if s.guard_id in p_guard_ids]
+                p_work_shifts = [s for s in p_shifts if s.shift_type in [ShiftType.DAY, ShiftType.NIGHT] and s.assignment_type == AssignmentType.NORMAL]
+                p_work_dates = set(s.date for s in p_work_shifts)
+
+                if len(p_work_dates) != 4:
+                    raise ValidationError(
+                        f"Pair {p.rotation_order} scheduled for {len(p_work_dates)} working days in 12-day cycle ({c_start} to {c_end}); expected exactly 4."
                     )
 
-    return created_shifts
+    # 7. Specialized assignments validation
+    specialized_shifts = [s for s in roster_shifts if s.assignment_type in [AssignmentType.EXAM, AssignmentType.ESCORT, AssignmentType.RELIEF]]
+    for spec_s in specialized_shifts:
+        if spec_s.start_time and spec_s.end_time and spec_s.end_time <= spec_s.start_time:
+            raise ValidationError(f"Invalid hours for specialized assignment {spec_s.assignment_type} on {spec_s.date}.")
+
+    # Success: transition status DRAFT -> VALIDATED
+    roster_obj.status = RosterStatus.VALIDATED
+    roster_obj.save(update_fields=["status", "updated_at"])
+
+    return {
+        "valid": True,
+        "status": RosterStatus.VALIDATED,
+        "roster_id": str(roster_obj.id),
+        "station": station.name,
+        "start_date": str(roster_obj.start_date),
+        "end_date": str(roster_obj.end_date),
+        "shifts_count": len(roster_shifts),
+        "message": f"DutyRoster for station '{station.name}' successfully validated.",
+    }
+
+def approve_duty_roster(roster, user):
+    """
+    Formally approves a VALIDATED DutyRoster.
+    Rules:
+    - User must be authenticated and have role SUPERVISOR or ADMINISTRATOR.
+    - If user is SUPERVISOR, user.station must equal roster.station.
+    - If user is GUARD, raises PermissionDenied.
+    - Status MUST be VALIDATED.
+    - DRAFT rosters are rejected.
+    - Already APPROVED, ACTIVE, or ARCHIVED rosters are rejected.
+    - Runs in transaction.atomic() with select_for_update() to prevent race conditions.
+    - Performs final re-validation immediately before approval.
+    - Persists approved_by=user and approved_at=timezone.now().
+    - Never modifies or regenerates shifts.
+    """
+    if not user or not user.is_authenticated:
+        raise PermissionDenied("Authentication required to approve roster.")
+
+    if hasattr(user, "role") and user.role == UserRole.GUARD:
+        raise PermissionDenied("Guards are not authorized to approve rosters.")
+
+    if hasattr(user, "role") and user.role not in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR] and not user.is_superuser and not user.is_staff:
+        raise PermissionDenied("Only Supervisors and Administrators can approve rosters.")
+
+    with transaction.atomic():
+        if isinstance(roster, (str, uuid.UUID)):
+            locked_roster = DutyRoster.objects.select_for_update().filter(id=roster).select_related("station").first()
+        else:
+            locked_roster = DutyRoster.objects.select_for_update().filter(id=roster.id).select_related("station").first()
+
+        if not locked_roster:
+            raise ValidationError("DutyRoster not found.")
+
+        # Station scope check for supervisor
+        if user.role == UserRole.SUPERVISOR:
+            if not user.station_id or user.station_id != locked_roster.station_id:
+                raise PermissionDenied(
+                    f"Supervisor {user.username} is assigned to station '{getattr(user.station, 'name', 'None')}' "
+                    f"and cannot approve a roster for '{locked_roster.station.name}'."
+                )
+
+        # Status checks
+        if locked_roster.status == RosterStatus.APPROVED:
+            raise ValidationError("Roster has already been approved.")
+        if locked_roster.status in [RosterStatus.ACTIVE, RosterStatus.ARCHIVED]:
+            raise ValidationError(f"Cannot approve roster: current status is {locked_roster.get_status_display()}.")
+        if locked_roster.status == RosterStatus.DRAFT:
+            raise ValidationError("Cannot approve DRAFT roster directly. Roster must be VALIDATED first.")
+        if locked_roster.status != RosterStatus.VALIDATED:
+            raise ValidationError(f"Cannot approve roster with status '{locked_roster.status}'. Only VALIDATED rosters can be approved.")
+
+        # Final validation immediately before approval
+        validate_duty_roster(locked_roster)
+
+        # Persist approval metadata
+        locked_roster.status = RosterStatus.APPROVED
+        locked_roster.approved_by = user
+        locked_roster.approved_at = timezone.now()
+        locked_roster.full_clean()
+        locked_roster.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+
+        # Notify all distinct active guards on this roster within the transaction boundary
+        notify_roster_approval(locked_roster, user)
+
+        return {
+            "approved": True,
+            "status": RosterStatus.APPROVED,
+            "roster_id": str(locked_roster.id),
+            "station": locked_roster.station.name,
+            "approved_by": user.username,
+            "approved_at": locked_roster.approved_at.isoformat(),
+            "message": f"Roster for station {locked_roster.station.name} formally approved by {user.username}.",
+        }
+
+def notify_roster_approval(roster, user):
+    """
+    Notifies all distinct active guards assigned to shifts in the approved roster.
+    Idempotent: Uses business-event-scoped dedup_key ROSTER_APPROVAL:{roster.id}:{guard.id}.
+    Recipients are derived solely from Shift.guard relationships on this roster.
+    """
+    from apps.notifications.models import Notification
+    from django.contrib.auth import get_user_model
+    UserModel = get_user_model()
+
+    guard_ids = Shift.objects.filter(
+        roster=roster,
+        guard__isnull=False,
+        guard__is_active=True,
+    ).values_list("guard_id", flat=True).distinct()
+
+    guards = UserModel.objects.filter(id__in=guard_ids, is_active=True)
+    approver_name = user.get_full_name() or user.username
+
+    for guard in guards:
+        dedup_key = f"ROSTER_APPROVAL:{roster.id}:{guard.id}"
+        Notification.objects.get_or_create(
+            dedup_key=dedup_key,
+            defaults={
+                "user": guard,
+                "title": f"Duty Roster Approved: {roster.station.name}",
+                "message": (
+                    f"The duty roster for station '{roster.station.name}' covering "
+                    f"{roster.start_date} to {roster.end_date} has been approved by {approver_name}. "
+                    f"Your duty schedule is now approved and active."
+                ),
+                "notification_type": "ROSTER_APPROVED",
+            },
+        )
+
+def get_authoritative_roster_for_station(station, on_date=None):
+    """
+    Returns the currently authoritative (APPROVED or ACTIVE) DutyRoster for the station
+    on a given date. DRAFT and VALIDATED rosters are strictly excluded.
+    """
+    if not on_date:
+        on_date = timezone.localdate()
+    return DutyRoster.objects.filter(
+        station=station,
+        status__in=[RosterStatus.APPROVED, RosterStatus.ACTIVE],
+        start_date__lte=on_date,
+        end_date__gte=on_date,
+    ).first()
 
 def schedule_exam_escort(
     station,
@@ -540,4 +1057,212 @@ def resume_normal_roster(station, after_date, cycle_days=12, authorized_by=None)
     )
 
     return created_shifts
+
+
+def get_active_public_holiday(on_date, country_code="ZW"):
+    """
+    Returns the active PublicHoliday for on_date in the given country context, or None.
+    """
+    return PublicHoliday.objects.filter(date=on_date, country_code=country_code, is_active=True).first()
+
+
+def record_public_holiday_duty(shift, attendance=None):
+    """
+    Authoritative recording of a guard working on a configured public holiday.
+    Links: PublicHoliday -> Shift -> Attendance -> PublicHolidayDutyRecord.
+    Rules:
+    - shift.date must be a configured, active PublicHoliday.
+    - shift must be an actual duty assignment (not TIME_OFF or OFF).
+    - Valid attendance proving the guard actually worked (clock_in exists) is required.
+    - Idempotent: returns existing record if already created for this shift.
+    - Initial state: PENDING (compensation is not automatically granted).
+    """
+    if not shift:
+        raise ValidationError("Shift is required to record public holiday duty.")
+
+    if shift.shift_type == ShiftType.OFF or shift.assignment_type == AssignmentType.TIME_OFF:
+        raise ValidationError("TIME_OFF/OFF shifts are not eligible for public holiday duty credit.")
+
+    holiday = get_active_public_holiday(shift.date)
+    if not holiday:
+        raise ValidationError(f"Shift date ({shift.date}) is not a configured active public holiday.")
+
+    if attendance is None:
+        attendance = Attendance.objects.filter(
+            shift=shift,
+            guard=shift.guard,
+            clock_in__isnull=False,
+        ).first()
+
+    if not attendance or not attendance.clock_in:
+        raise ValidationError("Valid attendance proving the guard actually worked is required.")
+
+    if attendance.shift_id != shift.id or attendance.guard_id != shift.guard_id:
+        raise ValidationError("Attendance record does not match the shift and guard.")
+
+    # Idempotent check
+    existing = PublicHolidayDutyRecord.objects.filter(shift=shift).first()
+    if existing:
+        return existing
+
+    record = PublicHolidayDutyRecord.objects.create(
+        public_holiday=holiday,
+        shift=shift,
+        guard=shift.guard,
+        attendance=attendance,
+        status=HolidayCompensationStatus.PENDING,
+        compensated_days=2.0,
+    )
+    return record
+
+
+def approve_holiday_compensation(duty_record, user, reason=""):
+    """
+    Formally approves 2 days of leave compensation for a worked public holiday.
+    Rules:
+    - User must be authenticated and have role SUPERVISOR or ADMINISTRATOR.
+    - If user is GUARD, raises PermissionDenied.
+    - If user is SUPERVISOR, user.station must match the shift's station.
+    - Duty record must be in PENDING status.
+    - Credits 2 days to the guard's vacation leave balance subject to the 90-day vacation cap.
+    - Persists approved_by, approved_at, status=APPROVED, decision_reason.
+    - Runs in transaction.atomic() with select_for_update().
+    """
+    if not user or not user.is_authenticated:
+        raise PermissionDenied("Authentication required to approve holiday compensation.")
+
+    if hasattr(user, "role") and user.role == UserRole.GUARD:
+        raise PermissionDenied("Guards are not authorized to approve holiday compensation.")
+
+    if hasattr(user, "role") and user.role not in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR] and not user.is_superuser and not user.is_staff:
+        raise PermissionDenied("Only Supervisors and Administrators can approve holiday compensation.")
+
+    with transaction.atomic():
+        if isinstance(duty_record, (str, uuid.UUID)):
+            locked_record = PublicHolidayDutyRecord.objects.select_for_update().filter(id=duty_record).select_related("shift", "shift__station", "guard", "public_holiday").first()
+        else:
+            locked_record = PublicHolidayDutyRecord.objects.select_for_update().filter(id=duty_record.id).select_related("shift", "shift__station", "guard", "public_holiday").first()
+
+        if not locked_record:
+            raise ValidationError("PublicHolidayDutyRecord not found.")
+
+        # Station scope check for Supervisor
+        if user.role == UserRole.SUPERVISOR:
+            shift_station_id = locked_record.shift.station_id
+            if not user.station_id or user.station_id != shift_station_id:
+                raise PermissionDenied(
+                    f"Supervisor {user.username} is assigned to station '{getattr(user.station, 'name', 'None')}' "
+                    f"and cannot approve holiday compensation for station '{locked_record.shift.station.name}'."
+                )
+
+        if locked_record.status == HolidayCompensationStatus.APPROVED:
+            raise ValidationError("Holiday compensation has already been approved.")
+
+        if locked_record.status != HolidayCompensationStatus.PENDING:
+            raise ValidationError(
+                f"Cannot approve compensation with status '{locked_record.get_status_display()}'. Only PENDING records can be approved."
+            )
+
+        # Authoritative Phase 5C accounting: Public-holiday compensation is a separate stream
+        # and must NEVER be added to LeaveBalance.vacation_days.
+        # Record an EARNED transaction in PublicHolidayCompensationLedger.
+        from apps.leave.models import PublicHolidayCompensationLedger, CompensationLedgerEntryType
+        from decimal import Decimal
+
+        PublicHolidayCompensationLedger.objects.get_or_create(
+            duty_record=locked_record,
+            entry_type=CompensationLedgerEntryType.EARNED,
+            defaults={
+                "guard": locked_record.guard,
+                "days": Decimal(str(locked_record.compensated_days)),
+                "created_by": user,
+                "notes": f"Earned {locked_record.compensated_days} days compensation for working public holiday {locked_record.public_holiday.name} on {locked_record.shift.date}.",
+            },
+        )
+
+        locked_record.status = HolidayCompensationStatus.APPROVED
+        locked_record.approved_by = user
+        locked_record.approved_at = timezone.now()
+        locked_record.decision_reason = reason
+        locked_record.full_clean()
+        locked_record.save(update_fields=["status", "approved_by", "approved_at", "decision_reason", "updated_at"])
+
+        if locked_record.guard and locked_record.guard.is_active:
+            from apps.notifications.models import Notification
+            approver_name = user.get_full_name() or user.username
+            dedup_key = f"HOLIDAY_COMPENSATION:{locked_record.id}:APPROVED"
+            reason_suffix = f" Decision notes: {reason}" if reason else ""
+            Notification.objects.get_or_create(
+                dedup_key=dedup_key,
+                defaults={
+                    "user": locked_record.guard,
+                    "title": "Public Holiday Compensation Approved",
+                    "message": (
+                        f"Your compensation claim for working on public holiday {locked_record.public_holiday.name} "
+                        f"({locked_record.shift.date}) has been APPROVED by {approver_name}. "
+                        f"Compensation earned: {locked_record.compensated_days} days.{reason_suffix}"
+                    ),
+                    "notification_type": "HOLIDAY_COMPENSATION",
+                },
+            )
+
+        return locked_record
+
+
+def reject_holiday_compensation(duty_record, user, reason=""):
+    """
+    Rejects holiday compensation for a duty record.
+    Requires Supervisor (within station scope) or Administrator.
+    """
+    if not user or not user.is_authenticated:
+        raise PermissionDenied("Authentication required.")
+
+    if hasattr(user, "role") and user.role == UserRole.GUARD:
+        raise PermissionDenied("Guards cannot reject holiday compensation.")
+
+    if hasattr(user, "role") and user.role not in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR] and not user.is_superuser and not user.is_staff:
+        raise PermissionDenied("Only Supervisors and Administrators can review holiday compensation.")
+
+    with transaction.atomic():
+        if isinstance(duty_record, (str, uuid.UUID)):
+            locked_record = PublicHolidayDutyRecord.objects.select_for_update().filter(id=duty_record).select_related("shift", "shift__station", "guard", "public_holiday").first()
+        else:
+            locked_record = PublicHolidayDutyRecord.objects.select_for_update().filter(id=duty_record.id).select_related("shift", "shift__station", "guard", "public_holiday").first()
+
+        if not locked_record:
+            raise ValidationError("PublicHolidayDutyRecord not found.")
+
+        if user.role == UserRole.SUPERVISOR:
+            if not user.station_id or user.station_id != locked_record.shift.station_id:
+                raise PermissionDenied("Supervisor cannot review holiday compensation outside assigned station.")
+
+        if locked_record.status == HolidayCompensationStatus.APPROVED:
+            raise ValidationError("Cannot reject already approved holiday compensation.")
+
+        locked_record.status = HolidayCompensationStatus.REJECTED
+        locked_record.approved_by = user
+        locked_record.approved_at = timezone.now()
+        locked_record.decision_reason = reason
+        locked_record.full_clean()
+        locked_record.save(update_fields=["status", "approved_by", "approved_at", "decision_reason", "updated_at"])
+
+        if locked_record.guard and locked_record.guard.is_active:
+            from apps.notifications.models import Notification
+            approver_name = user.get_full_name() or user.username
+            dedup_key = f"HOLIDAY_COMPENSATION:{locked_record.id}:REJECTED"
+            reason_suffix = f" Reason: {reason}" if reason else ""
+            Notification.objects.get_or_create(
+                dedup_key=dedup_key,
+                defaults={
+                    "user": locked_record.guard,
+                    "title": "Public Holiday Compensation Rejected",
+                    "message": (
+                        f"Your compensation claim for working on public holiday {locked_record.public_holiday.name} "
+                        f"({locked_record.shift.date}) has been REJECTED by {approver_name}.{reason_suffix}"
+                    ),
+                    "notification_type": "HOLIDAY_COMPENSATION",
+                },
+            )
+
+        return locked_record
 

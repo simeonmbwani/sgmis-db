@@ -22,7 +22,8 @@ class ApiClient(private val sessionManager: SessionManager) {
         .build()
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BODY
+        level = HttpLoggingInterceptor.Level.BASIC
+        redactHeader("Authorization")
     }
 
     private val authInterceptor = AuthInterceptor(sessionManager)

@@ -9,6 +9,7 @@ class Notification(models.Model):
     message = models.TextField()
     notification_type = models.CharField(max_length=50, default="ALERT")
     read = models.BooleanField(default=False, db_index=True)
+    dedup_key = models.CharField(max_length=255, null=True, blank=True, unique=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
