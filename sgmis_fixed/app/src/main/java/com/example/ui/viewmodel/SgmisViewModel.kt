@@ -1,10 +1,13 @@
 package com.example.ui.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.*
 import com.example.data.repository.SgmisRepository
+import com.example.util.LocationHelper
+import com.example.util.NotificationHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -54,7 +57,10 @@ data class SgmisUiState(
     val leaveBalance: LeaveBalance? = null,
     val leaveSummary: LeaveSummary? = null,
     val leaveApplications: List<LeaveApplication> = emptyList(),
+    val stationLeaveBalances: List<LeaveBalance> = emptyList(),
+    val leaveAccrualRecords: List<LeaveAccrualRecord> = emptyList(),
     val leaveLoading: Boolean = false,
+    val accrualProcessing: Boolean = false,
 
     // Escorts & Exams
     val escortDuties: List<EscortDuty> = emptyList(),
@@ -66,6 +72,18 @@ data class SgmisUiState(
     val notifications: List<NotificationAlert> = emptyList(),
     val notificationsLoading: Boolean = false,
     val unreadNotificationCount: Int = 0,
+
+    // Direct Messages & Communications
+    val directMessages: List<DirectMessage> = emptyList(),
+    val messagesLoading: Boolean = false,
+    val unreadMessageCount: Int = 0,
+
+    // Phase 13 Guard Operations
+    val serverDutyState: DutyStateResponse? = null,
+    val isFilingLateReport: Boolean = false,
+    val lastLateReportCaseNumber: String? = null,
+    val isDispatchingSos: Boolean = false,
+    val sosAlertMessage: String? = null,
 
     // Supervisory & Administrative
     val users: List<User> = emptyList(),
@@ -79,9 +97,62 @@ data class SgmisUiState(
     val rosterConflictsLoading: Boolean = false,
     val adminLoading: Boolean = false,
 
+    // Public Holidays & Early Clockout OTP
+    val publicHolidays: List<PublicHoliday> = emptyList(),
+    val holidayDutyRecords: List<PublicHolidayDutyRecord> = emptyList(),
+    val activeEarlyClockoutOtp: GenerateEarlyClockoutOtpResponse? = null,
+    val isGeneratingOtp: Boolean = false,
+    val isReviewingHolidayDuty: Boolean = false,
+
     // Telemetry & Settings
     val telemetry: TelemetryOverview = TelemetryOverview()
-)
+) {
+    val appRole: AppRole get() = currentUser?.appRole ?: AppRole.GUARD
+    val isGuard: Boolean get() = appRole == AppRole.GUARD
+    val isSupervisor: Boolean get() = appRole == AppRole.SUPERVISOR
+    val isAdmin: Boolean get() = appRole == AppRole.ADMINISTRATOR
+    val isSupervisorOrAdmin: Boolean get() = appRole != AppRole.GUARD
+
+    // Server-Authoritative Duty State for Guard
+    val guardDutyState: GuardDutyState get() = serverDutyState?.let {
+        when (it.dutyState.trim().uppercase()) {
+            "ON_DUTY" -> GuardDutyState.ON_DUTY
+            "ON_LEAVE" -> GuardDutyState.ON_LEAVE
+            "TIME_OFF" -> GuardDutyState.TIME_OFF
+            "ELIGIBLE_FOR_DUTY" -> GuardDutyState.ELIGIBLE_FOR_DUTY
+            "EARLY_EXIT_PENDING" -> GuardDutyState.EARLY_EXIT_PENDING
+            else -> GuardDutyState.OFF_DUTY
+        }
+    } ?: GuardDutyState.fromShift(todayShift)
+
+    val isOnDuty: Boolean get() = guardDutyState == GuardDutyState.ON_DUTY
+    val isOffDuty: Boolean get() = guardDutyState.isOffDuty
+    val isEligibleForDuty: Boolean get() = guardDutyState == GuardDutyState.ELIGIBLE_FOR_DUTY
+    val isOnLeave: Boolean get() = guardDutyState == GuardDutyState.ON_LEAVE
+
+    // Guard operational capability check (enforces that guards must be ON_DUTY to execute operational events)
+    val canPerformGuardOperations: Boolean get() = !isGuard || isOnDuty
+
+    // Authoritative station context
+    val currentStationId: String? get() = currentUser?.station ?: todayShift?.station
+    val currentStationName: String
+        get() = currentUser?.stationName
+            ?: todayShift?.stationName
+            ?: stations.find { it.id == currentStationId }?.name
+            ?: "Station Unassigned"
+    val hasAssignedStation: Boolean
+        get() = !currentStationId.isNullOrBlank() && currentStationName != "Station Unassigned"
+
+    val currentStation: Station?
+        get() = stations.find { it.id == currentStationId || it.name.equals(currentStationName, ignoreCase = true) }
+
+    val stationGeofenceRadius: Double?
+        get() = currentStation?.geofenceRadiusMeters ?: currentStation?.geofenceRadius
+
+    // Authoritative partner context
+    val assignedPartnerName: String get() = todayShift?.partnerName ?: "Solo / Unassigned"
+    val assignedPartnerEmployeeNumber: String? get() = todayShift?.partnerEmployeeNumber
+}
 
 class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
 
@@ -260,7 +331,10 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     fun loadInitialDashboardData() {
         resetInactivityTimer()
         fetchTodayShift()
+        fetchDutyState()
         fetchUnreadNotificationCount()
+        fetchUnreadMessageCount()
+        fetchDirectMessages()
         val role = _uiState.value.currentUser?.role?.uppercase()
         if (role == "SUPERVISOR" || role == "ADMIN" || role == "ADMINISTRATOR") {
             fetchTelemetry()
@@ -271,6 +345,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         resetInactivityTimer()
         fetchCurrentUser()
         fetchTodayShift()
+        fetchDutyState()
         fetchHandovers()
         fetchOBEntries()
         fetchVisitors()
@@ -281,6 +356,8 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         fetchEscortDuties()
         fetchExamDuties()
         fetchNotifications()
+        fetchDirectMessages()
+        fetchUnreadMessageCount()
         fetchTelemetry()
 
         val role = _uiState.value.currentUser?.role?.uppercase()
@@ -290,7 +367,40 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             fetchGuardPairs()
             fetchRosterShifts()
             fetchAttendanceRecords()
+            fetchPublicHolidays()
+            fetchHolidayDutyRecords()
         }
+    }
+
+    fun refreshAuthoritativeState() {
+        if (_uiState.value.isLoggedIn) {
+            resetInactivityTimer()
+            fetchCurrentUser()
+            fetchTodayShift()
+            fetchDutyState()
+            fetchRosterShifts()
+            fetchOBEntries()
+            fetchVisitors()
+            fetchLeave()
+            fetchUnreadNotificationCount()
+            fetchUnreadMessageCount()
+            fetchDirectMessages()
+            if (_uiState.value.isSupervisorOrAdmin) {
+                fetchTelemetry()
+                fetchIncidents()
+                fetchPatrolLogs()
+                fetchHandovers()
+                fetchAttendanceRecords()
+                fetchUsers()
+                fetchStations()
+                fetchPublicHolidays()
+                fetchHolidayDutyRecords()
+            }
+        }
+    }
+
+    fun postSecurityAlert(message: String) {
+        _uiState.update { it.copy(errorMessage = message) }
     }
 
     fun fetchCurrentUser() {
@@ -315,10 +425,17 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
-    fun clockIn(shiftId: String, lat: Double?, lon: Double?, lateReason: String? = null) {
+    fun clockIn(
+        shiftId: String,
+        lat: Double?,
+        lon: Double?,
+        lateReason: String? = null,
+        caseNumber: String? = null,
+        onSuccess: (() -> Unit)? = null
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(clockLoading = true, errorMessage = null) }
-            val res = repository.clockIn(shiftId, lat, lon, lateReason)
+            val res = repository.clockIn(shiftId, lat, lon, lateReason, caseNumber)
             res.onSuccess { att ->
                 _uiState.update {
                     it.copy(
@@ -327,6 +444,8 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                     )
                 }
                 fetchTodayShift()
+                fetchDutyState()
+                onSuccess?.invoke()
             }.onFailure { err ->
                 _uiState.update {
                     it.copy(
@@ -345,6 +464,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         supervisorUsername: String? = null,
         supervisorPassword: String? = null,
         overrideReason: String? = null,
+        otpCode: String? = null,
         onSuccess: (() -> Unit)? = null
     ) {
         viewModelScope.launch {
@@ -355,7 +475,8 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                 lon = lon,
                 supervisorUsername = supervisorUsername,
                 supervisorPassword = supervisorPassword,
-                overrideReason = overrideReason
+                overrideReason = overrideReason,
+                otpCode = otpCode
             )
             res.onSuccess { att ->
                 _uiState.update {
@@ -426,7 +547,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
-    fun acceptHandover(handoverId: String) {
+    fun acceptHandover(handoverId: String, onSuccess: (() -> Unit)? = null) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             val res = repository.acceptHandover(handoverId)
@@ -442,6 +563,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                     )
                 }
                 fetchHandovers()
+                onSuccess?.invoke()
             }.onFailure { err ->
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = err.message ?: "Acceptance failed.")
@@ -719,11 +841,13 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         reason: String,
         emergencyPhone: String? = null,
         emergencyAddress: String? = null,
+        doctorReport: String? = null,
+        eventDetails: String? = null,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val res = repository.applyForLeave(type, start, end, reason, emergencyPhone, emergencyAddress)
+            val res = repository.applyForLeave(type, start, end, reason, emergencyPhone, emergencyAddress, doctorReport, eventDetails)
             res.onSuccess {
                 _uiState.update {
                     it.copy(isLoading = false, successMessage = "Leave application submitted.")
@@ -732,6 +856,51 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                 onSuccess()
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun fetchStationLeaveBalances(stationId: String? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(leaveLoading = true) }
+            val res = repository.fetchAllLeaveBalances(stationId)
+            res.onSuccess { list ->
+                _uiState.update { it.copy(stationLeaveBalances = list, leaveLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(leaveLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun fetchLeaveAccrualRecords() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(leaveLoading = true) }
+            val res = repository.fetchLeaveAccrualRecords()
+            res.onSuccess { list ->
+                _uiState.update { it.copy(leaveAccrualRecords = list, leaveLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(leaveLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun processMonthlyAccruals(onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(accrualProcessing = true, errorMessage = null) }
+            val res = repository.processMonthlyAccruals()
+            res.onSuccess { resp ->
+                _uiState.update {
+                    it.copy(
+                        accrualProcessing = false,
+                        successMessage = "${resp.message} (${resp.recordsCreated} records created for ${resp.guardsEvaluated} guards as of ${resp.asOfDate})"
+                    )
+                }
+                fetchLeave()
+                fetchStationLeaveBalances()
+                fetchLeaveAccrualRecords()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(accrualProcessing = false, errorMessage = err.message) }
             }
         }
     }
@@ -799,17 +968,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     }
 
     fun approveRoster(stationId: String, onSuccess: () -> Unit = {}) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val res = repository.approveRoster(stationId)
-            res.onSuccess { msg ->
-                _uiState.update { it.copy(isLoading = false, successMessage = msg) }
-                fetchRosterShifts()
-                onSuccess()
-            }.onFailure { err ->
-                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
-            }
-        }
+        approveRoster(stationId, null, null, onSuccess)
     }
 
     // --- Incident Actions ---
@@ -1177,10 +1336,39 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             val res = repository.approveRoster(stationId, startDate, endDate)
+            if (res.isFailure && res.exceptionOrNull()?.message?.contains("VALIDATED", ignoreCase = true) == true) {
+                // Roster requires validation first: run validation and retry approval
+                val valRes = repository.validateRoster(stationId = stationId, startDate = startDate, endDate = endDate)
+                if (valRes.isSuccess && valRes.getOrNull()?.valid == true) {
+                    val retryRes = repository.approveRoster(stationId, startDate, endDate)
+                    retryRes.onSuccess { msg ->
+                        _uiState.update { it.copy(isLoading = false, successMessage = msg) }
+                        fetchRosterShifts(station = stationId)
+                        onSuccess()
+                        return@launch
+                    }.onFailure { err ->
+                        _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+                        return@launch
+                    }
+                }
+            }
             res.onSuccess { msg ->
                 _uiState.update { it.copy(isLoading = false, successMessage = msg) }
                 fetchRosterShifts(station = stationId)
                 onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun validateRoster(stationId: String, startDate: String? = null, endDate: String? = null, onSuccess: (ValidateRosterResponse) -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.validateRoster(stationId, startDate, endDate)
+            res.onSuccess { valResp ->
+                _uiState.update { it.copy(isLoading = false, successMessage = valResp.message ?: "Roster validated successfully.") }
+                onSuccess(valResp)
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
             }
@@ -1341,6 +1529,210 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
             }
+        }
+    }
+
+    // --- Zimbabwe Public Holidays & National Holiday Duties ---
+    fun fetchPublicHolidays() {
+        viewModelScope.launch {
+            val res = repository.fetchPublicHolidays()
+            res.onSuccess { holidays ->
+                _uiState.update { it.copy(publicHolidays = holidays) }
+            }
+        }
+    }
+
+    fun fetchHolidayDutyRecords(status: String? = null, station: String? = null) {
+        viewModelScope.launch {
+            val res = repository.fetchHolidayDuties(status = status, station = station)
+            res.onSuccess { records ->
+                _uiState.update { it.copy(holidayDutyRecords = records) }
+            }
+        }
+    }
+
+    fun approveHolidayDuty(id: String, reason: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isReviewingHolidayDuty = true, errorMessage = null) }
+            val res = repository.approveHolidayDuty(id, reason)
+            res.onSuccess {
+                _uiState.update { state ->
+                    state.copy(
+                        isReviewingHolidayDuty = false,
+                        successMessage = "Holiday duty compensation approved (2 days credited)."
+                    )
+                }
+                fetchHolidayDutyRecords()
+                fetchLeave()
+                fetchTelemetry()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isReviewingHolidayDuty = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun rejectHolidayDuty(id: String, reason: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isReviewingHolidayDuty = true, errorMessage = null) }
+            val res = repository.rejectHolidayDuty(id, reason)
+            res.onSuccess {
+                _uiState.update { state ->
+                    state.copy(
+                        isReviewingHolidayDuty = false,
+                        successMessage = "Holiday duty compensation rejected."
+                    )
+                }
+                fetchHolidayDutyRecords()
+                fetchLeave()
+                fetchTelemetry()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isReviewingHolidayDuty = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    // --- Early Clock-Out OTP Generation (Administrator & Supervisor) ---
+    fun generateEarlyClockoutOtp(shiftId: String, reason: String, onSuccess: (GenerateEarlyClockoutOtpResponse) -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isGeneratingOtp = true, errorMessage = null) }
+            val res = repository.generateEarlyClockoutOtp(shiftId, reason)
+            res.onSuccess { response ->
+                _uiState.update { state ->
+                    state.copy(
+                        isGeneratingOtp = false,
+                        activeEarlyClockoutOtp = response,
+                        successMessage = "Early Clock-Out OTP generated (Code: ${response.otp} - Valid 5 min)."
+                    )
+                }
+                onSuccess(response)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isGeneratingOtp = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun clearActiveOtp() {
+        _uiState.update { it.copy(activeEarlyClockoutOtp = null) }
+    }
+
+    // --- Phase 13 Guard Operations & Communications ---
+    fun fetchDutyState() {
+        viewModelScope.launch {
+            val res = repository.fetchDutyState()
+            res.onSuccess { dutyResp ->
+                _uiState.update { it.copy(serverDutyState = dutyResp) }
+            }
+        }
+    }
+
+    fun submitLateArrivalReport(
+        shiftId: String,
+        reason: String,
+        incidentDetails: String = "",
+        estimatedArrival: String = "",
+        onSuccess: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isFilingLateReport = true, errorMessage = null) }
+            val res = repository.submitLateArrivalReport(shiftId, reason, incidentDetails, estimatedArrival)
+            res.onSuccess { resp ->
+                _uiState.update {
+                    it.copy(
+                        isFilingLateReport = false,
+                        lastLateReportCaseNumber = resp.caseNumber,
+                        successMessage = "Late Arrival Report logged (Case #${resp.caseNumber}). You may now clock in."
+                    )
+                }
+                fetchOBEntries()
+                onSuccess(resp.caseNumber)
+            }.onFailure { err ->
+                _uiState.update { it.copy(isFilingLateReport = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun triggerEmergencySos(
+        context: Context,
+        category: String = "General Officer Distress",
+        emergencyDetails: String = "",
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDispatchingSos = true, errorMessage = null) }
+            val loc = LocationHelper.getDeviceLocation(context)
+            val res = repository.triggerSos(
+                latitude = loc?.first,
+                longitude = loc?.second,
+                category = category,
+                emergencyDetails = emergencyDetails
+            )
+            res.onSuccess { resp ->
+                NotificationHelper.triggerEmergencyNotification(
+                    context,
+                    "DISTRESS BEACON DISPATCHED",
+                    "Emergency SOS sent to station supervisor & central control."
+                )
+                _uiState.update {
+                    it.copy(
+                        isDispatchingSos = false,
+                        sosAlertMessage = "DISTRESS BEACON BROADCAST: All station supervisors alerted.",
+                        successMessage = "EMERGENCY SOS DISPATCHED: Central Control & Supervisor notified."
+                    )
+                }
+                fetchIncidents()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isDispatchingSos = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun fetchDirectMessages(withUser: String? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(messagesLoading = true) }
+            val res = repository.fetchDirectMessages(withUser)
+            res.onSuccess { msgs ->
+                _uiState.update { it.copy(directMessages = msgs, messagesLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(messagesLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun sendDirectMessage(recipientId: String, content: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            val res = repository.sendDirectMessage(recipientId, content)
+            res.onSuccess { msg ->
+                _uiState.update { state ->
+                    state.copy(
+                        directMessages = state.directMessages + msg,
+                        successMessage = "Message dispatched."
+                    )
+                }
+                fetchDirectMessages()
+                fetchUnreadMessageCount()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun fetchUnreadMessageCount() {
+        viewModelScope.launch {
+            val res = repository.fetchUnreadMessageCount()
+            res.onSuccess { count ->
+                _uiState.update { it.copy(unreadMessageCount = count) }
+            }
+        }
+    }
+
+    fun markDirectMessageRead(id: String) {
+        viewModelScope.launch {
+            repository.markDirectMessageRead(id)
+            fetchUnreadMessageCount()
         }
     }
 }

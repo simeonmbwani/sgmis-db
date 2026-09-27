@@ -32,7 +32,8 @@ fun AttendanceManagementScreen(
     onBack: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
+    val harareTz = remember { TimeZone.getTimeZone("Africa/Harare") }
+    val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = harareTz } }
     val today = remember { dateFormat.format(Date()) }
 
     var selectedDate by remember { mutableStateOf(today) }

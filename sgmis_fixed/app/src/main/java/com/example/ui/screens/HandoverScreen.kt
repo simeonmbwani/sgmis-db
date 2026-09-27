@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,7 +17,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -29,6 +32,7 @@ import com.example.ui.theme.GoldAccent
 import com.example.ui.theme.StatusSuccess
 import com.example.ui.theme.StatusWarning
 import com.example.ui.viewmodel.SgmisViewModel
+import com.example.util.NotificationHelper
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,15 +42,36 @@ fun HandoverScreen(
     onBack: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
     var selectedTab by remember { mutableStateOf(0) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var handoverToAccept by remember { mutableStateOf<ShiftHandover?>(null) }
     var handoverToReject by remember { mutableStateOf<ShiftHandover?>(null) }
 
     val currentUserRole = uiState.currentUser?.role
     val isSupervisor = currentUserRole == "SUPERVISOR"
+    val currentUserId = uiState.currentUser?.id
+    val isSupervisorOrAdmin = currentUserRole in listOf("SUPERVISOR", "ADMIN")
+
+    val pendingForMe = remember(uiState.handovers, currentUserId) {
+        uiState.handovers.filter {
+            !it.incomingAccepted && !it.isHandoverRejected && it.incomingGuard == currentUserId
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.fetchHandovers()
+    }
+
+    // Trigger operational notification when pending handover awaits incoming guard's physical verification
+    LaunchedEffect(pendingForMe.size) {
+        if (uiState.isGuard && pendingForMe.isNotEmpty()) {
+            NotificationHelper.triggerOperationalNotification(
+                context,
+                "Pending Shift Takeover",
+                "You have ${pendingForMe.size} pending shift handover(s) requiring your physical verification and acceptance."
+            )
+        }
     }
 
     // Auto-dismiss transient messages after 3.5 seconds
@@ -83,7 +108,7 @@ fun HandoverScreen(
             )
         },
         floatingActionButton = {
-            if (uiState.todayShift != null && !isSupervisor) {
+            if (uiState.todayShift != null && !isSupervisor && (!uiState.isGuard || uiState.isOnDuty)) {
                 ExtendedFloatingActionButton(
                     onClick = { showCreateDialog = true },
                     icon = { Icon(Icons.Default.Send, null) },
@@ -107,6 +132,25 @@ fun HandoverScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // Off-duty guard notice
+            if (uiState.isGuard && !uiState.isOnDuty) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Viewing mode: Submitting shift handovers requires an active clocked-in duty shift.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
             TabRow(
                 selectedTabIndex = selectedTab,
                 containerColor = MaterialTheme.colorScheme.surface,
@@ -194,13 +238,29 @@ fun HandoverScreen(
                             handover = handover,
                             currentUserId = currentUserId,
                             currentUserRole = currentUserRole,
-                            onAccept = { viewModel.acceptHandover(handover.id) },
+                            onAccept = { handoverToAccept = handover },
                             onReject = { handoverToReject = handover }
                         )
                     }
                 }
             }
         }
+    }
+
+    if (handoverToAccept != null) {
+        AcceptHandoverDialog(
+            handover = handoverToAccept!!,
+            isLoading = uiState.isLoading,
+            onDismiss = { handoverToAccept = null },
+            onConfirm = {
+                viewModel.acceptHandover(
+                    handoverId = handoverToAccept!!.id,
+                    onSuccess = {
+                        handoverToAccept = null
+                    }
+                )
+            }
+        )
     }
 
     if (handoverToReject != null) {
@@ -316,7 +376,7 @@ fun HandoverCard(
                 )
             }
 
-            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
 
             Text(
                 text = "Occurrence Summary:",
@@ -398,6 +458,160 @@ fun HandoverCard(
             }
         }
     }
+}
+
+@Composable
+fun AcceptHandoverDialog(
+    handover: ShiftHandover,
+    isLoading: Boolean = false,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    var confirmedVerification by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = { if (!isLoading) onDismiss() },
+        icon = {
+            Icon(
+                imageVector = Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(36.dp)
+            )
+        },
+        title = {
+            Text(
+                text = "Verify & Accept Shift Takeover",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleMedium
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Station:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(handover.stationName, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Outgoing Officer:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(handover.outgoingGuardName, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Incoming Officer:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(handover.incomingGuardName, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+
+                Text(
+                    text = "Shift Occurrence Summary:",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = handover.occurrenceSummary.ifBlank { "No occurrences logged." },
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Equipment Issued:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(handover.equipmentIssued, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Keys Handed Over:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(handover.keysHandedOver, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+
+                if (handover.pendingIssues.isNotBlank() && handover.pendingIssues != "None.") {
+                    Surface(
+                        color = StatusWarning.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, null, tint = StatusWarning, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column {
+                                Text("Pending Handover Discrepancies:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = StatusWarning)
+                                Text(handover.pendingIssues, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { confirmedVerification = !confirmedVerification }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = confirmedVerification,
+                        onCheckedChange = { confirmedVerification = it },
+                        modifier = Modifier.testTag("handover_verification_checkbox")
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "I physically verify and confirm receipt of all post equipment, keys, and security status from ${handover.outgoingGuardName}.",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = confirmedVerification && !isLoading,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                modifier = Modifier.testTag("confirm_accept_handover_button")
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Verifying...")
+                } else {
+                    Text("Confirm & Accept")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !isLoading) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable

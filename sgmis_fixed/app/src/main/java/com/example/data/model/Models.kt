@@ -11,6 +11,63 @@ data class PaginatedResponse<T>(
     val results: List<T> = emptyList()
 )
 
+enum class AppRole(val serverKey: String) {
+    GUARD("GUARD"),
+    SUPERVISOR("SUPERVISOR"),
+    ADMINISTRATOR("ADMINISTRATOR");
+
+    companion object {
+        fun fromString(role: String?): AppRole {
+            return when (role?.trim()?.uppercase()) {
+                "ADMIN", "ADMINISTRATOR", "SUPERUSER" -> ADMINISTRATOR
+                "SUPERVISOR", "STATION_SUPERVISOR", "STATION SUPERVISOR" -> SUPERVISOR
+                else -> GUARD
+            }
+        }
+    }
+}
+
+enum class GuardDutyState {
+    OFF_DUTY,          // No shift today, or shift already completed/clocked out
+    ELIGIBLE_FOR_DUTY, // Scheduled shift today, within report window (not yet clocked in)
+    ON_DUTY,           // Formally clocked in on authoritative shift, actively on post
+    TIME_OFF,          // Scheduled off-duty day
+    ON_LEAVE,          // Approved leave
+    EARLY_EXIT_PENDING; // Early departure requested/pending
+
+    val isOnDuty: Boolean get() = this == ON_DUTY
+    val isOffDuty: Boolean get() = this == OFF_DUTY || this == TIME_OFF || this == ON_LEAVE
+    val isEligibleForDuty: Boolean get() = this == ELIGIBLE_FOR_DUTY
+    val isOnLeave: Boolean get() = this == ON_LEAVE
+
+    companion object {
+        fun fromShift(shift: Shift?): GuardDutyState {
+            if (shift == null) return OFF_DUTY
+            val raw = shift.rawDutyState?.trim()?.uppercase()
+            if (raw == "ON_LEAVE") return ON_LEAVE
+            if (raw == "TIME_OFF") return TIME_OFF
+            if (raw == "ON_DUTY") return ON_DUTY
+            if (raw == "OFF_DUTY") return OFF_DUTY
+            if (raw == "ELIGIBLE_FOR_DUTY") return ELIGIBLE_FOR_DUTY
+            if (raw == "EARLY_EXIT_PENDING") return EARLY_EXIT_PENDING
+
+            val shiftTypeUpper = shift.shiftType.uppercase()
+            val assignmentTypeUpper = shift.assignmentType.uppercase()
+            if (shiftTypeUpper == "OFF" || assignmentTypeUpper == "TIME_OFF") {
+                return OFF_DUTY
+            }
+            return when (shift.attendanceStatus.trim().uppercase()) {
+                "CLOCKED_IN" -> ON_DUTY
+                "NOT_CLOCKED_IN" -> ELIGIBLE_FOR_DUTY
+                "CLOCKED_OUT", "OFF_DUTY" -> OFF_DUTY
+                "ON_LEAVE" -> ON_LEAVE
+                "TIME_OFF" -> TIME_OFF
+                else -> OFF_DUTY
+            }
+        }
+    }
+}
+
 @JsonClass(generateAdapter = true)
 data class User(
     val id: String,
@@ -27,7 +84,13 @@ data class User(
     @Json(name = "phone_number") val phoneNumber: String? = null,
     @Json(name = "profile_photo") val profilePhoto: String? = null,
     @Json(name = "is_active") val isActive: Boolean = true
-)
+) {
+    val appRole: AppRole get() = AppRole.fromString(role)
+    val isGuard: Boolean get() = appRole == AppRole.GUARD
+    val isSupervisor: Boolean get() = appRole == AppRole.SUPERVISOR
+    val isAdmin: Boolean get() = appRole == AppRole.ADMINISTRATOR
+    val isSupervisorOrAdmin: Boolean get() = appRole != AppRole.GUARD
+}
 
 @JsonClass(generateAdapter = true)
 data class AuthResponse(
@@ -63,8 +126,19 @@ data class Shift(
     @Json(name = "partner_employee_number") val partnerEmployeeNumber: String? = null,
     @Json(name = "is_override") val isOverride: Boolean = false,
     @Json(name = "override_reason") val overrideReason: String? = null,
-    @Json(name = "attendance_status") val attendanceStatus: String = "NOT_CLOCKED_IN"
-)
+    @Json(name = "attendance_status") val attendanceStatus: String = "NOT_CLOCKED_IN",
+    @Json(name = "duty_state") val rawDutyState: String? = null,
+    @Json(name = "leave_type") val leaveType: String? = null,
+    @Json(name = "late_report_required") val lateReportRequired: Boolean = false,
+    @Json(name = "is_serious_late") val isSeriousLate: Boolean = false,
+    @Json(name = "is_late") val isLate: Boolean = false
+) {
+    val dutyState: GuardDutyState get() = GuardDutyState.fromShift(this)
+    val isOnDuty: Boolean get() = dutyState == GuardDutyState.ON_DUTY
+    val isOffDuty: Boolean get() = dutyState.isOffDuty
+    val isEligibleForDuty: Boolean get() = dutyState == GuardDutyState.ELIGIBLE_FOR_DUTY
+    val isOnLeave: Boolean get() = dutyState == GuardDutyState.ON_LEAVE
+}
 
 @JsonClass(generateAdapter = true)
 data class Attendance(
@@ -91,7 +165,8 @@ data class ClockInRequest(
     @Json(name = "shift_id") val shiftId: String,
     val latitude: Double? = null,
     val longitude: Double? = null,
-    @Json(name = "late_reason") val lateReason: String? = null
+    @Json(name = "late_reason") val lateReason: String? = null,
+    @Json(name = "case_number") val caseNumber: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -101,7 +176,8 @@ data class ClockOutRequest(
     val longitude: Double? = null,
     @Json(name = "supervisor_username") val supervisorUsername: String? = null,
     @Json(name = "supervisor_password") val supervisorPassword: String? = null,
-    @Json(name = "override_reason") val overrideReason: String? = null
+    @Json(name = "override_reason") val overrideReason: String? = null,
+    @Json(name = "otp_code") val otpCode: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -183,6 +259,7 @@ data class OccurrenceBookEntry(
     @Json(name = "check_record") val checkRecord: String? = null,
     @Json(name = "cross_reference") val crossReference: String? = null,
     val amendments: List<OBAmendment> = emptyList(),
+    @Json(name = "is_amendable") val isAmendable: Boolean = false,
     @Json(name = "created_at") val createdAt: String
 )
 
@@ -307,7 +384,10 @@ data class LeaveBalance(
     @Json(name = "remaining_casual") val remainingCasual: Double = 0.0,
     @Json(name = "remaining_vacation") val remainingVacation: Double = 0.0,
     @Json(name = "last_accrual_date") val lastAccrualDate: String? = null,
-    @Json(name = "casual_cycle_start") val casualCycleStart: String? = null
+    @Json(name = "casual_cycle_start") val casualCycleStart: String? = null,
+    @Json(name = "compensation_earned") val compensationEarned: Double = 0.0,
+    @Json(name = "compensation_used") val compensationUsed: Double = 0.0,
+    @Json(name = "remaining_compensation") val remainingCompensation: Double = 0.0
 )
 
 @JsonClass(generateAdapter = true)
@@ -342,6 +422,9 @@ data class LeaveApplication(
     val reason: String,
     @Json(name = "emergency_phone") val emergencyPhone: String? = null,
     @Json(name = "emergency_address") val emergencyAddress: String? = null,
+    @Json(name = "doctor_report") val doctorReport: String? = null,
+    @Json(name = "doctor_report_verified") val doctorReportVerified: Boolean = false,
+    @Json(name = "event_details") val eventDetails: String? = null,
     val status: String,
     @Json(name = "status_display") val statusDisplay: String? = null,
     @Json(name = "reviewer_name") val reviewerName: String? = null,
@@ -358,7 +441,33 @@ data class CreateLeaveRequest(
     @Json(name = "end_date") val endDate: String,
     val reason: String,
     @Json(name = "emergency_phone") val emergencyPhone: String? = null,
-    @Json(name = "emergency_address") val emergencyAddress: String? = null
+    @Json(name = "emergency_address") val emergencyAddress: String? = null,
+    @Json(name = "doctor_report") val doctorReport: String? = null,
+    @Json(name = "event_details") val eventDetails: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class LeaveAccrualRecord(
+    val id: String,
+    val guard: String,
+    @Json(name = "guard_name") val guardName: String? = null,
+    val year: Int,
+    val month: Int,
+    @Json(name = "casual_credited") val casualCredited: Double = 1.0,
+    @Json(name = "vacation_credited") val vacationCredited: Double = 2.5,
+    @Json(name = "casual_balance_after") val casualBalanceAfter: Double = 0.0,
+    @Json(name = "vacation_balance_after") val vacationBalanceAfter: Double = 0.0,
+    val notes: String = "",
+    @Json(name = "created_by_name") val createdByName: String? = null,
+    @Json(name = "created_at") val createdAt: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class ProcessAccrualResponse(
+    val message: String,
+    @Json(name = "records_created") val recordsCreated: Int = 0,
+    @Json(name = "guards_evaluated") val guardsEvaluated: Int = 0,
+    @Json(name = "as_of_date") val asOfDate: String = ""
 )
 
 @JsonClass(generateAdapter = true)
@@ -631,9 +740,43 @@ data class AutoAllocateResponse(
 
 @JsonClass(generateAdapter = true)
 data class ApproveRosterRequest(
-    @Json(name = "station_id") val stationId: String,
+    @Json(name = "roster_id") val rosterId: String? = null,
+    @Json(name = "station_id") val stationId: String? = null,
     @Json(name = "start_date") val startDate: String? = null,
     @Json(name = "end_date") val endDate: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class RosterApproveResponse(
+    val approved: Boolean = false,
+    val status: String? = null,
+    @Json(name = "roster_id") val rosterId: String? = null,
+    val station: String? = null,
+    @Json(name = "approved_by") val approvedBy: String? = null,
+    @Json(name = "approved_at") val approvedAt: String? = null,
+    val message: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ValidateRosterRequest(
+    @Json(name = "roster_id") val rosterId: String? = null,
+    @Json(name = "station_id") val stationId: String? = null,
+    @Json(name = "start_date") val startDate: String? = null,
+    @Json(name = "end_date") val endDate: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ValidateRosterResponse(
+    val valid: Boolean = false,
+    val status: String? = null,
+    val errors: List<String> = emptyList(),
+    val warnings: List<String> = emptyList(),
+    val message: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class CreditHolidayRequest(
+    val days: Double = 2.0
 )
 
 @JsonClass(generateAdapter = true)
@@ -796,4 +939,121 @@ data class UpdateUserRequest(
 data class UpdateDutyStatusRequest(
     val status: String? = null,
     val notes: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class PublicHoliday(
+    val id: String,
+    val name: String,
+    val date: String,
+    @Json(name = "country_code") val countryCode: String = "ZW",
+    val description: String? = "",
+    @Json(name = "is_active") val isActive: Boolean = true
+)
+
+@JsonClass(generateAdapter = true)
+data class PublicHolidayDutyRecord(
+    val id: String,
+    @Json(name = "public_holiday") val publicHoliday: String,
+    @Json(name = "public_holiday_name") val publicHolidayName: String? = null,
+    val shift: String,
+    @Json(name = "shift_date") val shiftDate: String? = null,
+    @Json(name = "station_name") val stationName: String? = null,
+    val guard: String,
+    @Json(name = "guard_name") val guardName: String? = null,
+    val attendance: String,
+    @Json(name = "compensated_days") val compensatedDays: Double = 2.0,
+    val status: String = "PENDING",
+    @Json(name = "approved_by") val approvedBy: String? = null,
+    @Json(name = "approved_by_name") val approvedByName: String? = null,
+    @Json(name = "approved_at") val approvedAt: String? = null,
+    @Json(name = "decision_reason") val decisionReason: String? = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class ReviewHolidayDutyRequest(
+    val reason: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class GenerateEarlyClockoutOtpRequest(
+    @Json(name = "shift_id") val shiftId: String,
+    val reason: String
+)
+
+@JsonClass(generateAdapter = true)
+data class GenerateEarlyClockoutOtpResponse(
+    val otp: String,
+    @Json(name = "expires_in_seconds") val expiresInSeconds: Int = 300,
+    @Json(name = "shift_id") val shiftId: String,
+    @Json(name = "guard_username") val guardUsername: String? = null,
+    @Json(name = "guard_name") val guardName: String? = null,
+    @Json(name = "station_name") val stationName: String? = null,
+    @Json(name = "expires_at") val expiresAt: String? = null,
+    val reason: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class DirectMessage(
+    val id: String,
+    val sender: String,
+    @Json(name = "sender_name") val senderName: String = "",
+    val recipient: String,
+    @Json(name = "recipient_name") val recipientName: String = "",
+    val content: String,
+    val read: Boolean = false,
+    @Json(name = "created_at") val createdAt: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class DirectMessageCreateRequest(
+    val recipient: String,
+    val content: String
+)
+
+@JsonClass(generateAdapter = true)
+data class LateArrivalReportRequest(
+    @Json(name = "shift_id") val shiftId: String,
+    val reason: String,
+    @Json(name = "incident_details") val incidentDetails: String = "",
+    @Json(name = "estimated_arrival") val estimatedArrival: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class LateArrivalReportResponse(
+    val message: String = "",
+    @Json(name = "case_number") val caseNumber: String = "",
+    @Json(name = "shift_id") val shiftId: String = "",
+    val status: String = "",
+    @Json(name = "reported_at") val reportedAt: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class SosDistressRequest(
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val category: String = "General Officer Distress",
+    @Json(name = "emergency_details") val emergencyDetails: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class SosDistressResponse(
+    val status: String = "",
+    @Json(name = "sos_dispatched") val sosDispatched: Boolean = false,
+    @Json(name = "incident_id") val incidentId: String = "",
+    val title: String = "",
+    val station: String = "",
+    val officer: String = "",
+    val message: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class DutyStateResponse(
+    @Json(name = "guard_id") val guardId: String = "",
+    @Json(name = "guard_name") val guardName: String = "",
+    val station: String? = null,
+    @Json(name = "duty_state") val dutyState: String = "OFF_DUTY",
+    @Json(name = "leave_type") val leaveType: String? = null,
+    @Json(name = "is_on_duty") val isOnDuty: Boolean = false,
+    @Json(name = "is_off_duty") val isOffDuty: Boolean = true
 )

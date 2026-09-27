@@ -23,6 +23,11 @@ class ShiftSerializer(serializers.ModelSerializer):
     partner_name = serializers.SerializerMethodField()
     partner_employee_number = serializers.SerializerMethodField()
     attendance_status = serializers.SerializerMethodField()
+    duty_state = serializers.SerializerMethodField()
+    leave_type = serializers.SerializerMethodField()
+    late_report_required = serializers.SerializerMethodField()
+    is_serious_late = serializers.SerializerMethodField()
+    is_late = serializers.SerializerMethodField()
 
     class Meta:
         model = Shift
@@ -47,6 +52,11 @@ class ShiftSerializer(serializers.ModelSerializer):
             "is_override",
             "override_reason",
             "attendance_status",
+            "duty_state",
+            "leave_type",
+            "late_report_required",
+            "is_serious_late",
+            "is_late",
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
@@ -89,6 +99,103 @@ class ShiftSerializer(serializers.ModelSerializer):
         if att.clock_in:
             return "CLOCKED_IN"
         return "NOT_CLOCKED_IN"
+
+    def get_duty_state(self, obj):
+        from apps.leave.models import LeaveApplication, LeaveStatus
+        leave_app = getattr(obj, "_leave_app", None)
+        if leave_app is None:
+            leave_app = LeaveApplication.objects.filter(
+                guard=obj.guard,
+                status=LeaveStatus.APPROVED,
+                start_date__lte=obj.date,
+                end_date__gte=obj.date,
+            ).first()
+        if leave_app:
+            return "ON_LEAVE"
+
+        if obj.assignment_type == AssignmentType.TIME_OFF or obj.shift_type == ShiftType.OFF:
+            return "TIME_OFF"
+
+        att = getattr(obj, "_attendance_record", None)
+        if att is None:
+            att = Attendance.objects.filter(shift=obj, guard=obj.guard).first()
+
+        if att and att.clock_in and not att.clock_out:
+            from django.core.cache import cache
+            if cache.get(f"early_clockout_otp_{obj.id}"):
+                return "EARLY_EXIT_PENDING"
+            return "ON_DUTY"
+
+        if att and att.clock_out:
+            return "OFF_DUTY"
+
+        from django.utils import timezone
+        from datetime import datetime, timedelta
+        now = timezone.localtime(timezone.now())
+        if obj.date != now.date():
+            return "OFF_DUTY"
+
+        sched_start_dt = timezone.make_aware(datetime.combine(obj.date, obj.start_time), timezone.get_current_timezone())
+        if obj.end_time <= obj.start_time:
+            sched_end_dt = timezone.make_aware(datetime.combine(obj.date + timedelta(days=1), obj.end_time), timezone.get_current_timezone())
+        else:
+            sched_end_dt = timezone.make_aware(datetime.combine(obj.date, obj.end_time), timezone.get_current_timezone())
+
+        reporting_open = sched_start_dt - timedelta(minutes=30)
+        if now < reporting_open:
+            return "OFF_DUTY"
+        if now > sched_end_dt:
+            return "OFF_DUTY"
+
+        return "ELIGIBLE_FOR_DUTY"
+
+    def get_leave_type(self, obj):
+        from apps.leave.models import LeaveApplication, LeaveStatus
+        leave_app = getattr(obj, "_leave_app", None)
+        if leave_app is None:
+            leave_app = LeaveApplication.objects.filter(
+                guard=obj.guard,
+                status=LeaveStatus.APPROVED,
+                start_date__lte=obj.date,
+                end_date__gte=obj.date,
+            ).first()
+        return leave_app.leave_type if leave_app else None
+
+    def get_late_report_required(self, obj):
+        att = getattr(obj, "_attendance_record", None)
+        if att is None:
+            att = Attendance.objects.filter(shift=obj, guard=obj.guard).first()
+        if att and att.clock_in:
+            return False
+        from django.utils import timezone
+        from datetime import datetime, timedelta
+        now = timezone.localtime(timezone.now())
+        if obj.date != now.date():
+            return False
+        sched_start_dt = timezone.make_aware(datetime.combine(obj.date, obj.start_time), timezone.get_current_timezone())
+        return now >= (sched_start_dt + timedelta(minutes=60))
+
+    def get_is_serious_late(self, obj):
+        att = getattr(obj, "_attendance_record", None)
+        if att is None:
+            att = Attendance.objects.filter(shift=obj, guard=obj.guard).first()
+        if att and att.is_serious_late:
+            return True
+        return self.get_late_report_required(obj)
+
+    def get_is_late(self, obj):
+        att = getattr(obj, "_attendance_record", None)
+        if att is None:
+            att = Attendance.objects.filter(shift=obj, guard=obj.guard).first()
+        if att:
+            return att.is_late
+        from django.utils import timezone
+        from datetime import datetime, timedelta
+        now = timezone.localtime(timezone.now())
+        if obj.date != now.date():
+            return False
+        sched_start_dt = timezone.make_aware(datetime.combine(obj.date, obj.start_time), timezone.get_current_timezone())
+        return now > (sched_start_dt + timedelta(minutes=15))
 
 class ShiftHandoverSerializer(serializers.ModelSerializer):
     station_name = serializers.CharField(source="station.name", read_only=True)
@@ -185,6 +292,13 @@ class ClockInRequestSerializer(serializers.Serializer):
     latitude = serializers.FloatField(required=False, default=None)
     longitude = serializers.FloatField(required=False, default=None)
     late_reason = serializers.CharField(required=False, allow_blank=True, default="")
+    case_number = serializers.CharField(required=False, allow_blank=True, default="")
+
+class LateArrivalReportRequestSerializer(serializers.Serializer):
+    shift_id = serializers.UUIDField(required=True)
+    reason = serializers.CharField(required=True, min_length=5)
+    latitude = serializers.FloatField(required=False, allow_null=True, default=None)
+    longitude = serializers.FloatField(required=False, allow_null=True, default=None)
 
 class ClockOutRequestSerializer(serializers.Serializer):
     shift_id = serializers.UUIDField(required=True)
@@ -193,6 +307,11 @@ class ClockOutRequestSerializer(serializers.Serializer):
     supervisor_username = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
     supervisor_password = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="", write_only=True)
     override_reason = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    otp_code = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+
+class GenerateEarlyClockoutOTPRequestSerializer(serializers.Serializer):
+    shift_id = serializers.UUIDField(required=True)
+    reason = serializers.CharField(required=True, min_length=5)
 
 class ExaminationPeriodSerializer(serializers.ModelSerializer):
     station_name = serializers.CharField(source="station.name", read_only=True)

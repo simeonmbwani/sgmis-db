@@ -1,9 +1,11 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import NotificationViewSet
+from .views import NotificationViewSet, DirectMessageViewSet
 
 router = DefaultRouter()
-router.register(r"alerts", NotificationViewSet, basename="notification")
+router.register(r"alerts", NotificationViewSet, basename="notification-alerts")
+router.register(r"messages", DirectMessageViewSet, basename="messages")
+router.register(r"", NotificationViewSet, basename="notification")
 
 broadcast_view = NotificationViewSet.as_view({"get": "broadcast", "post": "broadcast"})
 

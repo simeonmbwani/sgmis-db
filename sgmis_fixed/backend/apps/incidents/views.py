@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -8,6 +9,7 @@ from .serializers import IncidentReportSerializer, IncidentAmendmentSerializer
 from apps.accounts.models import User, UserRole
 from apps.accounts.views import get_client_ip
 from apps.accounts.permissions import IsAdministrator, IsSupervisorOrAdmin
+from apps.shifts.models import Shift
 from apps.notifications.models import Notification
 from apps.core.models import SecurityAuditEvent
 from apps.core.audit import log_security_event
@@ -242,3 +244,96 @@ class IncidentReportViewSet(viewsets.ModelViewSet):
             "message": f"Incident {incident.title} has been archived.",
             "is_archived": True,
         }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="sos")
+    def trigger_sos(self, request):
+        """
+        POST /incidents/reports/sos/ (and /incidents/sos/)
+        Real SOS Distress Beacon activation:
+        - Confirmed emergency action by authenticated officer.
+        - Records critical emergency incident.
+        - Captures guard, employee number, station, GPS coordinates, timestamp, category.
+        - Sends immediate high-priority emergency notifications to Station Supervisors & Central Administration.
+        """
+        user = request.user
+        category = request.data.get("category", "General Officer Distress").strip()
+        gps = request.data.get("gps", "").strip() or request.data.get("gps_coords", "").strip()
+        latitude = request.data.get("latitude")
+        longitude = request.data.get("longitude")
+        if not gps and latitude is not None and longitude is not None:
+            gps = f"{latitude},{longitude}"
+
+        station = user.station
+        if not station:
+            today_shift = Shift.objects.filter(guard=user, date=timezone.localdate()).select_related("station").first()
+            if today_shift:
+                station = today_shift.station
+
+        if not station:
+            raise ValidationError({"station": "Your account has no station assigned to broadcast an SOS distress alert."})
+
+        now_dt = timezone.now()
+        emp_num = getattr(user, "employee_number", "N/A") or "N/A"
+        guard_name = user.get_full_name().strip() or user.username
+
+        title = f"EMERGENCY SOS: {category} - {guard_name}"
+        location_str = f"{station.name} (GPS: {gps})" if gps else station.name
+        description = (
+            f"CRITICAL SOS EMERGENCY BEACON TRIGGERED.\n"
+            f"Officer: {guard_name} (Employee ID: {emp_num}, Username: {user.username}).\n"
+            f"Station: {station.name}.\n"
+            f"Category: {category}.\n"
+            f"Coordinates: {gps or 'No GPS Fix'}.\n"
+            f"Timestamp: {now_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}.\n"
+            f"Priority 1 Dispatch Alert."
+        )
+
+        incident = IncidentReport.objects.create(
+            station=station,
+            reporting_guard=user,
+            priority=IncidentPriority.CRITICAL,
+            title=title,
+            description=description,
+            location=location_str,
+            status=IncidentStatus.REPORTED,
+        )
+
+        supervisors = list(User.objects.filter(role=UserRole.SUPERVISOR, station=station, is_active=True))
+        admins = list(User.objects.filter(role=UserRole.ADMINISTRATOR, is_active=True))
+        recipients = {u.id: u for u in (supervisors + admins)}
+
+        for r in recipients.values():
+            Notification.objects.create(
+                user=r,
+                title=f"🚨 CRITICAL SOS DISTRESS BEACON: {station.name} - {guard_name}",
+                message=f"Officer {guard_name} triggered Emergency SOS at {station.name}. Category: {category}. Coordinates: {gps}. Immediate response required.",
+                notification_type="EMERGENCY_SOS",
+            )
+
+        log_security_event(
+            event_type="SOS_BEACON_ACTIVATION",
+            actor=user,
+            actor_username=user.username,
+            ip_address=get_client_ip(request),
+            target_model="IncidentReport",
+            target_id=str(incident.id),
+            details={
+                "category": category,
+                "station": station.name,
+                "gps": gps,
+                "timestamp": now_dt.isoformat(),
+            }
+        )
+
+        return Response({
+            "status": "SOS_DISPATCHED",
+            "sos_dispatched": True,
+            "incident_id": str(incident.id),
+            "title": incident.title,
+            "station": station.name,
+            "officer": guard_name,
+            "employee_number": emp_num,
+            "timestamp": now_dt.isoformat(),
+            "message": "Emergency SOS distress alarm dispatched to station supervisors and administration.",
+        }, status=status.HTTP_201_CREATED)
+

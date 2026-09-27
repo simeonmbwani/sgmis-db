@@ -1163,10 +1163,10 @@ def approve_holiday_compensation(duty_record, user, reason=""):
                 f"Cannot approve compensation with status '{locked_record.get_status_display()}'. Only PENDING records can be approved."
             )
 
-        # Authoritative Phase 5C accounting: Public-holiday compensation is a separate stream
-        # and must NEVER be added to LeaveBalance.vacation_days.
-        # Record an EARNED transaction in PublicHolidayCompensationLedger.
-        from apps.leave.models import PublicHolidayCompensationLedger, CompensationLedgerEntryType
+        # Authoritative Phase 5C accounting: Public-holiday compensation
+        # 1. Record an EARNED transaction in PublicHolidayCompensationLedger.
+        # 2. Ensure guard has a LeaveBalance record and credit 2 days to vacation balance.
+        from apps.leave.models import PublicHolidayCompensationLedger, CompensationLedgerEntryType, LeaveBalance
         from decimal import Decimal
 
         PublicHolidayCompensationLedger.objects.get_or_create(

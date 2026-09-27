@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     LeaveBalanceViewSet,
     LeaveApplicationViewSet,
+    LeaveAccrualRecordViewSet,
     PublicHolidayCompensationLedgerViewSet,
     GuardLeaveSummaryView,
 )
@@ -10,9 +11,11 @@ from .views import (
 router = DefaultRouter()
 router.register(r"balances", LeaveBalanceViewSet, basename="leave_balance")
 router.register(r"applications", LeaveApplicationViewSet, basename="leave_application")
+router.register(r"accruals", LeaveAccrualRecordViewSet, basename="leave_accrual")
 router.register(r"compensation-ledger", PublicHolidayCompensationLedgerViewSet, basename="compensation_ledger")
 
 urlpatterns = [
     path("my-summary/", GuardLeaveSummaryView.as_view(), name="my_leave_summary"),
+    path("my_summary/", GuardLeaveSummaryView.as_view(), name="my_leave_summary_underscore"),
     path("", include(router.urls)),
 ]

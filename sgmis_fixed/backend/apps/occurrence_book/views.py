@@ -116,13 +116,22 @@ class OccurrenceBookEntryViewSet(viewsets.ModelViewSet):
         entry = self.get_object()
         user = request.user
 
-        # Boundary check: Guards & Supervisors can only amend entries belonging to their station
-        if user.role in (UserRole.GUARD, UserRole.SUPERVISOR):
+        # Boundary check: Guards can only amend their own entries within 24 hours; Supervisors scoped to station
+        if user.role == UserRole.GUARD:
+            if str(entry.guard_id) != str(user.id):
+                raise PermissionDenied("You can only amend your own Occurrence Book entries.")
+            from datetime import timedelta
+            elapsed = timezone.now() - entry.created_at
+            if elapsed > timedelta(hours=24):
+                raise ValidationError(
+                    {"detail": f"Amendment window expired: Occurrence Book entries can only be amended within 24 hours of creation (elapsed: {int(elapsed.total_seconds() // 3600)} hrs)."}
+                )
+        elif user.role == UserRole.SUPERVISOR:
             if not user.station or entry.station_id != user.station_id:
                 raise PermissionDenied("You can only amend records from your assigned station.")
 
         reason = str(request.data.get("reason", "")).strip()
-        amended_text = str(request.data.get("amended_text", "")).strip()
+        amended_text = str(request.data.get("amended_text") or request.data.get("correction_text") or "").strip()
 
         if not reason:
             raise ValidationError({"reason": "A mandatory reason is required to amend an evidence record."})

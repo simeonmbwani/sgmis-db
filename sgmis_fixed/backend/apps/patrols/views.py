@@ -37,10 +37,18 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = super().get_queryset()
+        station_id = self.request.query_params.get("station")
+
         if user.role == UserRole.GUARD:
             return qs.filter(guard=user)
-        elif user.role == UserRole.SUPERVISOR and user.station:
-            return qs.filter(station=user.station)
+        elif user.role == UserRole.SUPERVISOR:
+            if user.station:
+                return qs.filter(station=user.station)
+            return qs.none()
+        elif user.role == UserRole.ADMINISTRATOR:
+            if station_id:
+                return qs.filter(station_id=station_id)
+            return qs
         return qs
 
     def perform_create(self, serializer):
@@ -103,9 +111,17 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
         # Extract proof parameters
         qr_token = request.data.get("qr_token") or request.data.get("qr_code", "")
         nfc_uid = request.data.get("nfc_uid", "")
-        gps_coords = request.data.get("gps_coords", "")
+        gps_coords = request.data.get("gps_coords", "") or request.data.get("gps", "")
         lat_val = request.data.get("latitude")
         lon_val = request.data.get("longitude")
+        if (lat_val is None or lon_val is None) and gps_coords and "," in str(gps_coords):
+            try:
+                parts = str(gps_coords).split(",")
+                if len(parts) == 2:
+                    lat_val = parts[0].strip()
+                    lon_val = parts[1].strip()
+            except Exception:
+                pass
         notes = request.data.get("notes", "Checkpoint verified secure.")
 
         verified = False

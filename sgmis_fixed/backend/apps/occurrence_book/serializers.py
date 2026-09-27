@@ -29,6 +29,7 @@ class OccurrenceBookEntrySerializer(serializers.ModelSerializer):
     category_display = serializers.CharField(source="get_category_display", read_only=True)
     cross_reference = serializers.CharField(source="check_record", required=False, allow_blank=True)
     amendments = OBAmendmentSerializer(many=True, read_only=True)
+    is_amendable = serializers.SerializerMethodField()
 
     class Meta:
         model = OccurrenceBookEntry
@@ -46,6 +47,7 @@ class OccurrenceBookEntrySerializer(serializers.ModelSerializer):
             "check_record",
             "cross_reference",
             "amendments",
+            "is_amendable",
             "created_at",
         ]
         read_only_fields = ["id", "entry_number", "guard", "created_at"]
@@ -80,3 +82,16 @@ class OccurrenceBookEntrySerializer(serializers.ModelSerializer):
     def get_guard_name(self, obj):
         name = obj.guard.get_full_name().strip()
         return name if name else obj.guard.username
+
+    def get_is_amendable(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+        user = request.user
+        if user.role == "GUARD":
+            if str(obj.guard_id) != str(user.id):
+                return False
+            from django.utils import timezone
+            from datetime import timedelta
+            return (timezone.now() - obj.created_at) <= timedelta(hours=24)
+        return True

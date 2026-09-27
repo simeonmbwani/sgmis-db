@@ -17,6 +17,11 @@ import com.example.data.api.ApiClient
 import com.example.data.api.SessionManager
 import com.example.data.local.SgmisDatabase
 import com.example.data.repository.SgmisRepository
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import com.example.data.model.AppRole
+import com.example.ui.navigation.NavRoutes
+import com.example.ui.navigation.RoleRouter
 import android.view.WindowManager
 import com.example.ui.screens.*
 import com.example.ui.theme.MyApplicationTheme
@@ -51,6 +56,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Authoritative State Refresh: re-sync shifts, attendance & station state on app resume
+        viewModelRef?.refreshAuthoritativeState()
+    }
+
     override fun onUserInteraction() {
         super.onUserInteraction()
         // Signal user interaction to reset 3-minute idle inactivity auto-logout timer
@@ -62,33 +73,76 @@ class MainActivity : ComponentActivity() {
 fun SgmisApp(viewModel: SgmisViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     val navController = rememberNavController()
+    val snackbarHostState = remember { SnackbarHostState() }
 
-    // React to login/logout state changes
+    LaunchedEffect(uiState.errorMessage) {
+        uiState.errorMessage?.let { msg ->
+            snackbarHostState.showSnackbar(msg)
+            viewModel.clearError()
+        }
+    }
+
+    val safeNavigate: (String) -> Unit = { route ->
+        if (!RoleRouter.isRouteAllowed(route, uiState.appRole)) {
+            viewModel.postSecurityAlert("Access Denied: You do not have permission to access this module.")
+        } else if (!RoleRouter.isRouteAccessible(route, uiState.appRole, uiState.guardDutyState)) {
+            viewModel.postSecurityAlert("Duty Lock: You must be CLOCKED IN (On Duty) to access operational records.")
+        } else {
+            navController.navigate(route)
+        }
+    }
+
+    // React to login/logout state changes and route to role-authoritative dashboard
     LaunchedEffect(uiState.isLoggedIn) {
         if (uiState.isLoggedIn) {
-            navController.navigate("dashboard") {
-                popUpTo("login") { inclusive = true }
+            val targetRoute = RoleRouter.getDashboardRoute(uiState.appRole)
+            navController.navigate(targetRoute) {
+                popUpTo(NavRoutes.LOGIN) { inclusive = true }
             }
         } else {
-            navController.navigate("login") {
+            navController.navigate(NavRoutes.LOGIN) {
                 popUpTo(0) { inclusive = true }
             }
         }
     }
 
-    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = if (uiState.isLoggedIn) "dashboard" else "login",
+            startDestination = if (uiState.isLoggedIn) RoleRouter.getDashboardRoute(uiState.appRole) else NavRoutes.LOGIN,
             modifier = Modifier.padding(innerPadding)
         ) {
-            composable("login") {
+            composable(NavRoutes.LOGIN) {
                 LoginScreen(viewModel = viewModel)
             }
-            composable("dashboard") {
+            composable(NavRoutes.DASHBOARD) {
                 DashboardScreen(
                     viewModel = viewModel,
-                    onNavigate = { route -> navController.navigate(route) }
+                    onNavigate = safeNavigate
+                )
+            }
+            composable(NavRoutes.GUARD_DASHBOARD) {
+                DashboardScreen(
+                    viewModel = viewModel,
+                    roleMode = AppRole.GUARD,
+                    onNavigate = safeNavigate
+                )
+            }
+            composable(NavRoutes.SUPERVISOR_DASHBOARD) {
+                DashboardScreen(
+                    viewModel = viewModel,
+                    roleMode = AppRole.SUPERVISOR,
+                    onNavigate = safeNavigate
+                )
+            }
+            composable(NavRoutes.ADMIN_DASHBOARD) {
+                DashboardScreen(
+                    viewModel = viewModel,
+                    roleMode = AppRole.ADMINISTRATOR,
+                    onNavigate = safeNavigate
                 )
             }
             composable("today_shift") {

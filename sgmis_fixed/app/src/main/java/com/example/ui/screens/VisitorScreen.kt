@@ -38,6 +38,7 @@ fun VisitorScreen(
 
     val currentUserRole = uiState.currentUser?.role?.uppercase()
     val isSupervisor = currentUserRole == "SUPERVISOR"
+    val canLogVisitor = !isSupervisor && (!uiState.isGuard || uiState.isOnDuty)
 
     LaunchedEffect(Unit) {
         viewModel.fetchVisitors()
@@ -54,7 +55,12 @@ fun VisitorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.visitors_title), fontWeight = FontWeight.Bold) },
+                title = {
+                    Column {
+                        Text("Visitor Book", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        Text("Official Gate Register • ${uiState.currentStationName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("visitor_back_button")) {
                         Icon(
@@ -75,7 +81,7 @@ fun VisitorScreen(
             )
         },
         floatingActionButton = {
-            if (!isSupervisor) {
+            if (canLogVisitor) {
                 ExtendedFloatingActionButton(
                     onClick = { showLogDialog = true },
                     icon = { Icon(Icons.Default.PersonAdd, null) },
@@ -92,6 +98,25 @@ fun VisitorScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // Off-duty guard notice
+            if (uiState.isGuard && !uiState.isOnDuty) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Viewing mode: You must be CLOCKED IN (On Duty) to register visitors or issue gate passes.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
             // Notification banners
             if (uiState.successMessage != null) {
                 Surface(
@@ -286,7 +311,7 @@ fun VisitorEntryCard(entry: OccurrenceBookEntry) {
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(

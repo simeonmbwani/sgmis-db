@@ -87,8 +87,17 @@ interface ApiService {
     @POST("shifts/shifts/generate/")
     suspend fun generateRoster(@Body request: GenerateRosterRequest): Response<GenerateRosterResponse>
 
+    @POST("shifts/shifts/validate_roster/")
+    suspend fun validateRoster(@Body request: ValidateRosterRequest): Response<ValidateRosterResponse>
+
     @POST("shifts/shifts/approve_roster/")
-    suspend fun approveRoster(@Body request: ApproveRosterRequest): Response<NotificationActionResponse>
+    suspend fun approveRoster(@Body request: ApproveRosterRequest): Response<RosterApproveResponse>
+
+    @POST("shifts/duty-rosters/approve/")
+    suspend fun approveDutyRoster(@Body request: ApproveRosterRequest): Response<RosterApproveResponse>
+
+    @POST("shifts/duty-rosters/validate/")
+    suspend fun validateDutyRoster(@Body request: ValidateRosterRequest): Response<ValidateRosterResponse>
 
     @POST("shifts/shifts/detect_conflicts/")
     suspend fun detectConflicts(@Body request: DetectConflictsRequest): Response<ConflictReport>
@@ -208,7 +217,7 @@ interface ApiService {
     @GET("leave/balances/my_balance/")
     suspend fun getLeaveBalance(): Response<LeaveBalance>
 
-    @GET("leave/my-summary/")
+    @GET("leave/balances/my-summary/")
     suspend fun getLeaveSummary(): Response<LeaveSummary>
 
     @GET("leave/applications/")
@@ -226,8 +235,17 @@ interface ApiService {
     @POST("leave/balances/{id}/credit_holiday/")
     suspend fun creditHoliday(
         @Path("id") id: String,
-        @Body request: Map<String, Double>
+        @Body request: CreditHolidayRequest
     ): Response<LeaveBalance>
+
+    @GET("leave/balances/")
+    suspend fun getAllLeaveBalances(@Query("station") stationId: String? = null): Response<List<LeaveBalance>>
+
+    @GET("leave/accrual-records/")
+    suspend fun getLeaveAccrualRecords(): Response<List<LeaveAccrualRecord>>
+
+    @POST("leave/balances/process-accruals/")
+    suspend fun processMonthlyAccruals(@Body body: Map<String, String> = emptyMap()): Response<ProcessAccrualResponse>
 
     // --- Escorts (Vehicle & Security) ---
     @GET("escorts/duties/")
@@ -276,5 +294,65 @@ interface ApiService {
 
     @POST("notifications/alerts/broadcast/")
     suspend fun broadcastNotice(@Body request: BroadcastNoticeRequest): Response<BroadcastNoticeResponse>
+
+    // --- Public Holidays & Holiday Duties (National Engine) ---
+    @GET("shifts/public-holidays/")
+    suspend fun getPublicHolidays(): Response<List<PublicHoliday>>
+
+    @GET("shifts/holiday-duties/")
+    suspend fun getHolidayDuties(
+        @Query("status") status: String? = null,
+        @Query("station") station: String? = null
+    ): Response<List<PublicHolidayDutyRecord>>
+
+    @POST("shifts/holiday-duties/{id}/approve/")
+    suspend fun approveHolidayDuty(
+        @Path("id") id: String,
+        @Body request: ReviewHolidayDutyRequest = ReviewHolidayDutyRequest()
+    ): Response<PublicHolidayDutyRecord>
+
+    @POST("shifts/holiday-duties/{id}/reject/")
+    suspend fun rejectHolidayDuty(
+        @Path("id") id: String,
+        @Body request: ReviewHolidayDutyRequest = ReviewHolidayDutyRequest()
+    ): Response<PublicHolidayDutyRecord>
+
+    // --- Early Clock-Out OTP Generation (Administrator & Supervisor) ---
+    @POST("shifts/attendance/generate_early_clockout_otp/")
+    suspend fun generateEarlyClockoutOtp(
+        @Body request: GenerateEarlyClockoutOtpRequest
+    ): Response<GenerateEarlyClockoutOtpResponse>
+
+    @POST("shifts/shifts/generate_early_clockout_otp/")
+    suspend fun generateEarlyClockoutOtpShift(
+        @Body request: GenerateEarlyClockoutOtpRequest
+    ): Response<GenerateEarlyClockoutOtpResponse>
+
+    @POST("shifts/attendance/generate-early-clockout-otp/")
+    suspend fun generateEarlyClockoutOtpHyphen(
+        @Body request: GenerateEarlyClockoutOtpRequest
+    ): Response<GenerateEarlyClockoutOtpResponse>
+
+    // --- Phase 13 Operational Guard & Communications ---
+    @GET("shifts/shifts/duty_state/")
+    suspend fun getDutyState(): Response<DutyStateResponse>
+
+    @POST("shifts/attendance/late_arrival_report/")
+    suspend fun submitLateArrivalReport(@Body request: LateArrivalReportRequest): Response<LateArrivalReportResponse>
+
+    @POST("incidents/sos/")
+    suspend fun triggerSos(@Body request: SosDistressRequest): Response<SosDistressResponse>
+
+    @GET("notifications/messages/")
+    suspend fun getDirectMessages(@Query("with_user") withUser: String? = null): Response<List<DirectMessage>>
+
+    @POST("notifications/messages/")
+    suspend fun sendDirectMessage(@Body request: DirectMessageCreateRequest): Response<DirectMessage>
+
+    @GET("notifications/messages/unread_count/")
+    suspend fun getUnreadMessageCount(): Response<UnreadCountResponse>
+
+    @POST("notifications/messages/{id}/mark_read/")
+    suspend fun markMessageRead(@Path("id") id: String): Response<DirectMessage>
 }
 

@@ -8,9 +8,10 @@ class LeaveType(models.TextChoices):
     CASUAL = "CASUAL", "Casual Leave"
     VACATION = "VACATION", "Vacation Leave"
     COMPENSATION = "COMPENSATION", "Public Holiday Compensation"
+    SPECIAL = "SPECIAL", "Special Leave"
+    SICK = "SICK", "Sick Leave"
     # ANNUAL is retained for backward compatibility with existing records/clients.
     ANNUAL = "ANNUAL", "Vacation Leave (Legacy Annual)"
-    SICK = "SICK", "Sick Leave"
     EMERGENCY = "EMERGENCY", "Emergency Leave"
     COMPASSIONATE = "COMPASSIONATE", "Compassionate Leave"
 
@@ -21,7 +22,7 @@ class LeaveStatus(models.TextChoices):
     CHANGES_REQUESTED = "CHANGES_REQUESTED", "Changes Requested"
 
 class LeaveBalance(models.Model):
-    """Leave ledger using the organisation's stated monthly accrual rules."""
+    """Leave ledger using the organisation's authoritative monthly accrual rules."""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     guard = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="leave_balances")
     year = models.PositiveIntegerField(default=2026)
@@ -47,41 +48,109 @@ class LeaveBalance(models.Model):
         unique_together = ("guard", "year")
 
     @staticmethod
-    def _whole_months(start, end):
-        months = (end.year - start.year) * 12 + end.month - start.month
-        if end.day < start.day:
-            months -= 1
-        return max(0, months)
+    def _completed_months_between(start, end):
+        """
+        Determines the list of (year, month) tuples that have formally completed
+        between start date and end date. A month is only completed once its last day
+        has passed (i.e. end >= first day of the subsequent month).
+        """
+        completed = []
+        if end <= start:
+            return completed
 
-    def accrue_to_date(self, as_of=None, save=True):
-        """Accrue completed months since the last accrual and enforce the 12-month casual cycle."""
+        cur_year = start.year
+        cur_month = start.month
+
+        while True:
+            # First day of the month after cur_month
+            if cur_month == 12:
+                next_month_start = date(cur_year + 1, 1, 1)
+            else:
+                next_month_start = date(cur_year, cur_month + 1, 1)
+
+            # If end date is on or after next_month_start, cur_month is completed
+            if end >= next_month_start:
+                completed.append((cur_year, cur_month))
+                if cur_month == 12:
+                    cur_year += 1
+                    cur_month = 1
+                else:
+                    cur_month += 1
+            else:
+                break
+
+        return completed
+
+    def accrue_to_date(self, as_of=None, save=True, created_by=None):
+        """
+        Accrues completed months strictly after month-end has passed.
+        Never accrues incomplete or future months.
+        Guarantees idempotency via LeaveAccrualRecord.
+        """
         as_of = as_of or date.today()
-        if as_of < self.last_accrual_date:
+        if as_of <= self.casual_cycle_start:
             return self
 
-        # Casual leave expires at the end of each 12-month cycle if unused.
-        cycle_months = self._whole_months(self.casual_cycle_start, as_of)
-        if cycle_months >= 12:
-            self.casual_days = 0
-            self.used_casual = 0
-            cycles = cycle_months // 12
-            start_month = self.casual_cycle_start.month - 1 + cycles * 12
-            self.casual_cycle_start = date(
-                self.casual_cycle_start.year + start_month // 12,
-                start_month % 12 + 1,
-                min(self.casual_cycle_start.day, 28),
-            )
-            self.last_accrual_date = self.casual_cycle_start
+        # Determine all completed months since casual_cycle_start up to as_of
+        completed_months = self._completed_months_between(self.casual_cycle_start, as_of)
+        if not completed_months:
+            return self
 
-        months = self._whole_months(self.last_accrual_date, as_of)
-        if months:
-            self.casual_days = min(12.0, float(self.casual_days) + months * float(self.casual_accrual_rate))
-            self.vacation_days = min(float(self.vacation_cap), float(self.vacation_days) + months * float(self.vacation_accrual_rate))
+        # Query existing accrual records for this guard to guarantee idempotency
+        existing_records = set(
+            LeaveAccrualRecord.objects.filter(guard=self.guard).values_list("year", "month")
+        )
+
+        mutated = False
+        for y, m in completed_months:
+            if (y, m) in existing_records:
+                continue
+
+            # Check 12-month casual forfeiture cycle
+            # Count how many casual accruals in current cycle
+            cycle_accruals = LeaveAccrualRecord.objects.filter(
+                guard=self.guard,
+                created_at__date__gte=self.casual_cycle_start
+            ).count()
+
+            if cycle_accruals >= 12:
+                # 12-month forfeiture: unused casual entitlement resets
+                self.casual_days = Decimal("0.0")
+                self.used_casual = Decimal("0.0")
+                self.casual_cycle_start = date(y, m, 1)
+
+            current_casual = Decimal(str(self.casual_days or 0))
+            current_vacation = Decimal(str(self.vacation_days or 0))
+
+            # Casual leave: 1.0 day per completed month, capped at 12 per cycle
+            new_casual = min(Decimal("12.0"), current_casual + Decimal(str(self.casual_accrual_rate)))
+            casual_credited = new_casual - current_casual
+            self.casual_days = new_casual
+
+            # Vacation leave: 2.5 days per completed month, capped at 90.0
+            new_vacation = min(Decimal(str(self.vacation_cap)), current_vacation + Decimal(str(self.vacation_accrual_rate)))
+            vacation_credited = new_vacation - current_vacation
+            self.vacation_days = new_vacation
+
+            # Record accrual ledger
+            LeaveAccrualRecord.objects.create(
+                guard=self.guard,
+                year=y,
+                month=m,
+                casual_credited=casual_credited,
+                vacation_credited=vacation_credited,
+                casual_balance_after=self.casual_days,
+                vacation_balance_after=self.vacation_days,
+                created_by=created_by,
+                notes=f"Completed month {y}-{m:02d} accrual.",
+            )
+            existing_records.add((y, m))
             self.last_accrual_date = as_of
-            if save:
-                self.save(update_fields=["casual_days", "vacation_days", "last_accrual_date", "casual_cycle_start", "used_casual"])
-        elif save:
-            self.save(update_fields=["casual_cycle_start", "used_casual"])
+            mutated = True
+
+        if mutated and save:
+            self.save(update_fields=["casual_days", "vacation_days", "used_casual", "last_accrual_date", "casual_cycle_start"])
+
         return self
 
     @property
@@ -112,18 +181,67 @@ class LeaveBalance(models.Model):
     def remaining_compensation(self):
         return float(PublicHolidayCompensationLedger.get_remaining_for_guard(self.guard))
 
-    def credit_public_holiday_duty(self, days=2.0, save=True):
+    def credit_public_holiday_duty(self, days=2.0, save=True, created_by=None, notes=None):
         """
-        A guard who works on a public holiday receives 2 days of leave compensation,
-        credited toward vacation balance subject to the authoritative 90-day ceiling.
+        Maintains separation of concern: Public holiday compensation is tracked
+        in PublicHolidayCompensationLedger, NOT by modifying vacation balance.
         """
-        self.vacation_days = min(float(self.vacation_cap), float(self.vacation_days) + float(days))
-        if save:
-            self.save(update_fields=["vacation_days"])
+        PublicHolidayCompensationLedger.objects.create(
+            guard=self.guard,
+            entry_type=CompensationLedgerEntryType.EARNED,
+            days=Decimal(str(days)),
+            created_by=created_by,
+            notes=notes or "Credit for worked public holiday duty.",
+        )
         return self
 
     def __str__(self):
         return f"{self.guard.username} ({self.year}) Leave Balance"
+
+
+class LeaveAccrualRecord(models.Model):
+    """
+    Authoritative, immutable transaction log of monthly accruals.
+    Enforces:
+    - 1.0 day casual leave per completed working month.
+    - 2.5 days vacation leave per completed working month (capped at 90 days).
+    - Absolute idempotency: (guard, year, month) is unique.
+    - Never accrues incomplete or future months.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    guard = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="accrual_records",
+    )
+    year = models.PositiveIntegerField(db_index=True)
+    month = models.PositiveIntegerField(db_index=True)
+    casual_credited = models.DecimalField(max_digits=4, decimal_places=1, default=1.0)
+    vacation_credited = models.DecimalField(max_digits=4, decimal_places=1, default=2.5)
+    casual_balance_after = models.DecimalField(max_digits=6, decimal_places=1)
+    vacation_balance_after = models.DecimalField(max_digits=6, decimal_places=1)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="processed_accruals",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-year", "-month"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["guard", "year", "month"],
+                name="unique_accrual_record_per_guard_month",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.guard.username} - {self.year}-{self.month:02d} Accrual (+{self.casual_credited} C, +{self.vacation_credited} V)"
+
 
 class LeaveRejectionReason(models.TextChoices):
     MANPOWER_SHORTAGE = "MANPOWER_SHORTAGE", "Manpower shortage"
@@ -131,6 +249,7 @@ class LeaveRejectionReason(models.TextChoices):
     INSUFFICIENT_DAYS = "INSUFFICIENT_DAYS", "Insufficient days"
     SPECIAL_FUNCTIONS = "SPECIAL_FUNCTIONS", "Special Upcoming functions"
     OTHER = "OTHER", "Other operational grounds"
+
 
 class LeaveApplication(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -141,6 +260,9 @@ class LeaveApplication(models.Model):
     reason = models.TextField()
     emergency_phone = models.CharField(max_length=50, blank=True, default="")
     emergency_address = models.TextField(blank=True, default="")
+    doctor_report = models.TextField(blank=True, default="", help_text="Medical certificate or doctor report details for Sick Leave")
+    doctor_report_verified = models.BooleanField(default=False, help_text="Verified by reviewing supervisor")
+    event_details = models.TextField(blank=True, default="", help_text="Event justification for Special Leave")
     status = models.CharField(max_length=20, choices=LeaveStatus.choices, default=LeaveStatus.PENDING, db_index=True)
     reviewer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="reviewed_leaves")
     reviewer_notes = models.TextField(blank=True, default="")

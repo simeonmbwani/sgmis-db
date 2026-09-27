@@ -1,6 +1,7 @@
 from decimal import Decimal
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status, viewsets
 from rest_framework.views import APIView
 from rest_framework.decorators import action
@@ -12,13 +13,22 @@ from .models import (
     LeaveApplication,
     LeaveStatus,
     LeaveType,
+    LeaveAccrualRecord,
     PublicHolidayCompensationLedger,
     CompensationLedgerEntryType,
 )
 from .serializers import (
     LeaveBalanceSerializer,
     LeaveApplicationSerializer,
+    LeaveAccrualRecordSerializer,
     GuardLeaveSummarySerializer,
+    PublicHolidayCompensationLedgerSerializer,
+)
+from .services import (
+    process_guard_accruals,
+    process_all_guards_accruals,
+    approve_leave_application,
+    reject_leave_application,
 )
 from apps.accounts.models import UserRole
 from apps.accounts.permissions import IsSupervisorOrAdmin
@@ -32,13 +42,16 @@ def build_guard_leave_summary(guard, year=2026):
     1. Vacation Leave: Accrued (2.5/mo), Used, Remaining (capped at 90.0).
     2. Casual Leave: Accrued (1.0/mo), Used, Remaining (12-month cycle).
     3. Public Holiday Compensation: Earned, Used, Remaining (2 days per worked holiday, NO 90d cap).
+
+    STRICT READ-ONLY: Does NOT mutate or trigger accruals.
     """
-    balance, _ = LeaveBalance.objects.get_or_create(
-        guard=guard,
-        year=year,
-        defaults={"annual_days": 21, "sick_days": 14},
-    )
-    balance.accrue_to_date()
+    balance = LeaveBalance.objects.filter(guard=guard, year=year).first()
+    if not balance:
+        balance, _ = LeaveBalance.objects.get_or_create(
+            guard=guard,
+            year=year,
+            defaults={"annual_days": 21, "sick_days": 14},
+        )
 
     vacation_accrued = float(balance.vacation_days)
     vacation_used = float(balance.used_vacation)
@@ -115,8 +128,18 @@ class LeaveBalanceViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = super().get_queryset()
+        station_id = self.request.query_params.get("station")
+
         if user.role == UserRole.GUARD:
             return qs.filter(guard=user)
+        elif user.role == UserRole.SUPERVISOR:
+            if user.station:
+                return qs.filter(guard__station=user.station)
+            return qs.none()
+        elif user.role == UserRole.ADMINISTRATOR:
+            if station_id:
+                return qs.filter(guard__station_id=station_id)
+            return qs
         return qs
 
     @action(detail=False, methods=["get"], url_path="my_balance")
@@ -126,19 +149,53 @@ class LeaveBalanceViewSet(viewsets.ReadOnlyModelViewSet):
             year=2026,
             defaults={"annual_days": 21, "sick_days": 14}
         )
-        balance.accrue_to_date()
         return Response(self.get_serializer(balance).data)
 
     @action(detail=False, methods=["get"], url_path="my-summary")
-    def my_summary(self, request):
-        """
-        GET /leave/balances/my-summary/
-        Returns the authenticated guard's own 3-stream summary table.
-        """
+    def my_summary_hyphen(self, request):
+        """GET /leave/balances/my-summary/"""
         year = int(request.query_params.get("year", 2026))
         summary_data = build_guard_leave_summary(request.user, year=year)
         serializer = GuardLeaveSummarySerializer(summary_data)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="my_summary")
+    def my_summary_underscore(self, request):
+        """GET /leave/balances/my_summary/"""
+        return self.my_summary_hyphen(request)
+
+    @action(detail=False, methods=["post"], url_path="process-accruals", permission_classes=[IsSupervisorOrAdmin])
+    def process_accruals_hyphen(self, request):
+        """
+        POST /leave/balances/process-accruals/
+        Explicit, permission-controlled, idempotent accrual execution.
+        """
+        from datetime import datetime
+        guard_id = request.data.get("guard_id") or request.data.get("guard")
+        as_of_str = request.data.get("as_of_date")
+        as_of = datetime.strptime(as_of_str, "%Y-%m-%d").date() if as_of_str else None
+
+        if guard_id:
+            guard = get_object_or_404(UserModel, id=guard_id)
+            if request.user.role == UserRole.SUPERVISOR:
+                if not request.user.station_id or request.user.station_id != guard.station_id:
+                    raise PermissionDenied("Supervisor can only process accruals for assigned station guards.")
+            records = process_guard_accruals(guard, as_of_date=as_of, actor=request.user)
+        else:
+            if request.user.role != UserRole.ADMINISTRATOR:
+                raise PermissionDenied("Only administrators can trigger mass accrual processing.")
+            records = process_all_guards_accruals(as_of_date=as_of, actor=request.user)
+
+        return Response({
+            "message": f"Successfully processed accruals. {len(records)} month(s) credited.",
+            "records_count": len(records),
+            "records": LeaveAccrualRecordSerializer(records, many=True).data,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="process_accruals", permission_classes=[IsSupervisorOrAdmin])
+    def process_accruals_underscore(self, request):
+        """POST /leave/balances/process_accruals/"""
+        return self.process_accruals_hyphen(request)
 
     @action(detail=True, methods=["post"], url_path="credit_holiday", permission_classes=[IsSupervisorOrAdmin])
     def credit_holiday(self, request, pk=None):
@@ -146,6 +203,7 @@ class LeaveBalanceViewSet(viewsets.ReadOnlyModelViewSet):
         days = float(request.data.get("days", 2.0))
         balance.credit_public_holiday_duty(days=days)
         return Response(self.get_serializer(balance).data, status=status.HTTP_200_OK)
+
 
 class LeaveApplicationViewSet(viewsets.ModelViewSet):
     queryset = LeaveApplication.objects.all().select_related("guard", "reviewer")
@@ -155,10 +213,18 @@ class LeaveApplicationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = super().get_queryset()
+        station_id = self.request.query_params.get("station")
+
         if user.role == UserRole.GUARD:
             return qs.filter(guard=user)
-        elif user.role == UserRole.SUPERVISOR and user.station:
-            return qs.filter(guard__station=user.station)
+        elif user.role == UserRole.SUPERVISOR:
+            if user.station:
+                return qs.filter(guard__station=user.station)
+            return qs.none()
+        elif user.role == UserRole.ADMINISTRATOR:
+            if station_id:
+                return qs.filter(guard__station_id=station_id)
+            return qs
         return qs
 
     def perform_create(self, serializer):
@@ -166,12 +232,30 @@ class LeaveApplicationViewSet(viewsets.ModelViewSet):
         try:
             from apps.accounts.models import User, UserRole
             from apps.notifications.models import Notification
+
+            # Notify station supervisors if assigned
+            guard_station = self.request.user.station
+            if guard_station:
+                supervisors = User.objects.filter(
+                    role=UserRole.SUPERVISOR,
+                    station=guard_station,
+                    is_active=True,
+                )
+                for sup in supervisors:
+                    Notification.objects.create(
+                        user=sup,
+                        title=f"Leave Request: {self.request.user.get_full_name() or self.request.user.username}",
+                        message=f"New leave application for {application.get_leave_type_display()} ({application.start_date} to {application.end_date}) submitted for review.",
+                        notification_type="LEAVE_REQUEST",
+                    )
+
+            # Alert administrators for national leave oversight
             admins = User.objects.filter(role=UserRole.ADMINISTRATOR, is_active=True)
             for admin in admins:
                 Notification.objects.create(
                     user=admin,
                     title=f"Leave Request: {self.request.user.get_full_name() or self.request.user.username}",
-                    message=f"New leave application for {application.get_leave_type_display()} ({application.start_date} to {application.end_date}) routed to Administration.",
+                    message=f"New leave application for {application.get_leave_type_display()} ({application.start_date} to {application.end_date}) submitted.",
                     notification_type="LEAVE_REQUEST",
                 )
         except Exception:
@@ -179,101 +263,80 @@ class LeaveApplicationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="review", permission_classes=[IsSupervisorOrAdmin])
     def review(self, request, pk=None):
-        from django.db import transaction
-
         application = self.get_object()
         new_status = request.data.get("status")
         notes = request.data.get("reviewer_notes", "")
         allowed = [LeaveStatus.APPROVED, LeaveStatus.REJECTED, LeaveStatus.CHANGES_REQUESTED]
         if new_status not in allowed:
-            return Response({"detail": f"Invalid status '{new_status}'. Allowed: APPROVED, REJECTED, CHANGES_REQUESTED."}, status=status.HTTP_400_BAD_REQUEST)
-
-        rejection_reason = request.data.get("rejection_reason", "").strip()
-        if new_status == LeaveStatus.REJECTED and not rejection_reason:
             return Response(
-                {"detail": "A structured rejection reason (e.g., Manpower shortage, Critical Schedule, Insufficient days, Special Upcoming functions) is mandatory when rejecting leave."},
+                {"detail": f"Invalid status '{new_status}'. Allowed: APPROVED, REJECTED, CHANGES_REQUESTED."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        with transaction.atomic():
+        rejection_reason = request.data.get("rejection_reason", "").strip()
+
+        try:
             if new_status == LeaveStatus.APPROVED:
-                days = (application.end_date - application.start_date).days + 1
-                balance, _ = LeaveBalance.objects.get_or_create(
-                    guard=application.guard,
-                    year=application.start_date.year,
-                    defaults={"annual_days": 21, "sick_days": 14},
+                updated = approve_leave_application(
+                    application=application,
+                    reviewer=request.user,
+                    reviewer_notes=notes,
                 )
-                balance.accrue_to_date(application.start_date)
-                if application.leave_type == "CASUAL" and balance.remaining_casual < days:
-                    return Response({"detail": "Insufficient casual leave balance."}, status=status.HTTP_400_BAD_REQUEST)
-                if application.leave_type == "VACATION" and balance.remaining_vacation < days:
-                    return Response({"detail": "Insufficient vacation leave balance."}, status=status.HTTP_400_BAD_REQUEST)
-                if application.leave_type == "ANNUAL" and balance.remaining_annual < days:
-                    return Response({"detail": "Insufficient legacy annual leave balance."}, status=status.HTTP_400_BAD_REQUEST)
-                if application.leave_type == "SICK" and balance.remaining_sick < days:
-                    return Response({"detail": "Insufficient sick leave balance."}, status=status.HTTP_400_BAD_REQUEST)
-
-                if application.leave_type == "CASUAL":
-                    balance.used_casual += days
-                    balance.save(update_fields=["used_casual"])
-                elif application.leave_type == "VACATION":
-                    balance.used_vacation += days
-                    balance.save(update_fields=["used_vacation"])
-                elif application.leave_type == "ANNUAL":
-                    balance.used_annual += days
-                    balance.save(update_fields=["used_annual"])
-                elif application.leave_type == "SICK":
-                    balance.used_sick += days
-                    balance.save(update_fields=["used_sick"])
-                elif application.leave_type == "COMPENSATION":
-                    remaining_comp = PublicHolidayCompensationLedger.get_remaining_for_guard(application.guard)
-                    if Decimal(str(days)) > remaining_comp:
-                        return Response(
-                            {"detail": f"Insufficient public holiday compensation balance. Requested: {days} days, Remaining: {remaining_comp} days."},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-                    PublicHolidayCompensationLedger.objects.get_or_create(
-                        leave_application=application,
-                        entry_type=CompensationLedgerEntryType.USED,
-                        defaults={
-                            "guard": application.guard,
-                            "days": Decimal(str(days)),
-                            "created_by": request.user,
-                            "notes": f"Used {days} days compensation for approved leave from {application.start_date} to {application.end_date}.",
-                        },
-                    )
-
-            application.status = new_status
-            application.reviewer = request.user
-            application.reviewer_notes = notes
-            if new_status == LeaveStatus.REJECTED:
-                application.rejection_reason = rejection_reason
-            application.save()
-
-            try:
-                from apps.notifications.models import Notification
-                Notification.objects.create(
-                    user=application.guard,
-                    title=f"Leave Application {application.status.capitalize()}",
-                    message=f"Your {application.get_leave_type_display()} request has been {application.status.lower()} by {request.user.get_full_name() or request.user.username}. Notes: {notes or 'No notes provided.'}",
-                    notification_type="LEAVE_DECISION",
+            elif new_status == LeaveStatus.REJECTED:
+                updated = reject_leave_application(
+                    application=application,
+                    reviewer=request.user,
+                    rejection_reason=rejection_reason,
+                    reviewer_notes=notes,
                 )
-            except Exception:
-                pass
+            else:
+                application.status = LeaveStatus.CHANGES_REQUESTED
+                application.reviewer = request.user
+                application.reviewer_notes = notes
+                application.save()
+                updated = application
 
-        return Response(self.get_serializer(application).data, status=status.HTTP_200_OK)
+            return Response(self.get_serializer(updated).data, status=status.HTTP_200_OK)
+        except (DjangoValidationError, DRFValidationError) as exc:
+            detail = exc.messages if hasattr(exc, "messages") else str(exc)
+            return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
+        except PermissionDenied as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+
+class LeaveAccrualRecordViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Authoritative read-only audit log of monthly leave accruals.
+    """
+    queryset = LeaveAccrualRecord.objects.all().select_related("guard", "created_by")
+    serializer_class = LeaveAccrualRecordSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        guard_id = self.request.query_params.get("guard")
+        station_id = self.request.query_params.get("station")
+
+        if user.role == UserRole.GUARD:
+            return qs.filter(guard=user)
+        elif user.role == UserRole.SUPERVISOR:
+            if user.station_id:
+                return qs.filter(guard__station_id=user.station_id)
+            return qs.none()
+        elif user.role == UserRole.ADMINISTRATOR:
+            if guard_id:
+                qs = qs.filter(guard_id=guard_id)
+            if station_id:
+                qs = qs.filter(guard__station_id=station_id)
+            return qs
+        return qs
 
 
 class GuardLeaveSummaryView(APIView):
     """
     Authoritative read-only Leave & Compensation Summary endpoint.
     GET /leave/my-summary/
-    Rules:
-    - Authenticated users only.
-    - Uses authenticated JWT identity: request.user.
-    - Guards cannot supply another guard's ID to override identity (403 Forbidden).
-    - Supervisors/Admins can view guards within station scope.
-    - Client cannot submit or modify balances (strictly read-only).
     """
     permission_classes = [IsAuthenticated]
 
@@ -304,13 +367,11 @@ class GuardLeaveSummaryView(APIView):
 class PublicHolidayCompensationLedgerViewSet(viewsets.ReadOnlyModelViewSet):
     """
     Read-only viewset for auditing the public holiday compensation ledger.
-    Guards see only their own ledger entries.
-    Supervisors see station guard entries.
-    Administrators have global visibility.
     """
     queryset = PublicHolidayCompensationLedger.objects.all().select_related(
         "guard", "duty_record", "leave_application", "created_by"
     )
+    serializer_class = PublicHolidayCompensationLedgerSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):

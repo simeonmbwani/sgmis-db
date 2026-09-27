@@ -190,9 +190,9 @@ class SgmisRepository(
     }
 
     // --- Attendance ---
-    suspend fun clockIn(shiftId: String, lat: Double?, lon: Double?, lateReason: String?): Result<Attendance> {
+    suspend fun clockIn(shiftId: String, lat: Double?, lon: Double?, lateReason: String?, caseNumber: String? = null): Result<Attendance> {
         return try {
-            val response = api.clockIn(ClockInRequest(shiftId, lat, lon, lateReason))
+            val response = api.clockIn(ClockInRequest(shiftId, lat, lon, lateReason, caseNumber))
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
@@ -210,7 +210,8 @@ class SgmisRepository(
         lon: Double?,
         supervisorUsername: String? = null,
         supervisorPassword: String? = null,
-        overrideReason: String? = null
+        overrideReason: String? = null,
+        otpCode: String? = null
     ): Result<Attendance> {
         return try {
             val request = ClockOutRequest(
@@ -219,7 +220,8 @@ class SgmisRepository(
                 longitude = lon,
                 supervisorUsername = supervisorUsername?.takeIf { it.isNotBlank() },
                 supervisorPassword = supervisorPassword?.takeIf { it.isNotBlank() },
-                overrideReason = overrideReason?.takeIf { it.isNotBlank() }
+                overrideReason = overrideReason?.takeIf { it.isNotBlank() },
+                otpCode = otpCode?.takeIf { it.isNotBlank() }
             )
             val response = api.clockOut(request)
             if (response.isSuccessful && response.body() != null) {
@@ -665,7 +667,9 @@ class SgmisRepository(
         end: String,
         reason: String,
         emergencyPhone: String? = null,
-        emergencyAddress: String? = null
+        emergencyAddress: String? = null,
+        doctorReport: String? = null,
+        eventDetails: String? = null
     ): Result<LeaveApplication> {
         return try {
             val response = api.applyForLeave(
@@ -675,7 +679,9 @@ class SgmisRepository(
                     endDate = end,
                     reason = reason,
                     emergencyPhone = emergencyPhone,
-                    emergencyAddress = emergencyAddress
+                    emergencyAddress = emergencyAddress,
+                    doctorReport = doctorReport,
+                    eventDetails = eventDetails
                 )
             )
             if (response.isSuccessful && response.body() != null) {
@@ -710,11 +716,53 @@ class SgmisRepository(
 
     suspend fun creditHoliday(balanceId: String, days: Double = 2.0): Result<LeaveBalance> {
         return try {
-            val response = api.creditHoliday(balanceId, mapOf("days" to days))
+            val response = api.creditHoliday(balanceId, CreditHolidayRequest(days = days))
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
                 val err = parseDrfError(response.errorBody()?.string(), "Failed to credit holiday leave")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchAllLeaveBalances(stationId: String? = null): Result<List<LeaveBalance>> {
+        return try {
+            val response = api.getAllLeaveBalances(stationId)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch station leave balances")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchLeaveAccrualRecords(): Result<List<LeaveAccrualRecord>> {
+        return try {
+            val response = api.getLeaveAccrualRecords()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch leave accrual records")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun processMonthlyAccruals(): Result<ProcessAccrualResponse> {
+        return try {
+            val response = api.processMonthlyAccruals()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to execute monthly leave accrual")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -778,9 +826,51 @@ class SgmisRepository(
         }
     }
 
-    suspend fun approveRoster(stationId: String, startDate: String? = null, endDate: String? = null): Result<String> {
+    suspend fun validateRoster(
+        stationId: String? = null,
+        startDate: String? = null,
+        endDate: String? = null,
+        rosterId: String? = null
+    ): Result<ValidateRosterResponse> {
         return try {
-            val response = api.approveRoster(ApproveRosterRequest(stationId = stationId, startDate = startDate, endDate = endDate))
+            val req = ValidateRosterRequest(
+                rosterId = rosterId,
+                stationId = stationId,
+                startDate = startDate,
+                endDate = endDate
+            )
+            var response = api.validateRoster(req)
+            if (response.code() in listOf(404, 405)) {
+                response = api.validateDutyRoster(req)
+            }
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to validate roster")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun approveRoster(
+        stationId: String? = null,
+        startDate: String? = null,
+        endDate: String? = null,
+        rosterId: String? = null
+    ): Result<String> {
+        return try {
+            val req = ApproveRosterRequest(
+                rosterId = rosterId,
+                stationId = stationId,
+                startDate = startDate,
+                endDate = endDate
+            )
+            var response = api.approveRoster(req)
+            if (response.code() in listOf(404, 405)) {
+                response = api.approveDutyRoster(req)
+            }
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()?.message ?: "Roster approved.")
             } else {
@@ -1424,6 +1514,206 @@ class SgmisRepository(
             }
         } catch (e: Exception) {
             Result.failure(sanitizeException(e, "Failed to broadcast notice"))
+        }
+    }
+
+    // --- Public Holidays & National Holiday Duties ---
+    suspend fun fetchPublicHolidays(): Result<List<PublicHoliday>> {
+        return try {
+            val response = api.getPublicHolidays()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch public holidays (${response.code()})")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to fetch public holidays"))
+        }
+    }
+
+    suspend fun fetchHolidayDuties(status: String? = null, station: String? = null): Result<List<PublicHolidayDutyRecord>> {
+        return try {
+            val response = api.getHolidayDuties(status = status, station = station)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch holiday duties (${response.code()})")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to fetch holiday duties"))
+        }
+    }
+
+    suspend fun approveHolidayDuty(id: String, reason: String): Result<PublicHolidayDutyRecord> {
+        return try {
+            val response = api.approveHolidayDuty(id, ReviewHolidayDutyRequest(reason = reason))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to approve holiday duty (${response.code()})")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to approve holiday duty"))
+        }
+    }
+
+    suspend fun rejectHolidayDuty(id: String, reason: String): Result<PublicHolidayDutyRecord> {
+        return try {
+            val response = api.rejectHolidayDuty(id, ReviewHolidayDutyRequest(reason = reason))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to reject holiday duty (${response.code()})")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to reject holiday duty"))
+        }
+    }
+
+    // --- Early Clock-Out OTP Generation (Administrator & Supervisor) ---
+    suspend fun generateEarlyClockoutOtp(shiftId: String, reason: String): Result<GenerateEarlyClockoutOtpResponse> {
+        return try {
+            val req = GenerateEarlyClockoutOtpRequest(shiftId = shiftId, reason = reason)
+            var response = api.generateEarlyClockoutOtp(req)
+            if (response.code() in listOf(404, 405)) {
+                response = api.generateEarlyClockoutOtpShift(req)
+            }
+            if (response.code() in listOf(404, 405)) {
+                response = api.generateEarlyClockoutOtpHyphen(req)
+            }
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to generate authorization OTP (${response.code()})")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to generate authorization OTP"))
+        }
+    }
+
+    // --- Phase 13 Guard Operations & Communications ---
+    suspend fun fetchDutyState(): Result<DutyStateResponse> {
+        return try {
+            val response = api.getDutyState()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch duty state (${response.code()})")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to fetch duty state"))
+        }
+    }
+
+    suspend fun submitLateArrivalReport(
+        shiftId: String,
+        reason: String,
+        incidentDetails: String = "",
+        estimatedArrival: String = ""
+    ): Result<LateArrivalReportResponse> {
+        return try {
+            val req = LateArrivalReportRequest(
+                shiftId = shiftId,
+                reason = reason,
+                incidentDetails = incidentDetails,
+                estimatedArrival = estimatedArrival
+            )
+            val response = api.submitLateArrivalReport(req)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to submit late report (${response.code()})")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to submit late report"))
+        }
+    }
+
+    suspend fun triggerSos(
+        latitude: Double?,
+        longitude: Double?,
+        category: String = "General Officer Distress",
+        emergencyDetails: String = ""
+    ): Result<SosDistressResponse> {
+        return try {
+            val req = SosDistressRequest(
+                latitude = latitude,
+                longitude = longitude,
+                category = category,
+                emergencyDetails = emergencyDetails
+            )
+            val response = api.triggerSos(req)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to dispatch SOS (${response.code()})")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to dispatch SOS"))
+        }
+    }
+
+    suspend fun fetchDirectMessages(withUser: String? = null): Result<List<DirectMessage>> {
+        return try {
+            val response = api.getDirectMessages(withUser)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch messages (${response.code()})")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to fetch messages"))
+        }
+    }
+
+    suspend fun sendDirectMessage(recipientId: String, content: String): Result<DirectMessage> {
+        return try {
+            val req = DirectMessageCreateRequest(recipient = recipientId, content = content)
+            val response = api.sendDirectMessage(req)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to send message (${response.code()})")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to send message"))
+        }
+    }
+
+    suspend fun fetchUnreadMessageCount(): Result<Int> {
+        return try {
+            val response = api.getUnreadMessageCount()
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!.unreadCount)
+            } else {
+                Result.success(0)
+            }
+        } catch (e: Exception) {
+            Result.success(0)
+        }
+    }
+
+    suspend fun markDirectMessageRead(id: String): Result<DirectMessage> {
+        return try {
+            val response = api.markMessageRead(id)
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to mark message read (${response.code()})")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e, "Failed to mark message read"))
         }
     }
 }

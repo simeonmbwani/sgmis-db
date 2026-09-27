@@ -1,11 +1,15 @@
+from django.utils import timezone
+from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.exceptions import PermissionDenied
-from .models import Notification
-from .serializers import NotificationSerializer
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from .models import Notification, DirectMessage
+from .serializers import NotificationSerializer, DirectMessageSerializer
 from apps.accounts.models import User, UserRole
+from apps.stations.models import GuardPair
+from apps.shifts.models import Shift
 from apps.core.audit import log_security_event
 
 class NotificationViewSet(viewsets.ModelViewSet):
@@ -152,3 +156,106 @@ class NotificationViewSet(viewsets.ModelViewSet):
             "recipients_count": len(notifications),
             "status": "success",
         }, status=status.HTTP_201_CREATED)
+
+
+class DirectMessageViewSet(viewsets.ModelViewSet):
+    """
+    Direct operational communications strictly enforcing authorization boundaries:
+    - Guard can ONLY message their assigned partner or their station supervisor.
+    - Supervisor can ONLY message guards assigned to their station.
+    - Administrators can message any active personnel.
+    """
+    queryset = DirectMessage.objects.all().select_related("sender", "recipient")
+    serializer_class = DirectMessageSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = DirectMessage.objects.filter(Q(sender=user) | Q(recipient=user))
+        with_user = self.request.query_params.get("with_user")
+        if with_user:
+            qs = qs.filter(Q(sender_id=with_user, recipient=user) | Q(sender=user, recipient_id=with_user))
+        return qs.order_by("created_at")
+
+    def perform_create(self, serializer):
+        sender = self.request.user
+        recipient = serializer.validated_data.get("recipient")
+        if not recipient:
+            recipient_id = self.request.data.get("recipient") or self.request.data.get("recipient_id")
+            if not recipient_id:
+                raise ValidationError({"recipient": "Recipient ID is required."})
+            recipient = User.objects.filter(id=recipient_id, is_active=True).first()
+            if not recipient:
+                raise ValidationError({"recipient": "Active recipient personnel not found."})
+
+        if sender == recipient:
+            raise ValidationError({"recipient": "Cannot send messages to yourself."})
+
+        # Boundary enforcement
+        if sender.role == UserRole.GUARD:
+            allowed_partner_ids = set()
+            if sender.station:
+                pairs = GuardPair.objects.filter(station=sender.station, is_active=True)
+                for p in pairs:
+                    partner = p.get_partner_for(sender)
+                    if partner:
+                        allowed_partner_ids.add(str(partner.id))
+
+            today_shift = Shift.objects.filter(guard=sender, date=timezone.localdate()).first()
+            if today_shift:
+                partner = today_shift.get_partner()
+                if partner:
+                    allowed_partner_ids.add(str(partner.id))
+
+            allowed_supervisor_ids = set()
+            if sender.station:
+                supervisors = User.objects.filter(role=UserRole.SUPERVISOR, station=sender.station, is_active=True)
+                allowed_supervisor_ids.update(str(s.id) for s in supervisors)
+
+            target_id_str = str(recipient.id)
+            if target_id_str not in allowed_partner_ids and target_id_str not in allowed_supervisor_ids:
+                raise PermissionDenied(
+                    "Communication boundary violation: Security guards can only exchange messages with their assigned partner or station supervisor."
+                )
+
+        elif sender.role == UserRole.SUPERVISOR:
+            if not sender.station or recipient.station != sender.station:
+                raise PermissionDenied(
+                    "Supervisors can only message security personnel stationed at their assigned post."
+                )
+
+        msg = serializer.save(sender=sender, recipient=recipient)
+
+        Notification.objects.create(
+            user=recipient,
+            title=f"Message from {sender.get_full_name() or sender.username}",
+            message=msg.content[:150],
+            notification_type="DIRECT_MESSAGE",
+        )
+
+    @action(detail=False, methods=["get"], url_path="unread_count")
+    def unread_count(self, request):
+        count = DirectMessage.objects.filter(recipient=request.user, read=False).count()
+        return Response({"unread_count": count}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="mark_read")
+    def mark_read(self, request):
+        with_user = request.data.get("with_user")
+        if with_user:
+            updated = DirectMessage.objects.filter(recipient=request.user, sender_id=with_user, read=False).update(read=True)
+        else:
+            updated = DirectMessage.objects.filter(recipient=request.user, read=False).update(read=True)
+        return Response({"message": f"{updated} messages marked as read.", "updated_count": updated}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="read")
+    def mark_individual_read(self, request, pk=None):
+        msg = self.get_object()
+        if msg.recipient != request.user:
+            raise PermissionDenied("You can only mark your own received messages as read.")
+        msg.read = True
+        msg.save(update_fields=["read"])
+        return Response(self.get_serializer(msg).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="mark_read")
+    def mark_individual_read_alias(self, request, pk=None):
+        return self.mark_individual_read(request, pk)

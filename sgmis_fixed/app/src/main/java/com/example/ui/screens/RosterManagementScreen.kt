@@ -43,11 +43,11 @@ fun RosterManagementScreen(
     val role = uiState.currentUser?.role?.uppercase()
     val isAdmin = role == "ADMINISTRATOR" || role == "ADMIN"
     val isSupervisor = role == "SUPERVISOR"
-    var selectedApprovalStation by remember { mutableStateOf<String?>(null) }
+    var selectedApprovalStation by remember { mutableStateOf<String?>(uiState.currentUser?.station) }
 
     LaunchedEffect(uiState.stations) {
         if (selectedApprovalStation == null && uiState.stations.isNotEmpty()) {
-            selectedApprovalStation = uiState.stations.first().id
+            selectedApprovalStation = uiState.currentUser?.station ?: uiState.stations.first().id
         }
     }
 
@@ -67,17 +67,28 @@ fun RosterManagementScreen(
         viewModel.fetchLeave()
     }
 
+    // Harare Zimbabwe CAT TimeZone for all authoritative roster rendering
+    val harareTz = remember { java.util.TimeZone.getTimeZone("Africa/Harare") }
+
+    val targetOperationalShifts = remember(uiState.rosterShifts, selectedApprovalStation) {
+        if (selectedApprovalStation != null) {
+            uiState.rosterShifts.filter { it.station == selectedApprovalStation }
+        } else {
+            uiState.rosterShifts
+        }
+    }
+
     // Build calendar matrix rows
-    val calendarRows = remember(uiState.rosterShifts, uiState.leaveApplications) {
-        val dates = uiState.rosterShifts.map { it.date }.distinct().sorted()
-        val inFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        val dayFormat = SimpleDateFormat("EEE", Locale.US)
+    val calendarRows = remember(targetOperationalShifts, uiState.leaveApplications) {
+        val dates = targetOperationalShifts.map { it.date }.distinct().sorted()
+        val inFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = harareTz }
+        val dayFormat = SimpleDateFormat("EEE", Locale.US).apply { timeZone = harareTz }
         dates.map { dateStr ->
             val dateObj = try { inFormat.parse(dateStr) } catch (e: Exception) { null }
             val dayOfWeek = if (dateObj != null) dayFormat.format(dateObj) else "-"
-            val dayShifts = uiState.rosterShifts.filter { it.date == dateStr && it.shiftType == "DAY" }
-            val nightShifts = uiState.rosterShifts.filter { it.date == dateStr && it.shiftType == "NIGHT" }
-            val toShifts = uiState.rosterShifts.filter { it.date == dateStr && (it.shiftType == "REST" || it.shiftType == "OFF") }
+            val dayShifts = targetOperationalShifts.filter { it.date == dateStr && it.shiftType == "DAY" && it.assignmentType != "TIME_OFF" }
+            val nightShifts = targetOperationalShifts.filter { it.date == dateStr && it.shiftType == "NIGHT" && it.assignmentType != "TIME_OFF" }
+            val toShifts = targetOperationalShifts.filter { it.date == dateStr && (it.shiftType in listOf("REST", "OFF") || it.assignmentType == "TIME_OFF") }
 
             val activeLeaves = uiState.leaveApplications.filter {
                 it.status == "APPROVED" && it.startDate <= dateStr && it.endDate >= dateStr
@@ -216,8 +227,8 @@ fun RosterManagementScreen(
                 }
             }
 
-            val groupedDates = remember(uiState.rosterShifts) {
-                uiState.rosterShifts.groupBy { it.date }.toSortedMap()
+            val groupedDates = remember(targetOperationalShifts) {
+                targetOperationalShifts.groupBy { it.date }.toSortedMap()
             }
 
             LazyColumn(
@@ -695,6 +706,18 @@ fun RosterManagementScreen(
                                         }
                                     }
 
+                                    OutlinedButton(
+                                        onClick = {
+                                            selectedApprovalStation?.let { stId ->
+                                                viewModel.validateRoster(stId)
+                                            }
+                                        },
+                                        enabled = !uiState.isLoading && selectedApprovalStation != null,
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Validate")
+                                    }
+
                                     Button(
                                         onClick = {
                                             selectedApprovalStation?.let { stId ->
@@ -704,7 +727,7 @@ fun RosterManagementScreen(
                                         enabled = !uiState.isLoading && selectedApprovalStation != null && uiState.conflictReport?.hasConflicts != true,
                                         shape = RoundedCornerShape(8.dp)
                                     ) {
-                                        Text("Approve Roster")
+                                        Text("Approve")
                                     }
                                 }
                             }
@@ -715,7 +738,7 @@ fun RosterManagementScreen(
                     // Tab 2: Individual Shifts Header and List
                     item {
                         Text(
-                            text = "Scheduled Shift Deployments (${uiState.rosterShifts.size})",
+                            text = "Scheduled Shift Deployments (${targetOperationalShifts.size})",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(top = 8.dp)
@@ -728,14 +751,14 @@ fun RosterManagementScreen(
                             CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                         }
                     }
-                } else if (uiState.rosterShifts.isEmpty()) {
+                } else if (targetOperationalShifts.isEmpty()) {
                     item {
                         Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                            Text("No roster shifts generated. Tap 'Generate Roster' to calculate rotational duty schedule.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("No roster shifts generated for this station. Tap 'Generate Roster' to calculate rotational duty schedule.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 } else {
-                    items(uiState.rosterShifts) { shift ->
+                    items(targetOperationalShifts) { shift ->
                         RosterShiftCard(shift)
                     }
                 }
@@ -874,7 +897,8 @@ fun GenerateRosterDialog(
     onDismiss: () -> Unit,
     onSubmit: (stationId: String, startDate: String, cycleDays: Int, mode: String, examPeriodId: String?, examVenueName: String?, examGuardIds: List<String>) -> Unit
 ) {
-    val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
+    val harareTz = remember { java.util.TimeZone.getTimeZone("Africa/Harare") }
+    val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = harareTz } }
     val today = remember { dateFormat.format(Date()) }
 
     var selectedStationId by remember { mutableStateOf(stations.firstOrNull()?.id ?: "") }
@@ -1088,7 +1112,8 @@ fun ResumeNormalRosterDialog(
     onDismiss: () -> Unit,
     onSubmit: (stationId: String, afterDate: String, cycleDays: Int) -> Unit
 ) {
-    val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
+    val harareTz = remember { java.util.TimeZone.getTimeZone("Africa/Harare") }
+    val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = harareTz } }
     val today = remember { dateFormat.format(Date()) }
 
     var selectedStationId by remember { mutableStateOf(stations.firstOrNull()?.id ?: "") }

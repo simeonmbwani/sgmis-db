@@ -37,6 +37,7 @@ fun OccurrenceBookScreen(
 
     val currentUserRole = uiState.currentUser?.role
     val isSupervisor = currentUserRole == "SUPERVISOR"
+    val canCreateEntry = !isSupervisor && (!uiState.isGuard || uiState.isOnDuty)
 
     LaunchedEffect(Unit) {
         viewModel.fetchOBEntries()
@@ -74,7 +75,7 @@ fun OccurrenceBookScreen(
             )
         },
         floatingActionButton = {
-            if (!isSupervisor) {
+            if (canCreateEntry) {
                 ExtendedFloatingActionButton(
                     onClick = { showAddDialog = true },
                     icon = { Icon(Icons.Default.Add, null) },
@@ -91,6 +92,25 @@ fun OccurrenceBookScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            // Off-duty guard notice
+            if (uiState.isGuard && !uiState.isOnDuty) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Viewing mode: You must be CLOCKED IN (On Duty) to record official OB entries.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
             // Notification banners
             if (uiState.successMessage != null) {
                 Surface(
@@ -333,13 +353,33 @@ fun OBEntryCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                TextButton(
-                    onClick = onAmend,
-                    modifier = Modifier.testTag("amend_ob_${entry.entryNumber}")
-                ) {
-                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Amend", style = MaterialTheme.typography.labelMedium)
+                if (entry.isAmendable) {
+                    TextButton(
+                        onClick = onAmend,
+                        modifier = Modifier.testTag("amend_ob_${entry.entryNumber}")
+                    ) {
+                        Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Amend", style = MaterialTheme.typography.labelMedium)
+                    }
+                } else {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(12.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Immutable (24h+)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -357,6 +397,67 @@ fun CreateOBEntryDialog(
     var occurrenceText by remember { mutableStateOf("") }
     var checkRecord by remember { mutableStateOf("Verified & Logged") }
     var crossReference by remember { mutableStateOf("") }
+
+    // Category-specific input states
+    var vehicleReg by remember { mutableStateOf("") }
+    var vehicleDriver by remember { mutableStateOf("") }
+    var vehiclePurpose by remember { mutableStateOf("") }
+
+    var visitorName by remember { mutableStateOf("") }
+    var visitorIdNumber by remember { mutableStateOf("") }
+    var visitorHost by remember { mutableStateOf("") }
+    var visitorPassNumber by remember { mutableStateOf("") }
+
+    var incidentType by remember { mutableStateOf("") }
+    var incidentActionTaken by remember { mutableStateOf("") }
+    var incidentPersonsInvolved by remember { mutableStateOf("") }
+
+    var handoverRelievingOfficer by remember { mutableStateOf("") }
+    var handoverKeysEquipment by remember { mutableStateOf("") }
+    var handoverSpecialInstructions by remember { mutableStateOf("") }
+
+    var maintenanceFacility by remember { mutableStateOf("") }
+    var maintenanceDefect by remember { mutableStateOf("") }
+    var maintenanceReportedTo by remember { mutableStateOf("") }
+
+    fun getEffectiveOccurrenceText(): String {
+        val prefix = when (category) {
+            "VEHICLE" -> listOfNotNull(
+                vehicleReg.ifBlank { null }?.let { "Reg: $it" },
+                vehicleDriver.ifBlank { null }?.let { "Driver: $it" },
+                vehiclePurpose.ifBlank { null }?.let { "Purpose: $it" }
+            ).joinToString(" | ")
+            "VISITOR" -> listOfNotNull(
+                visitorName.ifBlank { null }?.let { "Visitor: $it" },
+                visitorIdNumber.ifBlank { null }?.let { "ID: $it" },
+                visitorHost.ifBlank { null }?.let { "Host: $it" },
+                visitorPassNumber.ifBlank { null }?.let { "Pass: $it" }
+            ).joinToString(" | ")
+            "INCIDENT" -> listOfNotNull(
+                incidentType.ifBlank { null }?.let { "Nature: $it" },
+                incidentActionTaken.ifBlank { null }?.let { "Action: $it" },
+                incidentPersonsInvolved.ifBlank { null }?.let { "Involved: $it" }
+            ).joinToString(" | ")
+            "HANDOVER" -> listOfNotNull(
+                handoverRelievingOfficer.ifBlank { null }?.let { "Relieving: $it" },
+                handoverKeysEquipment.ifBlank { null }?.let { "Keys/Eq: $it" },
+                handoverSpecialInstructions.ifBlank { null }?.let { "Orders: $it" }
+            ).joinToString(" | ")
+            "MAINTENANCE" -> listOfNotNull(
+                maintenanceFacility.ifBlank { null }?.let { "Facility: $it" },
+                maintenanceDefect.ifBlank { null }?.let { "Defect: $it" },
+                maintenanceReportedTo.ifBlank { null }?.let { "Reported To: $it" }
+            ).joinToString(" | ")
+            else -> ""
+        }
+        return if (prefix.isNotBlank() && occurrenceText.isNotBlank()) {
+            "[$category] $prefix. Details: $occurrenceText"
+        } else if (prefix.isNotBlank()) {
+            "[$category] $prefix"
+        } else {
+            occurrenceText
+        }
+    }
 
     val categoriesRow1 = listOf("ROUTINE", "VISITOR", "INCIDENT")
     val categoriesRow2 = listOf("VEHICLE", "HANDOVER", "MAINTENANCE")
@@ -413,10 +514,186 @@ fun CreateOBEntryDialog(
                     }
                 }
 
+                // Category-Specific Form Fields
+                when (category) {
+                    "VEHICLE" -> {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Vehicle Particulars:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                OutlinedTextField(
+                                    value = vehicleReg,
+                                    onValueChange = { vehicleReg = it },
+                                    label = { Text("Vehicle Registration / Plate Number") },
+                                    placeholder = { Text("e.g. AEZ-4591") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_vehicle_reg_input"),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = vehicleDriver,
+                                    onValueChange = { vehicleDriver = it },
+                                    label = { Text("Driver / Operator Name") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_vehicle_driver_input"),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = vehiclePurpose,
+                                    onValueChange = { vehiclePurpose = it },
+                                    label = { Text("Purpose / Cargo / Remarks") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_vehicle_purpose_input"),
+                                    singleLine = true
+                                )
+                            }
+                        }
+                    }
+                    "VISITOR" -> {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Visitor Particulars:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                OutlinedTextField(
+                                    value = visitorName,
+                                    onValueChange = { visitorName = it },
+                                    label = { Text("Visitor Full Name") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_visitor_name_input"),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = visitorIdNumber,
+                                    onValueChange = { visitorIdNumber = it },
+                                    label = { Text("National ID / Passport Number") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_visitor_id_input"),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = visitorHost,
+                                    onValueChange = { visitorHost = it },
+                                    label = { Text("Host Official / Department") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_visitor_host_input"),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = visitorPassNumber,
+                                    onValueChange = { visitorPassNumber = it },
+                                    label = { Text("Pass / Badge Number Issued") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_visitor_pass_input"),
+                                    singleLine = true
+                                )
+                            }
+                        }
+                    }
+                    "INCIDENT" -> {
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Incident Categorization:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                                OutlinedTextField(
+                                    value = incidentType,
+                                    onValueChange = { incidentType = it },
+                                    label = { Text("Incident Nature / Type") },
+                                    placeholder = { Text("e.g. Perimeter breach, theft attempt, unauthorized entry") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_incident_type_input"),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = incidentActionTaken,
+                                    onValueChange = { incidentActionTaken = it },
+                                    label = { Text("Immediate Action Taken") },
+                                    placeholder = { Text("e.g. Apprehended, supervisor notified, dispatched") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_incident_action_input"),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = incidentPersonsInvolved,
+                                    onValueChange = { incidentPersonsInvolved = it },
+                                    label = { Text("Persons / Witnesses Involved") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_incident_persons_input"),
+                                    singleLine = true
+                                )
+                            }
+                        }
+                    }
+                    "HANDOVER" -> {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Handover Inventory:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                OutlinedTextField(
+                                    value = handoverRelievingOfficer,
+                                    onValueChange = { handoverRelievingOfficer = it },
+                                    label = { Text("Relieving Officer Name") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_handover_relieving_input"),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = handoverKeysEquipment,
+                                    onValueChange = { handoverKeysEquipment = it },
+                                    label = { Text("Keys & Equipment Count") },
+                                    placeholder = { Text("e.g. Master key bundle, radio #4, torch OK") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_handover_keys_input"),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = handoverSpecialInstructions,
+                                    onValueChange = { handoverSpecialInstructions = it },
+                                    label = { Text("Special Orders / Instructions") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_handover_instructions_input"),
+                                    singleLine = true
+                                )
+                            }
+                        }
+                    }
+                    "MAINTENANCE" -> {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Maintenance Defect Log:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                OutlinedTextField(
+                                    value = maintenanceFacility,
+                                    onValueChange = { maintenanceFacility = it },
+                                    label = { Text("Facility / Asset / Zone") },
+                                    placeholder = { Text("e.g. East Gate Barrier, Floodlight #3") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_maint_facility_input"),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = maintenanceDefect,
+                                    onValueChange = { maintenanceDefect = it },
+                                    label = { Text("Defect / Fault Description") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_maint_defect_input"),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = maintenanceReportedTo,
+                                    onValueChange = { maintenanceReportedTo = it },
+                                    label = { Text("Reported To / Work Order #") },
+                                    modifier = Modifier.fillMaxWidth().testTag("ob_maint_reported_input"),
+                                    singleLine = true
+                                )
+                            }
+                        }
+                    }
+                }
+
                 OutlinedTextField(
                     value = occurrenceText,
                     onValueChange = { occurrenceText = it },
-                    label = { Text("Occurrence Description *") },
+                    label = { Text("Occurrence Description / Notes *") },
                     minLines = 3,
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth().testTag("ob_text_input")
@@ -443,13 +720,14 @@ fun CreateOBEntryDialog(
             }
         },
         confirmButton = {
+            val effectiveText = getEffectiveOccurrenceText()
             Button(
                 onClick = {
-                    if (occurrenceText.isNotBlank() && !isLoading) {
-                        onSubmit(category, occurrenceText, checkRecord, crossReference.trim().ifBlank { null })
+                    if (effectiveText.isNotBlank() && !isLoading) {
+                        onSubmit(category, effectiveText, checkRecord, crossReference.trim().ifBlank { null })
                     }
                 },
-                enabled = occurrenceText.isNotBlank() && !isLoading,
+                enabled = effectiveText.isNotBlank() && !isLoading,
                 modifier = Modifier.testTag("submit_ob_entry_confirm_button")
             ) {
                 if (isLoading) {

@@ -56,9 +56,18 @@ fun TodayShiftScreen(
     val coroutineScope = rememberCoroutineScope()
 
     var showEarlyClockOutDialog by remember { mutableStateOf(false) }
+    var earlyOtpCode by remember { mutableStateOf("") }
     var earlySupervisorUsername by remember { mutableStateOf("") }
     var earlySupervisorPassword by remember { mutableStateOf("") }
     var earlyOverrideReason by remember { mutableStateOf("") }
+
+    var showLateArrivalDialog by remember { mutableStateOf(false) }
+    var lateArrivalReason by remember { mutableStateOf("") }
+    var lateArrivalIncidentDetails by remember { mutableStateOf("") }
+    var lateArrivalEstimatedArrival by remember { mutableStateOf("") }
+    var lateArrivalError by remember { mutableStateOf<String?>(null) }
+
+    val harareTz = remember { java.util.TimeZone.getTimeZone("Africa/Harare") }
 
     fun isShiftEarly(s: Shift?): Boolean {
         if (s == null) return false
@@ -66,7 +75,7 @@ fun TodayShiftScreen(
             val startH = s.startTime.take(5)
             val endH = s.endTime.take(5)
             val isOvernight = endH <= startH
-            val endCal = Calendar.getInstance()
+            val endCal = Calendar.getInstance(harareTz)
             val dateParts = s.date.split("-")
             endCal.set(Calendar.YEAR, dateParts[0].toInt())
             endCal.set(Calendar.MONTH, dateParts[1].toInt() - 1)
@@ -79,7 +88,7 @@ fun TodayShiftScreen(
             if (isOvernight) {
                 endCal.add(Calendar.DAY_OF_MONTH, 1)
             }
-            Calendar.getInstance().before(endCal)
+            Calendar.getInstance(harareTz).before(endCal)
         } catch (e: Exception) {
             false
         }
@@ -87,10 +96,15 @@ fun TodayShiftScreen(
 
     // Auto-dismiss transient messages after 3.5 seconds
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
-        if (uiState.errorMessage?.contains("requires authenticated supervisor authorization", ignoreCase = true) == true) {
+        val err = uiState.errorMessage ?: ""
+        if (err.contains("requires authenticated supervisor authorization", ignoreCase = true)) {
             showEarlyClockOutDialog = true
         }
-        if (!showEarlyClockOutDialog && (uiState.successMessage != null || uiState.errorMessage != null)) {
+        if (err.contains("Late Arrival Report required", ignoreCase = true) ||
+            err.contains("60 minutes", ignoreCase = true)) {
+            showLateArrivalDialog = true
+        }
+        if (!showEarlyClockOutDialog && !showLateArrivalDialog && (uiState.successMessage != null || uiState.errorMessage != null)) {
             delay(3500)
             viewModel.clearMessages()
         }
@@ -549,6 +563,48 @@ fun TodayShiftScreen(
                         }
                     }
 
+                    // Late Arrival Warning Banner
+                    if (shift.lateReportRequired || shift.isSeriousLate || shift.isLate) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("late_arrival_warning_banner"),
+                            colors = CardDefaults.cardColors(
+                                containerColor = StatusWarning.copy(alpha = 0.15f)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.WarningAmber,
+                                    contentDescription = null,
+                                    tint = StatusWarning,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = if (shift.lateReportRequired || shift.isSeriousLate) "LATE ARRIVAL WARNING (60+ MIN)" else "SHIFT IN PROGRESS / LATE",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = StatusWarning
+                                    )
+                                    Text(
+                                        text = if (shift.lateReportRequired || shift.isSeriousLate)
+                                            "Reporting to duty >60 minutes past shift start (${shift.startTime.take(5)}). A formal Late Arrival Incident Report is required to clock in."
+                                        else
+                                            "Scheduled start was ${shift.startTime.take(5)}. Please clock in promptly.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     // Attendance Action Card
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -591,13 +647,17 @@ fun TodayShiftScreen(
                                 ) {
                                     Button(
                                         onClick = {
-                                            coroutineScope.launch {
-                                                val loc = LocationHelper.getDeviceLocation(context)
-                                                viewModel.clockIn(
-                                                    shiftId = shift.id,
-                                                    lat = loc?.first,
-                                                    lon = loc?.second
-                                                )
+                                            if (shift.lateReportRequired || shift.isSeriousLate) {
+                                                showLateArrivalDialog = true
+                                            } else {
+                                                coroutineScope.launch {
+                                                    val loc = LocationHelper.getDeviceLocation(context)
+                                                    viewModel.clockIn(
+                                                        shiftId = shift.id,
+                                                        lat = loc?.first,
+                                                        lon = loc?.second
+                                                    )
+                                                }
                                             }
                                         },
                                         enabled = shift.attendanceStatus == "NOT_CLOCKED_IN" && !uiState.clockLoading,
@@ -736,6 +796,45 @@ fun TodayShiftScreen(
                             }
                         }
 
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = "6-Digit Authorization OTP (Recommended)",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "Enter 5-minute single-use OTP issued by your Station Supervisor or Admin.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = earlyOtpCode,
+                            onValueChange = { if (it.length <= 6) earlyOtpCode = it.filter { c -> c.isDigit() } },
+                            label = { Text("6-Digit OTP Code") },
+                            placeholder = { Text("e.g. 123456") },
+                            singleLine = true,
+                            enabled = !uiState.clockLoading,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("early_clock_out_otp")
+                        )
+
+                        Text(
+                            text = "— OR Supervisor Direct Sign-Off —",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        )
+
                         OutlinedTextField(
                             value = earlySupervisorUsername,
                             onValueChange = { earlySupervisorUsername = it },
@@ -782,11 +881,13 @@ fun TodayShiftScreen(
                                     shiftId = shift.id,
                                     lat = loc?.first,
                                     lon = loc?.second,
-                                    supervisorUsername = earlySupervisorUsername.trim(),
-                                    supervisorPassword = earlySupervisorPassword,
-                                    overrideReason = earlyOverrideReason.trim(),
+                                    supervisorUsername = earlySupervisorUsername.trim().takeIf { it.isNotBlank() },
+                                    supervisorPassword = earlySupervisorPassword.takeIf { it.isNotBlank() },
+                                    overrideReason = earlyOverrideReason.trim().takeIf { it.isNotBlank() },
+                                    otpCode = earlyOtpCode.trim().takeIf { it.isNotBlank() },
                                     onSuccess = {
                                         showEarlyClockOutDialog = false
+                                        earlyOtpCode = ""
                                         earlySupervisorUsername = ""
                                         earlySupervisorPassword = ""
                                         earlyOverrideReason = ""
@@ -794,9 +895,10 @@ fun TodayShiftScreen(
                                 )
                             }
                         },
-                        enabled = earlySupervisorUsername.isNotBlank() &&
+                        enabled = (earlyOtpCode.length == 6 ||
+                                (earlySupervisorUsername.isNotBlank() &&
                                 earlySupervisorPassword.isNotBlank() &&
-                                earlyOverrideReason.isNotBlank() &&
+                                earlyOverrideReason.isNotBlank())) &&
                                 !uiState.clockLoading,
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.testTag("authorize_clock_out_button")
@@ -821,6 +923,165 @@ fun TodayShiftScreen(
                         },
                         enabled = !uiState.clockLoading,
                         modifier = Modifier.testTag("cancel_early_clock_out_button")
+                    ) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (showLateArrivalDialog && shift != null) {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!uiState.isFilingLateReport && !uiState.clockLoading) {
+                        showLateArrivalDialog = false
+                        lateArrivalError = null
+                    }
+                },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.ReportProblem,
+                            contentDescription = null,
+                            tint = StatusWarning,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "LATE ARRIVAL REPORT",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Scheduled start was ${shift.startTime.take(5)} at ${shift.stationName}. Standard operating procedure mandates filing an official incident report before clock-in when arriving over 60 minutes late.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        val activeError = lateArrivalError ?: uiState.errorMessage
+                        if (activeError != null) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().testTag("late_arrival_error")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Error,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = activeError,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = lateArrivalReason,
+                            onValueChange = {
+                                lateArrivalReason = it
+                                lateArrivalError = null
+                            },
+                            label = { Text("Reason for Delay *") },
+                            placeholder = { Text("e.g. Public transit breakdown, family emergency...") },
+                            modifier = Modifier.fillMaxWidth().testTag("late_arrival_reason_input"),
+                            singleLine = false,
+                            maxLines = 3,
+                            isError = lateArrivalError != null && lateArrivalReason.isBlank()
+                        )
+
+                        OutlinedTextField(
+                            value = lateArrivalIncidentDetails,
+                            onValueChange = { lateArrivalIncidentDetails = it },
+                            label = { Text("Additional Incident Details (Optional)") },
+                            placeholder = { Text("e.g. Route taken, bus breakdown location...") },
+                            modifier = Modifier.fillMaxWidth().testTag("late_arrival_details_input"),
+                            singleLine = false,
+                            maxLines = 3
+                        )
+
+                        OutlinedTextField(
+                            value = lateArrivalEstimatedArrival,
+                            onValueChange = { lateArrivalEstimatedArrival = it },
+                            label = { Text("Actual Arrival Time (Optional)") },
+                            placeholder = { Text("HH:MM") },
+                            modifier = Modifier.fillMaxWidth().testTag("late_arrival_time_input"),
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (lateArrivalReason.isBlank()) {
+                                lateArrivalError = "Reason for delay is mandatory."
+                                return@Button
+                            }
+                            lateArrivalError = null
+                            coroutineScope.launch {
+                                val loc = LocationHelper.getDeviceLocation(context)
+                                viewModel.submitLateArrivalReport(
+                                    shiftId = shift.id,
+                                    reason = lateArrivalReason.trim(),
+                                    incidentDetails = lateArrivalIncidentDetails.trim(),
+                                    estimatedArrival = lateArrivalEstimatedArrival.trim(),
+                                    onSuccess = { caseNumber ->
+                                        viewModel.clockIn(
+                                            shiftId = shift.id,
+                                            lat = loc?.first,
+                                            lon = loc?.second,
+                                            caseNumber = caseNumber,
+                                            onSuccess = {
+                                                showLateArrivalDialog = false
+                                                lateArrivalReason = ""
+                                                lateArrivalIncidentDetails = ""
+                                                lateArrivalEstimatedArrival = ""
+                                            }
+                                        )
+                                    }
+                                )
+                            }
+                        },
+                        enabled = !uiState.isFilingLateReport && !uiState.clockLoading,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.testTag("submit_late_report_and_clock_in_button")
+                    ) {
+                        if (uiState.isFilingLateReport || uiState.clockLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
+                        Text("Submit & Clock In")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            showLateArrivalDialog = false
+                            lateArrivalError = null
+                        },
+                        enabled = !uiState.isFilingLateReport && !uiState.clockLoading
                     ) {
                         Text("Cancel")
                     }

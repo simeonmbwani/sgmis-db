@@ -17,3 +17,24 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"Notification for {self.user.username}: {self.title}"
+
+
+class DirectMessage(models.Model):
+    """
+    Direct communication between authorized security operational personnel:
+    Guard <-> Assigned Partner
+    Guard <-> Assigned Station Supervisor
+    Supervisor <-> Station Guards
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sent_direct_messages")
+    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="received_direct_messages")
+    content = models.TextField()
+    read = models.BooleanField(default=False, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"Msg {self.sender.username} -> {self.recipient.username} ({self.created_at.strftime('%Y-%m-%d %H:%M')})"

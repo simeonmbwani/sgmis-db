@@ -6,12 +6,13 @@ from rest_framework.test import APIClient
 from rest_framework import status
 from apps.accounts.models import UserRole
 from apps.stations.models import Station, GuardPair
-from apps.shifts.models import Shift, ShiftType, Attendance, ShiftHandover
+from apps.shifts.models import Shift, ShiftType, Attendance, ShiftHandover, PublicHoliday, PublicHolidayDutyRecord, HolidayCompensationStatus
 from apps.shifts.services import generate_roster_for_station, resolve_incoming_guard
 from apps.leave.models import LeaveApplication, LeaveBalance, LeaveStatus
 from apps.incidents.models import IncidentReport, IncidentPriority, IncidentStatus
 from apps.patrols.models import Checkpoint, PatrolLog, PatrolStatus
 from apps.occurrence_book.models import OccurrenceBookEntry
+from apps.core.models import SupervisorOverrideAudit, SecurityAuditEvent
 
 UserModel = get_user_model()
 
@@ -189,8 +190,10 @@ class SGMISBackendEndToEndTests(TestCase):
 
         shift = Shift.objects.filter(guard=self.guard_a, date=today).first()
         self.assertIsNotNone(shift)
-        # Ensure scheduled start time is within the clock-in window regardless of test execution time
-        shift.start_time = (timezone.localtime() - timedelta(minutes=5)).time()
+        # Ensure scheduled start time is within the clock-in window and end time is in future regardless of test time
+        now_local = timezone.localtime()
+        shift.start_time = (now_local - timedelta(minutes=5)).time()
+        shift.end_time = (now_local + timedelta(hours=8)).time()
         shift.save()
 
         self.client.force_authenticate(user=self.guard_a)
@@ -699,7 +702,7 @@ class SGMISBackendEndToEndTests(TestCase):
 
     def test_leave_rules_public_holiday_duty_compensation(self):
         """
-        Verifies public holiday duty awards 2 days of leave compensation.
+        Verifies public holiday duty awards 2 days of leave compensation in independent ledger.
         """
         balance = LeaveBalance.objects.create(
             guard=self.guard_a,
@@ -707,13 +710,14 @@ class SGMISBackendEndToEndTests(TestCase):
             vacation_days=10.0,
         )
         balance.credit_public_holiday_duty(days=2.0)
-        self.assertEqual(float(balance.vacation_days), 12.0)
+        # Vacation days remain unmixed
+        self.assertEqual(float(balance.vacation_days), 10.0)
+        # Compensatory ledger has 2.0 days
+        self.assertEqual(balance.remaining_compensation, 2.0)
 
-        # Also cannot exceed 90 days
-        balance.vacation_days = 89.0
-        balance.save()
+        # Independent compensation has no 90-day vacation cap
         balance.credit_public_holiday_duty(days=2.0)
-        self.assertEqual(float(balance.vacation_days), 90.0)
+        self.assertEqual(balance.remaining_compensation, 4.0)
 
     def test_leave_deduction_and_supervisor_approval(self):
         """
@@ -1065,6 +1069,514 @@ class SGMISBackendEndToEndTests(TestCase):
         # 3. GET status probe
         resp_get = self.client.get("/notifications/alerts/broadcast/")
         self.assertEqual(resp_get.status_code, status.HTTP_200_OK)
+
+    def test_unassigned_supervisor_fail_closed_empty_querysets(self):
+        """
+        Security Test: An authenticated supervisor without an assigned station
+        MUST fail closed and receive empty querysets for all station-scoped operational endpoints.
+        """
+        def _get_items(d):
+            return d["results"] if isinstance(d, dict) and "results" in d else d
+
+        unassigned_sup = UserModel.objects.create_user(
+            username="unassigned_sup",
+            email="unassigned_sup@sgmis.local",
+            password=self.password,
+            employee_number="SUP-999",
+            role=UserRole.SUPERVISOR,
+            station=None,
+        )
+        self.client.force_authenticate(user=unassigned_sup)
+
+        # 1. Patrol logs
+        resp_patrol = self.client.get("/patrols/logs/")
+        self.assertEqual(resp_patrol.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(_get_items(resp_patrol.data)), 0, "Unassigned supervisor must receive 0 patrol logs")
+
+        # 2. Leave applications
+        resp_leave = self.client.get("/leave/applications/")
+        self.assertEqual(resp_leave.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(_get_items(resp_leave.data)), 0, "Unassigned supervisor must receive 0 leave applications")
+
+        # 3. Shifts
+        resp_shifts = self.client.get("/shifts/shifts/")
+        self.assertEqual(resp_shifts.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(_get_items(resp_shifts.data)), 0, "Unassigned supervisor must receive 0 shifts")
+
+        # 4. Occurrence book
+        resp_ob = self.client.get("/occurrence_book/entries/")
+        self.assertEqual(resp_ob.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(_get_items(resp_ob.data)), 0, "Unassigned supervisor must receive 0 OB entries")
+
+        # 5. Incidents
+        resp_inc = self.client.get("/incidents/reports/")
+        self.assertEqual(resp_inc.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(_get_items(resp_inc.data)), 0, "Unassigned supervisor must receive 0 incidents")
+
+        # 6. Attendance
+        resp_att = self.client.get("/shifts/attendance/")
+        self.assertEqual(resp_att.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(_get_items(resp_att.data)), 0, "Unassigned supervisor must receive 0 attendance records")
+
+        # 7. Handovers
+        resp_hand = self.client.get("/shifts/handovers/")
+        self.assertEqual(resp_hand.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(_get_items(resp_hand.data)), 0, "Unassigned supervisor must receive 0 handovers")
+
+    def test_assigned_supervisor_scoped_to_own_station_only(self):
+        """
+        Security Test: A supervisor assigned to Station Bravo receives records from Station Bravo
+        and CANNOT access records from Station Echo even by manipulating query parameters.
+        """
+        def _get_items(d):
+            return d["results"] if isinstance(d, dict) and "results" in d else d
+
+        # Create second station
+        station_echo = Station.objects.create(
+            name="Command Station Echo",
+            code="STN-ECH01",
+            address="99 Alpha Way",
+            latitude=1.3000,
+            longitude=36.8000,
+            geofence_radius_meters=150.0,
+        )
+        guard_echo = UserModel.objects.create_user(
+            username="guard_echo",
+            email="guard_echo@sgmis.local",
+            password=self.password,
+            employee_number="SEC-888",
+            role=UserRole.GUARD,
+            station=station_echo,
+        )
+
+        # Create PatrolLog at Station Echo
+        patrol_echo = PatrolLog.objects.create(
+            station=station_echo,
+            guard=guard_echo,
+            status=PatrolStatus.IN_PROGRESS,
+        )
+
+        # Create LeaveApplication for Guard Echo
+        leave_echo = LeaveApplication.objects.create(
+            guard=guard_echo,
+            leave_type="CASUAL",
+            start_date=timezone.now().date(),
+            end_date=timezone.now().date() + timedelta(days=2),
+            reason="Family matter",
+            status=LeaveStatus.PENDING,
+        )
+
+        # Authenticate as supervisor of Station Bravo
+        self.client.force_authenticate(user=self.supervisor)
+
+        # Patrols: Must not include patrol_echo
+        resp_patrol = self.client.get("/patrols/logs/")
+        self.assertEqual(resp_patrol.status_code, status.HTTP_200_OK)
+        patrol_ids = [p["id"] for p in _get_items(resp_patrol.data)]
+        self.assertNotIn(str(patrol_echo.id), patrol_ids, "Supervisor Bravo must not see Station Echo patrol logs")
+
+        # Patrols: Passing ?station=<station_echo.id> must NOT bypass scoping
+        resp_patrol_tamper = self.client.get(f"/patrols/logs/?station={station_echo.id}")
+        self.assertEqual(resp_patrol_tamper.status_code, status.HTTP_200_OK)
+        tamper_ids = [p["id"] for p in _get_items(resp_patrol_tamper.data)]
+        self.assertNotIn(str(patrol_echo.id), tamper_ids, "Query parameter tampering must be ignored for supervisor")
+
+        # Leave: Must not include leave_echo
+        resp_leave = self.client.get("/leave/applications/")
+        self.assertEqual(resp_leave.status_code, status.HTTP_200_OK)
+        leave_ids = [l["id"] for l in _get_items(resp_leave.data)]
+        self.assertNotIn(str(leave_echo.id), leave_ids, "Supervisor Bravo must not see Station Echo leave applications")
+
+        # Leave: Passing ?station=<station_echo.id> must NOT bypass scoping
+        resp_leave_tamper = self.client.get(f"/leave/applications/?station={station_echo.id}")
+        self.assertEqual(resp_leave_tamper.status_code, status.HTTP_200_OK)
+        tamper_leave_ids = [l["id"] for l in _get_items(resp_leave_tamper.data)]
+        self.assertNotIn(str(leave_echo.id), tamper_leave_ids, "Query parameter tampering must be ignored for supervisor")
+
+        # Administrator visibility: Admin CAN see Station Echo records and filter by station
+        self.client.force_authenticate(user=self.admin)
+        resp_adm_echo = self.client.get(f"/patrols/logs/?station={station_echo.id}")
+        self.assertEqual(resp_adm_echo.status_code, status.HTTP_200_OK)
+        self.assertTrue(any(p["id"] == str(patrol_echo.id) for p in _get_items(resp_adm_echo.data)))
+
+        resp_adm_leave = self.client.get(f"/leave/applications/?station={station_echo.id}")
+        self.assertEqual(resp_adm_leave.status_code, status.HTTP_200_OK)
+        self.assertTrue(any(l["id"] == str(leave_echo.id) for l in _get_items(resp_adm_leave.data)))
+
+    def test_early_clockout_otp_workflow_admin_and_guard(self):
+        """
+        Tests the authoritative Early Clock-Out OTP workflow:
+        1. Guard clocks in.
+        2. Guard attempts to generate OTP -> 403 Forbidden (Guards cannot self-authorise).
+        3. Administrator generates 6-digit cryptographic OTP.
+        4. Guard clocks out early using the server OTP.
+        5. OTP cannot be reused (single-use).
+        6. Immutable audit records are verified.
+        """
+        # Create active shift for guard_a
+        now_local = timezone.localtime()
+        shift = Shift.objects.create(
+            station=self.station,
+            guard=self.guard_a,
+            date=now_local.date(),
+            start_time=(now_local - timedelta(hours=2)).time(),
+            end_time=(now_local + timedelta(hours=4)).time(),
+            shift_type=ShiftType.DAY,
+        )
+
+        # Ensure guard_a is clocked in
+        self.client.force_authenticate(user=self.guard_a)
+        now = timezone.now()
+        att, _ = Attendance.objects.get_or_create(
+            shift=shift,
+            guard=self.guard_a,
+            defaults={
+                "clock_in": now - timedelta(hours=2),
+                "clock_in_gps": "-1.2921,36.8219"
+            }
+        )
+        if not att.clock_in:
+            att.clock_in = now - timedelta(hours=2)
+            att.save()
+
+        # Step 1: Guard cannot generate OTP
+        resp_guard_gen = self.client.post("/shifts/attendance/generate_early_clockout_otp/", {
+            "shift_id": str(shift.id),
+            "reason": "Guard self-authorization attempt",
+        })
+        self.assertEqual(resp_guard_gen.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Step 2: Administrator generates early clock-out OTP
+        self.client.force_authenticate(user=self.admin)
+        resp_otp = self.client.post("/shifts/attendance/generate_early_clockout_otp/", {
+            "shift_id": str(shift.id),
+            "reason": "Authorized medical emergency early departure",
+        })
+        self.assertEqual(resp_otp.status_code, status.HTTP_201_CREATED)
+        self.assertIn("otp", resp_otp.data)
+        otp_code = resp_otp.data["otp"]
+        self.assertEqual(len(otp_code), 6)
+        self.assertTrue(otp_code.isdigit())
+        self.assertEqual(resp_otp.data["expires_in_seconds"], 300)
+
+        # Step 3: Guard clocks out using invalid OTP -> rejected
+        self.client.force_authenticate(user=self.guard_a)
+        resp_invalid = self.client.post("/shifts/attendance/clock_out/", {
+            "shift_id": str(shift.id),
+            "latitude": self.station.latitude,
+            "longitude": self.station.longitude,
+            "enforce_shift_end": True,
+            "otp_code": "000000",
+        })
+        self.assertEqual(resp_invalid.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Invalid", str(resp_invalid.data))
+
+        # Step 4: Guard clocks out using valid server OTP -> accepted
+        resp_valid = self.client.post("/shifts/attendance/clock_out/", {
+            "shift_id": str(shift.id),
+            "latitude": self.station.latitude,
+            "longitude": self.station.longitude,
+            "enforce_shift_end": True,
+            "otp_code": otp_code,
+        })
+        self.assertEqual(resp_valid.status_code, status.HTTP_200_OK)
+        att.refresh_from_db()
+        self.assertIsNotNone(att.clock_out)
+
+        # Step 5: OTP cannot be reused
+        # Verify cache key has been deleted/invalidated
+        from django.core.cache import cache
+        self.assertIsNone(cache.get(f"early_clockout_otp_{shift.id}"))
+
+        # Step 6: Verify immutable audit records created
+        self.assertTrue(
+            SupervisorOverrideAudit.objects.filter(
+                action_type="EARLY_CLOCKOUT_OVERRIDE",
+                target_id=str(att.id)
+            ).exists()
+        )
+        self.assertTrue(
+            SecurityAuditEvent.objects.filter(
+                event_type=SecurityAuditEvent.EventType.OVERRIDE,
+                target_id=str(att.id)
+            ).exists()
+        )
+
+    def test_early_clockout_otp_supervisor_station_scoping(self):
+        """
+        Supervisor cannot generate OTP for a guard at another station.
+        """
+        station_other = Station.objects.create(name="Delta Station", code="STN-DELTA")
+        guard_other = UserModel.objects.create_user(
+            username="guard_delta",
+            email="delta@sgmis.local",
+            password=self.password,
+            employee_number="SEC-999",
+            role=UserRole.GUARD,
+            station=station_other,
+        )
+        now_local = timezone.localtime()
+        shift_other = Shift.objects.create(
+            station=station_other,
+            guard=guard_other,
+            date=now_local.date(),
+            start_time=(now_local - timedelta(hours=2)).time(),
+            end_time=(now_local + timedelta(hours=4)).time(),
+            shift_type=ShiftType.DAY,
+        )
+        Attendance.objects.create(
+            shift=shift_other,
+            guard=guard_other,
+            clock_in=timezone.now() - timedelta(hours=1),
+            clock_in_gps="-1.2921,36.8219",
+        )
+
+        # Supervisor of Station Bravo cannot generate OTP for Delta Station
+        self.client.force_authenticate(user=self.supervisor)
+        resp = self.client.post("/shifts/attendance/generate_early_clockout_otp/", {
+            "shift_id": str(shift_other.id),
+            "reason": "Supervisor cross-station violation attempt",
+        })
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_national_administrator_telemetry_and_public_holiday_workflow(self):
+        """
+        Tests National Control Center administrator access:
+        1. Administrator receives global telemetry.
+        2. Guard cannot create public holidays (403 Forbidden).
+        3. Administrator creates a Zimbabwe public holiday.
+        4. Guard cannot approve public holiday duty records (403 Forbidden).
+        5. Administrator can approve public holiday compensation.
+        """
+        # Step 1: Administrator receives global telemetry
+        self.client.force_authenticate(user=self.admin)
+        telemetry_resp = self.client.get("/core/telemetry/")
+        self.assertEqual(telemetry_resp.status_code, status.HTTP_200_OK)
+        self.assertIn("total_stations", telemetry_resp.data)
+        self.assertIn("active_guards", telemetry_resp.data)
+        self.assertIn("incident_breakdown", telemetry_resp.data)
+
+        # Step 2: Guard attempts to create a public holiday -> 403 Forbidden
+        self.client.force_authenticate(user=self.guard_a)
+        holiday_date = timezone.now().date() + timedelta(days=10)
+        guard_holiday_resp = self.client.post("/shifts/public-holidays/", {
+            "name": "Workers Day",
+            "date": holiday_date.isoformat(),
+            "country_code": "ZW",
+        })
+        self.assertEqual(guard_holiday_resp.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Step 3: Administrator creates Zimbabwe public holiday -> 201 Created
+        self.client.force_authenticate(user=self.admin)
+        admin_holiday_resp = self.client.post("/shifts/public-holidays/", {
+            "name": "Workers Day",
+            "date": holiday_date.isoformat(),
+            "country_code": "ZW",
+            "description": "National Workers Day",
+            "is_active": True,
+        })
+        self.assertEqual(admin_holiday_resp.status_code, status.HTTP_201_CREATED)
+        holiday_id = admin_holiday_resp.data["id"]
+
+        # Step 4: Create shift and attendance for guard_a on holiday
+        holiday_shift = Shift.objects.create(
+            station=self.station,
+            guard=self.guard_a,
+            date=holiday_date,
+            start_time="07:00",
+            end_time="18:00",
+            shift_type=ShiftType.DAY,
+        )
+        holiday_att = Attendance.objects.create(
+            shift=holiday_shift,
+            guard=self.guard_a,
+            clock_in=timezone.make_aware(datetime.combine(holiday_date, time(7, 0))),
+            clock_in_gps="-1.2921,36.8219",
+        )
+
+        # Record public holiday duty
+        duty_resp = self.client.post("/shifts/holiday-duties/record_duty/", {
+            "shift_id": str(holiday_shift.id),
+        })
+        self.assertEqual(duty_resp.status_code, status.HTTP_201_CREATED)
+        duty_id = duty_resp.data["id"]
+
+        # Step 5: Guard attempts to approve duty compensation -> 403 Forbidden
+        self.client.force_authenticate(user=self.guard_a)
+        guard_approve_resp = self.client.post(f"/shifts/holiday-duties/{duty_id}/approve/", {
+            "reason": "Self-approval attempt",
+        })
+        self.assertEqual(guard_approve_resp.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Step 6: Administrator approves holiday duty compensation -> 200 OK
+        self.client.force_authenticate(user=self.admin)
+        admin_approve_resp = self.client.post(f"/shifts/holiday-duties/{duty_id}/approve/", {
+            "reason": "Verified national holiday deployment",
+        })
+        self.assertEqual(admin_approve_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin_approve_resp.data["status"], HolidayCompensationStatus.APPROVED)
+        self.assertEqual(admin_approve_resp.data["approved_by_name"], self.admin.username)
+
+    def test_direct_messages_flow(self):
+        """Phase 13: Direct operational messaging between guard, partner, and supervisor."""
+        from apps.accounts.models import User, UserRole
+        self.client.force_authenticate(user=self.guard_a)
+
+        # Message partner guard_b (assigned in self.guard_pair)
+        resp = self.client.post("/notifications/messages/", {
+            "recipient_id": str(self.guard_b.id),
+            "content": "Confirming post handover equipment check.",
+        })
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp.data["sender_name"], self.guard_a.username)
+        msg_id = resp.data["id"]
+
+        # Message station supervisor
+        resp_sup = self.client.post("/notifications/messages/", {
+            "recipient_id": str(self.supervisor.id),
+            "content": "Perimeter lighting check complete, Station Alpha.",
+        })
+        self.assertEqual(resp_sup.status_code, status.HTTP_201_CREATED)
+
+        # Unauthorized messaging: guard cannot message an unassigned user
+        unrelated_user = User.objects.create_user(username="stranger_guard", role=UserRole.GUARD)
+        resp_bad = self.client.post("/notifications/messages/", {
+            "recipient_id": str(unrelated_user.id),
+            "content": "Hello stranger",
+        })
+        self.assertEqual(resp_bad.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Recipient reads message and checks unread count
+        self.client.force_authenticate(user=self.guard_b)
+        unread_resp = self.client.get("/notifications/messages/unread_count/")
+        self.assertEqual(unread_resp.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(unread_resp.data["unread_count"], 1)
+
+        # Mark as read
+        read_resp = self.client.post(f"/notifications/messages/{msg_id}/mark_read/")
+        self.assertEqual(read_resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(read_resp.data["read"])
+
+    def test_ob_24hr_amendment_rule(self):
+        """Phase 13: Occurrence book 24-hour amendment rule & immutability."""
+        from apps.occurrence_book.models import OccurrenceBookEntry, OBCategory
+        self.client.force_authenticate(user=self.guard_a)
+
+        entry = OccurrenceBookEntry.objects.create(
+            station=self.station,
+            guard=self.guard_a,
+            category=OBCategory.ROUTINE,
+            occurrence_text="Routine perimeter patrol commenced.",
+        )
+
+        # 1. Guard A amends own entry within 24 hours -> 201 CREATED
+        amend_resp = self.client.post(f"/occurrence-book/entries/{entry.id}/amend/", {
+            "correction_text": "Updated: North sector gate lock tested and secured.",
+            "reason": "Omitted north gate status in initial log",
+        })
+        self.assertEqual(amend_resp.status_code, status.HTTP_201_CREATED)
+        self.assertIn("amendment", amend_resp.data)
+
+        # 2. Guard B attempts to amend Guard A's entry -> 403 Forbidden
+        self.client.force_authenticate(user=self.guard_b)
+        tamper_resp = self.client.post(f"/occurrence-book/entries/{entry.id}/amend/", {
+            "correction_text": "Unauthorized alteration",
+            "reason": "Malicious edit attempt",
+        })
+        self.assertEqual(tamper_resp.status_code, status.HTTP_403_FORBIDDEN)
+
+        # 3. Guard A attempts to amend entry older than 24 hours -> 400 Bad Request
+        self.client.force_authenticate(user=self.guard_a)
+        OccurrenceBookEntry.objects.filter(id=entry.id).update(
+            created_at=timezone.now() - timedelta(hours=25)
+        )
+        expired_resp = self.client.post(f"/occurrence-book/entries/{entry.id}/amend/", {
+            "correction_text": "Too late correction",
+            "reason": "Late edit",
+        })
+        self.assertEqual(expired_resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("24 hours", str(expired_resp.data["detail"]))
+
+    def test_emergency_sos_beacon(self):
+        """Phase 13: Emergency SOS distress beacon dispatch."""
+        self.client.force_authenticate(user=self.guard_a)
+
+        sos_resp = self.client.post("/incidents/incidents/sos/", {
+            "latitude": 1.2921,
+            "longitude": 36.8219,
+            "station_id": str(self.station.id),
+            "emergency_details": "Armed intruder detected at main perimeter gate",
+        })
+        self.assertEqual(sos_resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(sos_resp.data["status"], "SOS_DISPATCHED")
+        self.assertTrue(sos_resp.data["incident_id"])
+
+        # Check notification dispatched to supervisor
+        from apps.notifications.models import Notification
+        sup_notif = Notification.objects.filter(
+            user=self.supervisor,
+            notification_type="EMERGENCY_SOS",
+        ).first()
+        self.assertIsNotNone(sup_notif)
+        self.assertIn("DISTRESS BEACON", sup_notif.title)
+
+    def test_duty_state_authoritative_endpoint(self):
+        """Phase 13: Server-authoritative duty_state endpoint."""
+        self.client.force_authenticate(user=self.guard_a)
+        resp = self.client.get("/shifts/shifts/duty_state/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn("duty_state", resp.data)
+        self.assertIn("guard_name", resp.data)
+
+    def test_late_arrival_report_and_clock_in(self):
+        """Phase 13: Late arrival report filing and clock-in authorization."""
+        now_local = timezone.localtime()
+        shift = Shift.objects.create(
+            station=self.station,
+            guard=self.guard_a,
+            date=now_local.date(),
+            start_time=(now_local - timedelta(minutes=75)).time(),
+            end_time=(now_local + timedelta(hours=4)).time(),
+            shift_type=ShiftType.DAY,
+        )
+
+        self.client.force_authenticate(user=self.guard_a)
+
+        # Clock-in with enforce_late_report=True without prior report fails
+        fail_resp = self.client.post("/shifts/attendance/clock_in/", {
+            "shift_id": str(shift.id),
+            "latitude": 1.2921,
+            "longitude": 36.8219,
+            "enforce_late_report": True,
+        })
+        self.assertEqual(fail_resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(fail_resp.data.get("late_report_required"))
+
+        # Submit Late Arrival Report
+        lar_resp = self.client.post("/shifts/attendance/late_arrival_report/", {
+            "shift_id": str(shift.id),
+            "reason": "Public transit delay due to road closure",
+            "estimated_arrival": "08:15",
+            "incident_details": "Traffic diversion on main route",
+        })
+        self.assertEqual(lar_resp.status_code, status.HTTP_201_CREATED)
+        case_no = lar_resp.data["case_number"]
+        self.assertTrue(case_no.startswith("LAR-"))
+
+        # Now clock-in with case_number succeeds
+        clockin_resp = self.client.post("/shifts/attendance/clock_in/", {
+            "shift_id": str(shift.id),
+            "latitude": 1.2921,
+            "longitude": 36.8219,
+            "case_number": case_no,
+            "enforce_late_report": True,
+        })
+        self.assertEqual(clockin_resp.status_code, status.HTTP_200_OK)
+        self.assertIn(case_no, clockin_resp.data["late_reason"])
+
+
+
+
 
 
 
