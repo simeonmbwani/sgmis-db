@@ -16,6 +16,8 @@ from .models import (
     LeaveAccrualRecord,
     PublicHolidayCompensationLedger,
     CompensationLedgerEntryType,
+    AdjustmentType,
+    LeaveAdjustmentRecord,
 )
 from .serializers import (
     LeaveBalanceSerializer,
@@ -23,6 +25,7 @@ from .serializers import (
     LeaveAccrualRecordSerializer,
     GuardLeaveSummarySerializer,
     PublicHolidayCompensationLedgerSerializer,
+    LeaveAdjustmentRecordSerializer,
 )
 from .services import (
     process_guard_accruals,
@@ -31,7 +34,7 @@ from .services import (
     reject_leave_application,
 )
 from apps.accounts.models import UserRole
-from apps.accounts.permissions import IsSupervisorOrAdmin
+from apps.accounts.permissions import IsSupervisorOrAdmin, IsAdministrator
 
 UserModel = get_user_model()
 
@@ -203,6 +206,90 @@ class LeaveBalanceViewSet(viewsets.ReadOnlyModelViewSet):
         days = float(request.data.get("days", 2.0))
         balance.credit_public_holiday_duty(days=days)
         return Response(self.get_serializer(balance).data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="set_opening_balance", permission_classes=[IsAdministrator])
+    def set_opening_balance(self, request):
+        """
+        POST /leave/balances/set_opening_balance/
+        Administrative endpoint for Superusers to establish verified opening/current leave balances
+        from physical organisational ledgers.
+        Does NOT alter historical accruals or attendance prior to effective_date.
+        """
+        from datetime import datetime
+        guard_id = request.data.get("guard_id") or request.data.get("guard")
+        if not guard_id:
+            return Response({"detail": "guard_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        guard = get_object_or_404(UserModel, id=guard_id)
+        effective_date_str = request.data.get("effective_date")
+        if not effective_date_str:
+            return Response({"detail": "effective_date is required (YYYY-MM-DD)."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            effective_date = datetime.strptime(effective_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response({"detail": "Invalid effective_date format. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+
+        source = request.data.get("source", "Verified physical organisation ledger").strip()
+        reason = request.data.get("reason", "").strip()
+        if not reason:
+            return Response({"detail": "Mandatory operational reason / verification citation is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        balance, _ = LeaveBalance.objects.get_or_create(guard=guard, year=effective_date.year)
+        records_created = []
+
+        if "vacation_balance" in request.data:
+            vac_val = Decimal(str(request.data["vacation_balance"]))
+            prev = balance.vacation_days
+            balance.vacation_days = vac_val
+            balance.opening_vacation_balance = vac_val
+            balance.opening_balance_date = effective_date
+            balance.opening_balance_source = source
+            balance.opening_balance_verified_by = request.user
+            rec = LeaveAdjustmentRecord.objects.create(
+                guard=guard,
+                adjustment_type=AdjustmentType.OPENING_BALANCE,
+                leave_type="VACATION",
+                previous_balance=prev,
+                new_balance=vac_val,
+                effective_date=effective_date,
+                source=source,
+                reason=reason,
+                authorized_by=request.user,
+            )
+            records_created.append(rec)
+
+        if "casual_balance" in request.data:
+            cas_val = Decimal(str(request.data["casual_balance"]))
+            prev = balance.casual_days
+            balance.casual_days = cas_val
+            balance.opening_casual_balance = cas_val
+            balance.opening_balance_date = effective_date
+            balance.opening_balance_source = source
+            balance.opening_balance_verified_by = request.user
+            rec = LeaveAdjustmentRecord.objects.create(
+                guard=guard,
+                adjustment_type=AdjustmentType.OPENING_BALANCE,
+                leave_type="CASUAL",
+                previous_balance=prev,
+                new_balance=cas_val,
+                effective_date=effective_date,
+                source=source,
+                reason=reason,
+                authorized_by=request.user,
+            )
+            records_created.append(rec)
+
+        balance.save()
+
+        return Response({
+            "message": f"Successfully set verified opening balance for {guard.username} effective {effective_date}.",
+            "balance": LeaveBalanceSerializer(balance).data,
+            "adjustments": LeaveAdjustmentRecordSerializer(records_created, many=True).data,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="set-opening-balance", permission_classes=[IsAdministrator])
+    def set_opening_balance_hyphen(self, request):
+        return self.set_opening_balance(request)
 
 
 class LeaveApplicationViewSet(viewsets.ModelViewSet):
@@ -382,3 +469,33 @@ class PublicHolidayCompensationLedgerViewSet(viewsets.ReadOnlyModelViewSet):
         elif user.role == UserRole.SUPERVISOR and user.station_id:
             return qs.filter(guard__station_id=user.station_id)
         return qs
+
+
+class LeaveAdjustmentRecordViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Authoritative read-only audit log of verified opening balance adjustments and reconciliations.
+    """
+    queryset = LeaveAdjustmentRecord.objects.all().select_related("guard", "authorized_by")
+    serializer_class = LeaveAdjustmentRecordSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        guard_id = self.request.query_params.get("guard")
+        station_id = self.request.query_params.get("station")
+
+        if user.role == UserRole.GUARD:
+            return qs.filter(guard=user)
+        elif user.role == UserRole.SUPERVISOR:
+            if user.station_id:
+                return qs.filter(guard__station_id=user.station_id)
+            return qs.none()
+        elif user.role == UserRole.ADMINISTRATOR:
+            if guard_id:
+                qs = qs.filter(guard_id=guard_id)
+            if station_id:
+                qs = qs.filter(guard__station_id=station_id)
+            return qs
+        return qs
+

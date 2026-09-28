@@ -438,6 +438,20 @@ fun DashboardScreen(
                                 icon = Icons.Default.CalendarMonth,
                                 route = NavRoutes.MY_ROSTER,
                                 testTag = "nav_guard_duty_plan"
+                            ),
+                            BlueprintAction(
+                                title = "Escort Duties",
+                                subtitle = "Assigned vehicle escorts",
+                                icon = Icons.Default.DirectionsCar,
+                                route = NavRoutes.ESCORT_DUTIES,
+                                testTag = "nav_escort_duties"
+                            ),
+                            BlueprintAction(
+                                title = "Exam Duties",
+                                subtitle = "Exam supervision duties",
+                                icon = Icons.Default.School,
+                                route = NavRoutes.EXAM_DUTIES,
+                                testTag = "nav_exam_duties"
                             )
                         )
 
@@ -648,7 +662,9 @@ fun DashboardScreen(
                             BlueprintAction("SOS Emergency", "Immediate emergency alert", Icons.Default.Warning, NavRoutes.SOS, "nav_emergency_sos", isLocked = true, isEmergency = true),
                             BlueprintAction("Patrol Check", "Start patrol route", Icons.AutoMirrored.Filled.DirectionsWalk, NavRoutes.PATROL, "nav_patrol", isLocked = true),
                             BlueprintAction("Handover / Take-Over", "Shift handover notes", Icons.Default.SwapHoriz, NavRoutes.HANDOVER, "nav_handover", isLocked = true),
-                            BlueprintAction("My Roster", "View shift schedule", Icons.Default.CalendarMonth, NavRoutes.MY_ROSTER, "nav_guard_duty_plan", isLocked = false)
+                            BlueprintAction("My Roster", "View shift schedule", Icons.Default.CalendarMonth, NavRoutes.MY_ROSTER, "nav_guard_duty_plan", isLocked = false),
+                            BlueprintAction("Escort Duties", "Assigned vehicle escorts", Icons.Default.DirectionsCar, NavRoutes.ESCORT_DUTIES, "nav_escort_duties", isLocked = false),
+                            BlueprintAction("Exam Duties", "Exam supervision duties", Icons.Default.School, NavRoutes.EXAM_DUTIES, "nav_exam_duties", isLocked = false)
                         )
 
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1738,6 +1754,8 @@ private fun SupervisorCommandConsole(
         criticalIncidentsCount = criticalIncidentsCount,
         activePatrolsCount = activePatrolsCount,
         pendingLeaveCount = pendingLeaveCount,
+        escortDutiesCount = uiState.escortDuties.size,
+        examDutiesCount = uiState.examDuties.size,
         onNavigate = onNavigate
     )
 
@@ -1990,6 +2008,8 @@ private fun SupervisorMetricsGrid(
     criticalIncidentsCount: Int,
     activePatrolsCount: Int,
     pendingLeaveCount: Int,
+    escortDutiesCount: Int = 0,
+    examDutiesCount: Int = 0,
     onNavigate: (String) -> Unit
 ) {
     val guardsValue = if (!hasStation) "—" else if (guardsExpected > 0) "$guardsClockedIn / $guardsExpected" else "$guardsClockedIn"
@@ -2085,6 +2105,34 @@ private fun SupervisorMetricsGrid(
                 iconContainerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f),
                 testTag = "metric_pending_leave",
                 onClick = { onNavigate(NavRoutes.LEAVE) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            SupervisorMetricTile(
+                title = "Escort Duties",
+                value = "$escortDutiesCount",
+                subtitle = "Vehicle escorts",
+                icon = Icons.Default.DirectionsCar,
+                iconTint = MaterialTheme.colorScheme.primary,
+                iconContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                testTag = "metric_escort_duties",
+                onClick = { onNavigate(NavRoutes.ESCORT_DUTIES) },
+                modifier = Modifier.weight(1f)
+            )
+            SupervisorMetricTile(
+                title = "Exam Duties",
+                value = "$examDutiesCount",
+                subtitle = "Exam security",
+                icon = Icons.Default.School,
+                iconTint = MaterialTheme.colorScheme.secondary,
+                iconContainerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f),
+                testTag = "metric_exam_duties",
+                onClick = { onNavigate(NavRoutes.EXAM_DUTIES) },
                 modifier = Modifier.weight(1f)
             )
         }

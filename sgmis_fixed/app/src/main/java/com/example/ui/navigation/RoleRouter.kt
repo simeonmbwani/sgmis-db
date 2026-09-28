@@ -40,6 +40,9 @@ object NavRoutes {
     const val STATION_MANAGEMENT = "stations"
     const val REPORTS = "reports"
     const val ADDITIONAL_DUTIES = "additional_duties"
+    const val ESCORT_DUTIES = "escort_duties"
+    const val EXAM_DUTIES = "exam_duties"
+    const val RECORD_ADJUSTMENTS = "record_adjustments"
 }
 
 /**
@@ -112,6 +115,8 @@ object RoleRouter {
                     NavRoutes.LEAVE,
                     NavRoutes.VISITORS,
                     NavRoutes.ADDITIONAL_DUTIES,
+                    NavRoutes.ESCORT_DUTIES,
+                    NavRoutes.EXAM_DUTIES,
                     NavRoutes.EMERGENCY_SOS,
                     NavRoutes.GUARD_DUTY_PLAN,
                     NavRoutes.NOTIFICATIONS,

@@ -37,6 +37,7 @@ urlpatterns = [
     path("escorts/", include("apps.escorts.urls")),
     path("exams/", include("apps.exams.urls")),
     path("notifications/", include("apps.notifications.urls")),
+    path("adjustments/", include("apps.core.urls")),
     
     # API Prefixed Operational Modules
     path("api/stations/", include("apps.stations.urls")),
@@ -49,6 +50,7 @@ urlpatterns = [
     path("api/escorts/", include("apps.escorts.urls")),
     path("api/exams/", include("apps.exams.urls")),
     path("api/notifications/", include("apps.notifications.urls")),
+    path("api/adjustments/", include("apps.core.urls")),
     
     # OpenAPI Schema & Docs
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),

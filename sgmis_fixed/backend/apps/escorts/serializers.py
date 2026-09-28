@@ -3,25 +3,41 @@ from .models import EscortDuty, EscortStatus
 
 class EscortDutySerializer(serializers.ModelSerializer):
     guard_name = serializers.CharField(source="guard.get_full_name", read_only=True)
+    guard_employee_id = serializers.CharField(source="guard.employee_id", read_only=True)
+    supervisor_name = serializers.CharField(source="supervisor.get_full_name", read_only=True)
+    station_name = serializers.CharField(source="station.name", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
 
     class Meta:
         model = EscortDuty
         fields = [
             "id",
+            "reference",
             "guard",
             "guard_name",
+            "guard_employee_id",
+            "supervisor",
+            "supervisor_name",
+            "station",
+            "station_name",
             "mission_name",
             "origin",
             "destination",
+            "purpose",
+            "instructions",
+            "contact_numbers",
             "start_time",
             "end_time",
+            "departure_time",
+            "completion_time",
+            "acknowledged_at",
             "status",
             "status_display",
+            "remarks",
             "notes",
             "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = ["id", "reference", "created_at"]
 
     def validate(self, attrs):
         guard = attrs.get("guard") or (self.instance.guard if self.instance else None)

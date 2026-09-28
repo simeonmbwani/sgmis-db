@@ -80,3 +80,60 @@ class IdempotencyRecord(models.Model):
 
     def __str__(self):
         return f"IdempotencyRecord [{self.key}] for user {self.user.username} ({self.response_status})"
+
+
+class AdjustmentStatus(models.TextChoices):
+    PENDING = "PENDING", "Pending Review"
+    APPROVED = "APPROVED", "Approved"
+    REJECTED = "REJECTED", "Rejected"
+
+
+class RecordAdjustmentRequest(models.Model):
+    """
+    Auditable administrative correction and reconciliation request.
+    Allows Supervisors to submit proposed record adjustments for Superuser approval,
+    or Superusers to directly record verified current/opening state adjustments.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    guard = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="adjustment_requests",
+    )
+    field_name = models.CharField(max_length=64, db_index=True)
+    old_value = models.TextField(blank=True, default="")
+    requested_value = models.TextField()
+    approved_value = models.TextField(blank=True, default="")
+    effective_date = models.DateField(db_index=True)
+    reason = models.TextField(help_text="Mandatory operational justification or physical record citation")
+    notes = models.TextField(blank=True, default="")
+    status = models.CharField(
+        max_length=20,
+        choices=AdjustmentStatus.choices,
+        default=AdjustmentStatus.PENDING,
+        db_index=True,
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="submitted_adjustments",
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reviewed_adjustments",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Adjustment [{self.field_name}] for {self.guard.username} ({self.status})"
+

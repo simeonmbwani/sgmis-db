@@ -170,3 +170,304 @@ def api_server_error(request):
         "path": request.path,
     }, status=500)
 
+
+from decimal import Decimal
+from django.db.models import Q, Max
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
+from apps.accounts.permissions import IsAdministrator, IsSupervisorOrAdmin
+from apps.core.models import RecordAdjustmentRequest, AdjustmentStatus, SecurityAuditEvent
+from apps.core.serializers import RecordAdjustmentRequestSerializer
+from apps.notifications.models import Notification
+from apps.leave.models import (
+    LeaveBalance,
+    AdjustmentType,
+    LeaveAdjustmentRecord,
+    PublicHolidayCompensationLedger,
+    CompensationLedgerEntryType,
+)
+
+
+def apply_record_adjustment(adjustment, approved_value, actor):
+    guard = adjustment.guard
+    field = adjustment.field_name.strip().lower()
+    effective_date = adjustment.effective_date
+    reason = adjustment.reason or "Record adjustment"
+
+    if field in ["employee_number", "employee_id"]:
+        guard.employee_number = approved_value
+        guard.save()
+    elif field == "first_name":
+        guard.first_name = approved_value
+        guard.save()
+    elif field == "last_name":
+        guard.last_name = approved_value
+        guard.save()
+    elif field == "station":
+        station = None
+        try:
+            station = Station.objects.filter(id=approved_value).first()
+        except Exception:
+            pass
+        if not station:
+            station = Station.objects.filter(name__iexact=approved_value).first()
+        if station:
+            guard.station = station
+            guard.save()
+            Shift.objects.filter(guard=guard, date__gte=effective_date).update(station=station)
+    elif field in ["shift", "shift_type"]:
+        norm = approved_value.strip().upper()
+        if norm in ["DAY", "NIGHT"]:
+            Shift.objects.filter(guard=guard, date__gte=effective_date).update(shift_type=norm)
+    elif field in ["pair", "pair_guard"]:
+        from apps.stations.models import GuardPair
+        pair_guard = User.objects.filter(
+            Q(username=approved_value) | Q(employee_number=approved_value) | Q(id=approved_value if len(approved_value) == 36 else None)
+        ).first()
+        if pair_guard:
+            pair = GuardPair.objects.filter(
+                (Q(guard_a=guard, guard_b=pair_guard) | Q(guard_a=pair_guard, guard_b=guard))
+            ).first()
+            if not pair:
+                max_order = GuardPair.objects.filter(station=guard.station).aggregate(Max("rotation_order"))["rotation_order__max"] or 0
+                pair = GuardPair.objects.create(guard_a=guard, guard_b=pair_guard, station=guard.station, rotation_order=max_order + 1)
+            Shift.objects.filter(guard=guard, date__gte=effective_date).update(pair=pair)
+    elif field == "vacation_balance":
+        bal, _ = LeaveBalance.objects.get_or_create(guard=guard, year=effective_date.year)
+        prev = bal.vacation_days
+        val = Decimal(str(approved_value))
+        bal.vacation_days = val
+        bal.opening_vacation_balance = val
+        bal.opening_balance_date = effective_date
+        bal.opening_balance_source = reason
+        bal.opening_balance_verified_by = actor
+        bal.save()
+        LeaveAdjustmentRecord.objects.create(
+            guard=guard,
+            adjustment_type=AdjustmentType.OPENING_BALANCE,
+            leave_type="VACATION",
+            previous_balance=prev,
+            new_balance=val,
+            effective_date=effective_date,
+            source=reason,
+            reason=reason,
+            authorized_by=actor,
+        )
+    elif field == "casual_balance":
+        bal, _ = LeaveBalance.objects.get_or_create(guard=guard, year=effective_date.year)
+        prev = bal.casual_days
+        val = Decimal(str(approved_value))
+        bal.casual_days = val
+        bal.opening_casual_balance = val
+        bal.opening_balance_date = effective_date
+        bal.opening_balance_source = reason
+        bal.opening_balance_verified_by = actor
+        bal.save()
+        LeaveAdjustmentRecord.objects.create(
+            guard=guard,
+            adjustment_type=AdjustmentType.OPENING_BALANCE,
+            leave_type="CASUAL",
+            previous_balance=prev,
+            new_balance=val,
+            effective_date=effective_date,
+            source=reason,
+            reason=reason,
+            authorized_by=actor,
+        )
+    elif field == "compensation_days":
+        val = Decimal(str(approved_value))
+        rem = PublicHolidayCompensationLedger.get_remaining_for_guard(guard)
+        diff = val - rem
+        if diff != Decimal("0.0"):
+            PublicHolidayCompensationLedger.objects.create(
+                guard=guard,
+                entry_type=CompensationLedgerEntryType.EARNED if diff > 0 else CompensationLedgerEntryType.USED,
+                days=abs(diff),
+                notes=f"Administrative reconciliation: {reason}",
+                created_by=actor,
+            )
+
+
+class RecordAdjustmentRequestViewSet(viewsets.ModelViewSet):
+    """
+    Auditable Record Correction & Reconciliation Workflow.
+    - Supervisors submit adjustment requests (PENDING review).
+    - Superusers review, approve, reject, or modify proposed values.
+    - Approved values apply to master records without mutating historical attendance or shifts.
+    """
+    queryset = RecordAdjustmentRequest.objects.all().select_related("guard", "requested_by", "reviewed_by")
+    serializer_class = RecordAdjustmentRequestSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        if user.role == UserRole.GUARD:
+            return qs.filter(guard=user)
+        elif user.role == UserRole.SUPERVISOR:
+            if user.station_id:
+                return qs.filter(Q(requested_by=user) | Q(guard__station_id=user.station_id))
+            return qs.filter(requested_by=user)
+        return qs
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if user.role == UserRole.GUARD:
+            raise PermissionDenied("Guards cannot submit record adjustments.")
+
+        guard = serializer.validated_data["guard"]
+        if user.role == UserRole.SUPERVISOR:
+            if user.station_id and guard.station_id and user.station_id != guard.station_id:
+                raise PermissionDenied("Supervisor cannot request adjustments for a guard outside assigned station.")
+
+        field_name = serializer.validated_data["field_name"].strip().lower()
+        old_val = serializer.validated_data.get("old_value", "")
+        if not old_val:
+            if field_name in ["employee_number", "employee_id"]:
+                old_val = getattr(guard, "employee_number", "") or ""
+            elif field_name == "first_name":
+                old_val = guard.first_name or ""
+            elif field_name == "last_name":
+                old_val = guard.last_name or ""
+            elif field_name == "station":
+                old_val = guard.station.name if guard.station else ""
+            elif field_name == "vacation_balance":
+                b = LeaveBalance.objects.filter(guard=guard).first()
+                old_val = str(b.vacation_days) if b else "0.0"
+            elif field_name == "casual_balance":
+                b = LeaveBalance.objects.filter(guard=guard).first()
+                old_val = str(b.casual_days) if b else "0.0"
+            elif field_name == "compensation_days":
+                old_val = str(PublicHolidayCompensationLedger.get_remaining_for_guard(guard))
+
+        is_admin = user.role == UserRole.ADMINISTRATOR or user.is_superuser
+        initial_status = (
+            AdjustmentStatus.APPROVED
+            if (is_admin and self.request.data.get("status") == "APPROVED")
+            else AdjustmentStatus.PENDING
+        )
+
+        req_obj = serializer.save(
+            requested_by=user,
+            old_value=old_val,
+            status=initial_status,
+            reviewed_by=user if initial_status == AdjustmentStatus.APPROVED else None,
+            reviewed_at=timezone.now() if initial_status == AdjustmentStatus.APPROVED else None,
+            approved_value=serializer.validated_data["requested_value"] if initial_status == AdjustmentStatus.APPROVED else "",
+        )
+
+        if initial_status == AdjustmentStatus.APPROVED:
+            apply_record_adjustment(req_obj, req_obj.requested_value, user)
+            SecurityAuditEvent.objects.create(
+                event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+                actor=user,
+                actor_username=user.username,
+                target_model="User",
+                target_id=str(guard.id),
+                details={
+                    "field": field_name,
+                    "old_value": old_val,
+                    "new_value": req_obj.requested_value,
+                    "status": "APPROVED_DIRECT",
+                }
+            )
+        else:
+            admins = User.objects.filter(role=UserRole.ADMINISTRATOR, is_active=True)
+            for adm in admins:
+                Notification.objects.create(
+                    user=adm,
+                    title="Record Adjustment Request",
+                    message=f"Supervisor {user.get_full_name() or user.username} submitted an adjustment request for {guard.get_full_name() or guard.username} ({field_name}).",
+                    notification_type="OPERATIONAL_ALERT",
+                )
+
+    @action(detail=True, methods=["post"], url_path="approve", permission_classes=[IsAdministrator])
+    def approve(self, request, pk=None):
+        adjustment = self.get_object()
+        if adjustment.status == AdjustmentStatus.APPROVED:
+            return Response({"detail": "Adjustment request is already approved."}, status=status.HTTP_400_BAD_REQUEST)
+
+        approved_value = request.data.get("approved_value") or adjustment.requested_value
+        apply_record_adjustment(adjustment, approved_value, request.user)
+
+        adjustment.approved_value = approved_value
+        adjustment.status = AdjustmentStatus.APPROVED
+        adjustment.reviewed_by = request.user
+        adjustment.reviewed_at = timezone.now()
+        adjustment.save()
+
+        Notification.objects.create(
+            user=adjustment.guard,
+            title="Record Adjustment Approved",
+            message=f"Your {adjustment.field_name} record has been reconciled and updated.",
+            notification_type="OPERATIONAL_ALERT",
+        )
+        if adjustment.requested_by and adjustment.requested_by != request.user:
+            Notification.objects.create(
+                user=adjustment.requested_by,
+                title="Record Adjustment Approved",
+                message=f"Your adjustment request for {adjustment.guard.username} ({adjustment.field_name}) was approved.",
+                notification_type="OPERATIONAL_ALERT",
+            )
+
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=request.user,
+            actor_username=request.user.username,
+            target_model="User",
+            target_id=str(adjustment.guard.id),
+            details={
+                "adjustment_id": str(adjustment.id),
+                "field": adjustment.field_name,
+                "old_value": adjustment.old_value,
+                "new_value": approved_value,
+                "action": "APPROVED",
+            }
+        )
+
+        return Response({
+            "message": f"Successfully approved adjustment for {adjustment.guard.username}.",
+            "adjustment": RecordAdjustmentRequestSerializer(adjustment).data,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="reject", permission_classes=[IsAdministrator])
+    def reject(self, request, pk=None):
+        adjustment = self.get_object()
+        if adjustment.status == AdjustmentStatus.REJECTED:
+            return Response({"detail": "Adjustment request is already rejected."}, status=status.HTTP_400_BAD_REQUEST)
+
+        rejection_reason = request.data.get("rejection_reason", "").strip() or "Rejected by administrator."
+        adjustment.status = AdjustmentStatus.REJECTED
+        adjustment.rejection_reason = rejection_reason
+        adjustment.reviewed_by = request.user
+        adjustment.reviewed_at = timezone.now()
+        adjustment.save()
+
+        if adjustment.requested_by:
+            Notification.objects.create(
+                user=adjustment.requested_by,
+                title="Record Adjustment Rejected",
+                message=f"Your adjustment request for {adjustment.guard.username} ({adjustment.field_name}) was rejected: {rejection_reason}.",
+                notification_type="OPERATIONAL_ALERT",
+            )
+
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=request.user,
+            actor_username=request.user.username,
+            target_model="User",
+            target_id=str(adjustment.guard.id),
+            details={
+                "adjustment_id": str(adjustment.id),
+                "field": adjustment.field_name,
+                "rejection_reason": rejection_reason,
+                "action": "REJECTED",
+            }
+        )
+
+        return Response({
+            "message": "Adjustment request rejected.",
+            "adjustment": RecordAdjustmentRequestSerializer(adjustment).data,
+        }, status=status.HTTP_200_OK)
+

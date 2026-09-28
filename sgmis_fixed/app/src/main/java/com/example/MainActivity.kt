@@ -169,6 +169,15 @@ fun SgmisApp(viewModel: SgmisViewModel) {
             composable("additional_duties") {
                 AdditionalDutiesScreen(viewModel = viewModel) { navController.popBackStack() }
             }
+            composable("escort_duties") {
+                EscortDutiesScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
+            composable("exam_duties") {
+                ExamDutiesScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
+            composable("record_adjustments") {
+                RecordAdjustmentsScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
             composable("reports") {
                 ReportsScreen(viewModel = viewModel) { navController.popBackStack() }
             }

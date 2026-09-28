@@ -44,6 +44,19 @@ class LeaveBalance(models.Model):
     last_accrual_date = models.DateField(default=date(2026, 1, 1))
     casual_cycle_start = models.DateField(default=date(2026, 1, 1))
 
+    # Opening balance / Reconciliation tracking
+    opening_vacation_balance = models.DecimalField(max_digits=6, decimal_places=1, default=Decimal("0.0"))
+    opening_casual_balance = models.DecimalField(max_digits=6, decimal_places=1, default=Decimal("0.0"))
+    opening_balance_date = models.DateField(null=True, blank=True)
+    opening_balance_source = models.CharField(max_length=200, blank=True, default="")
+    opening_balance_verified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="verified_leave_balances",
+    )
+
     class Meta:
         unique_together = ("guard", "year")
 
@@ -366,3 +379,47 @@ class PublicHolidayCompensationLedger(models.Model):
         earned = cls.get_total_earned_for_guard(guard)
         used = cls.get_total_used_for_guard(guard)
         return max(Decimal("0.0"), earned - used)
+
+
+class AdjustmentType(models.TextChoices):
+    OPENING_BALANCE = "OPENING_BALANCE", "Opening Balance Reconciliation"
+    ADMINISTRATIVE_ADJUSTMENT = "ADMINISTRATIVE_ADJUSTMENT", "Administrative Adjustment"
+
+
+class LeaveAdjustmentRecord(models.Model):
+    """
+    Authoritative audit record of verified opening balances and administrative adjustments.
+    Distinguishes physical record reconciliations from normal monthly accruals.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    guard = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="leave_adjustments",
+    )
+    adjustment_type = models.CharField(
+        max_length=30,
+        choices=AdjustmentType.choices,
+        default=AdjustmentType.OPENING_BALANCE,
+    )
+    leave_type = models.CharField(max_length=20, choices=LeaveType.choices)
+    previous_balance = models.DecimalField(max_digits=6, decimal_places=1)
+    new_balance = models.DecimalField(max_digits=6, decimal_places=1)
+    effective_date = models.DateField(db_index=True)
+    source = models.CharField(max_length=200, default="Existing organisational record")
+    reason = models.TextField()
+    authorized_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="authorized_leave_adjustments",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.guard.username} - {self.adjustment_type} ({self.leave_type}): {self.previous_balance} -> {self.new_balance} on {self.effective_date}"
+

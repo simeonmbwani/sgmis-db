@@ -6,6 +6,7 @@ from .models import (
     LeaveType,
     LeaveAccrualRecord,
     PublicHolidayCompensationLedger,
+    LeaveAdjustmentRecord,
 )
 
 
@@ -44,6 +45,8 @@ class LeaveBalanceSerializer(serializers.ModelSerializer):
             "casual_accrual_rate", "vacation_accrual_rate", "vacation_cap",
             "remaining_casual", "remaining_vacation",
             "compensation_earned", "compensation_used", "remaining_compensation",
+            "opening_vacation_balance", "opening_casual_balance",
+            "opening_balance_date", "opening_balance_source", "opening_balance_verified_by",
             "last_accrual_date", "casual_cycle_start",
         ]
         read_only_fields = [
@@ -51,6 +54,32 @@ class LeaveBalanceSerializer(serializers.ModelSerializer):
             "remaining_annual", "remaining_sick",
             "compensation_earned", "compensation_used", "remaining_compensation",
         ]
+
+
+class LeaveAdjustmentRecordSerializer(serializers.ModelSerializer):
+    guard_name = serializers.CharField(source="guard.get_full_name", read_only=True)
+    authorized_by_name = serializers.CharField(source="authorized_by.get_full_name", read_only=True)
+    adjustment_type_display = serializers.CharField(source="get_adjustment_type_display", read_only=True)
+
+    class Meta:
+        model = LeaveAdjustmentRecord
+        fields = [
+            "id",
+            "guard",
+            "guard_name",
+            "adjustment_type",
+            "adjustment_type_display",
+            "leave_type",
+            "previous_balance",
+            "new_balance",
+            "effective_date",
+            "source",
+            "reason",
+            "authorized_by",
+            "authorized_by_name",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 
 class LeaveApplicationSerializer(serializers.ModelSerializer):

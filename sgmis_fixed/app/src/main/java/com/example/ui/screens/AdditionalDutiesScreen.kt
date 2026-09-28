@@ -328,15 +328,29 @@ fun EscortCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(duty.missionName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                Column {
+                    Text(duty.missionName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    val ref = duty.reference ?: "ESC-${duty.id.take(8).uppercase()}"
+                    Text("Ref: $ref", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                }
                 Surface(
-                    color = if (duty.status == "COMPLETED") StatusSuccess.copy(alpha = 0.2f) else StatusWarning.copy(alpha = 0.2f),
+                    color = when (duty.status) {
+                        "COMPLETED" -> StatusSuccess.copy(alpha = 0.2f)
+                        "ACKNOWLEDGED", "EN_ROUTE" -> MaterialTheme.colorScheme.primaryContainer
+                        "CANCELLED" -> MaterialTheme.colorScheme.errorContainer
+                        else -> StatusWarning.copy(alpha = 0.2f)
+                    },
                     shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
                         text = duty.statusDisplay ?: duty.status,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (duty.status == "COMPLETED") StatusSuccess else StatusWarning,
+                        color = when (duty.status) {
+                            "COMPLETED" -> StatusSuccess
+                            "ACKNOWLEDGED", "EN_ROUTE" -> MaterialTheme.colorScheme.onPrimaryContainer
+                            "CANCELLED" -> MaterialTheme.colorScheme.error
+                            else -> StatusWarning
+                        },
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                         fontWeight = FontWeight.Bold
                     )
@@ -344,23 +358,58 @@ fun EscortCard(
             }
 
             Text("Route: ${duty.origin} → ${duty.destination}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-            Text("Officer: ${duty.guardName}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            Text("Officer: ${duty.guardName}${if (!duty.guardEmployeeId.isNullOrBlank()) " (${duty.guardEmployeeId})" else ""}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            
+            if (!duty.supervisorName.isNullOrBlank()) {
+                Text("Authorising Supervisor: ${duty.supervisorName}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (!duty.stationName.isNullOrBlank()) {
+                Text("Station: ${duty.stationName}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (!duty.purpose.isNullOrBlank()) {
+                Text("Movement Purpose: ${duty.purpose}", style = MaterialTheme.typography.bodySmall)
+            }
+            if (!duty.instructions.isNullOrBlank()) {
+                Text("Instructions: ${duty.instructions}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (!duty.contactNumbers.isNullOrBlank()) {
+                Text("Contact: ${duty.contactNumbers}", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+            }
+
             Text("Scheduled: ${duty.startTime.take(16).replace("T", " ")} to ${duty.endTime.take(16).replace("T", " ")}", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+            
+            if (!duty.departureTime.isNullOrBlank() || !duty.completionTime.isNullOrBlank()) {
+                val dep = duty.departureTime?.take(16)?.replace("T", " ") ?: "Pending"
+                val comp = duty.completionTime?.take(16)?.replace("T", " ") ?: "In Progress"
+                Text("Departure: $dep | Completion: $comp", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+            }
+
             if (!duty.notes.isNullOrBlank()) {
                 Text("Notes: ${duty.notes}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            if (!duty.remarks.isNullOrBlank()) {
+                Text("Remarks: ${duty.remarks}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
 
-            if (duty.status != "COMPLETED") {
+            if (duty.status != "COMPLETED" && duty.status != "CANCELLED") {
                 Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    if (duty.status == "SCHEDULED") {
-                        OutlinedButton(onClick = { onUpdateStatus("EN_ROUTE") }) {
-                            Text("Mark En Route")
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    if (duty.status == "SCHEDULED" || duty.status == "ASSIGNED") {
+                        OutlinedButton(onClick = { onUpdateStatus("ACKNOWLEDGED") }) {
+                            Text("Acknowledge Duty")
                         }
                         Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Button(onClick = { onUpdateStatus("COMPLETED") }) {
-                        Text("Complete Duty")
+                        Button(onClick = { onUpdateStatus("EN_ROUTE") }) {
+                            Text("Mark En Route")
+                        }
+                    } else if (duty.status == "ACKNOWLEDGED") {
+                        Button(onClick = { onUpdateStatus("EN_ROUTE") }) {
+                            Text("Depart (En Route)")
+                        }
+                    } else if (duty.status == "EN_ROUTE") {
+                        Button(onClick = { onUpdateStatus("COMPLETED") }) {
+                            Text("Complete Escort")
+                        }
                     }
                 }
             }
@@ -385,15 +434,29 @@ fun ExamDutyCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(duty.examTitle, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                Column {
+                    Text(duty.examTitle, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    val ref = duty.reference ?: "EXAM-${duty.id.take(8).uppercase()}"
+                    Text("Ref: $ref", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
+                }
                 Surface(
-                    color = if (duty.status == "COMPLETED") StatusSuccess.copy(alpha = 0.2f) else MaterialTheme.colorScheme.primaryContainer,
+                    color = when (duty.status) {
+                        "COMPLETED" -> StatusSuccess.copy(alpha = 0.2f)
+                        "ACKNOWLEDGED", "IN_PROGRESS" -> MaterialTheme.colorScheme.primaryContainer
+                        "CANCELLED" -> MaterialTheme.colorScheme.errorContainer
+                        else -> StatusWarning.copy(alpha = 0.2f)
+                    },
                     shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
                         text = duty.status,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (duty.status == "COMPLETED") StatusSuccess else MaterialTheme.colorScheme.onPrimaryContainer,
+                        color = when (duty.status) {
+                            "COMPLETED" -> StatusSuccess
+                            "ACKNOWLEDGED", "IN_PROGRESS" -> MaterialTheme.colorScheme.onPrimaryContainer
+                            "CANCELLED" -> MaterialTheme.colorScheme.error
+                            else -> StatusWarning
+                        },
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                         fontWeight = FontWeight.Bold
                     )
@@ -401,14 +464,49 @@ fun ExamDutyCard(
             }
 
             Text("Institution: ${duty.institution}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-            Text("Security Escort: ${duty.guardName}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-            Text("Date & Time: ${duty.date} (${duty.startTime} – ${duty.endTime})", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+            if (!duty.hallPost.isNullOrBlank()) {
+                Text("Hall / Post: ${duty.hallPost}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+            }
+            Text("Assigned Guard: ${duty.guardName}${if (!duty.guardEmployeeId.isNullOrBlank()) " (${duty.guardEmployeeId})" else ""}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            
+            if (!duty.supervisorName.isNullOrBlank()) {
+                Text("Supervisor: ${duty.supervisorName}${if (!duty.supervisorContact.isNullOrBlank()) " (${duty.supervisorContact})" else ""}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (!duty.stationName.isNullOrBlank()) {
+                Text("Station: ${duty.stationName}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (!duty.instructions.isNullOrBlank()) {
+                Text("Examination Instructions: ${duty.instructions}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
 
-            if (duty.status != "COMPLETED") {
+            Text("Date: ${duty.date}${if (!duty.reportingTime.isNullOrBlank()) " | Reporting: ${duty.reportingTime}" else ""} (${duty.startTime} – ${duty.endTime})", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+
+            if (!duty.notes.isNullOrBlank()) {
+                Text("Notes: ${duty.notes}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (!duty.remarks.isNullOrBlank()) {
+                Text("Remarks: ${duty.remarks}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+
+            if (duty.status != "COMPLETED" && duty.status != "CANCELLED") {
                 Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Button(onClick = { onUpdateStatus("COMPLETED") }) {
-                        Text("Complete Exam Escort")
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    if (duty.status == "ASSIGNED") {
+                        OutlinedButton(onClick = { onUpdateStatus("ACKNOWLEDGED") }) {
+                            Text("Acknowledge Duty")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = { onUpdateStatus("IN_PROGRESS") }) {
+                            Text("Report to Post")
+                        }
+                    } else if (duty.status == "ACKNOWLEDGED") {
+                        Button(onClick = { onUpdateStatus("IN_PROGRESS") }) {
+                            Text("Report to Post")
+                        }
+                    } else if (duty.status == "IN_PROGRESS") {
+                        Button(onClick = { onUpdateStatus("COMPLETED") }) {
+                            Text("Complete Exam Duty")
+                        }
                     }
                 }
             }

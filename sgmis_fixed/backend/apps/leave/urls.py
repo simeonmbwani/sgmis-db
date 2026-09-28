@@ -5,6 +5,7 @@ from .views import (
     LeaveApplicationViewSet,
     LeaveAccrualRecordViewSet,
     PublicHolidayCompensationLedgerViewSet,
+    LeaveAdjustmentRecordViewSet,
     GuardLeaveSummaryView,
 )
 
@@ -13,6 +14,7 @@ router.register(r"balances", LeaveBalanceViewSet, basename="leave_balance")
 router.register(r"applications", LeaveApplicationViewSet, basename="leave_application")
 router.register(r"accruals", LeaveAccrualRecordViewSet, basename="leave_accrual")
 router.register(r"compensation-ledger", PublicHolidayCompensationLedgerViewSet, basename="compensation_ledger")
+router.register(r"adjustments", LeaveAdjustmentRecordViewSet, basename="leave_adjustment")
 
 urlpatterns = [
     path("my-summary/", GuardLeaveSummaryView.as_view(), name="my_leave_summary"),

@@ -493,13 +493,26 @@ data class EscortDuty(
     val id: String,
     val guard: String,
     @Json(name = "guard_name") val guardName: String,
+    @Json(name = "guard_employee_id") val guardEmployeeId: String? = null,
+    val reference: String? = null,
+    val supervisor: String? = null,
+    @Json(name = "supervisor_name") val supervisorName: String? = null,
+    val station: String? = null,
+    @Json(name = "station_name") val stationName: String? = null,
     @Json(name = "mission_name") val missionName: String,
     val origin: String,
     val destination: String,
+    val purpose: String? = null,
+    val instructions: String? = null,
+    @Json(name = "contact_numbers") val contactNumbers: String? = null,
     @Json(name = "start_time") val startTime: String,
     @Json(name = "end_time") val endTime: String,
+    @Json(name = "departure_time") val departureTime: String? = null,
+    @Json(name = "completion_time") val completionTime: String? = null,
+    @Json(name = "acknowledged_at") val acknowledgedAt: String? = null,
     val status: String,
     @Json(name = "status_display") val statusDisplay: String? = null,
+    val remarks: String? = null,
     val notes: String? = null,
     @Json(name = "created_at") val createdAt: String
 )
@@ -509,14 +522,115 @@ data class ExamDuty(
     val id: String,
     val guard: String,
     @Json(name = "guard_name") val guardName: String,
+    @Json(name = "guard_employee_id") val guardEmployeeId: String? = null,
+    val reference: String? = null,
+    val supervisor: String? = null,
+    @Json(name = "supervisor_name") val supervisorName: String? = null,
+    val station: String? = null,
+    @Json(name = "station_name") val stationName: String? = null,
     val institution: String,
     @Json(name = "exam_title") val examTitle: String,
+    @Json(name = "hall_post") val hallPost: String? = null,
+    @Json(name = "supervisor_contact") val supervisorContact: String? = null,
+    val instructions: String? = null,
     val date: String,
+    @Json(name = "reporting_time") val reportingTime: String? = null,
     @Json(name = "start_time") val startTime: String,
     @Json(name = "end_time") val endTime: String,
+    @Json(name = "acknowledged_at") val acknowledgedAt: String? = null,
     val status: String,
+    val remarks: String? = null,
     val notes: String? = null,
     @Json(name = "created_at") val createdAt: String
+)
+
+@JsonClass(generateAdapter = true)
+data class RecordAdjustmentRequest(
+    val id: String,
+    val guard: String,
+    @Json(name = "guard_name") val guardName: String? = null,
+    @Json(name = "guard_employee_id") val guardEmployeeId: String? = null,
+    @Json(name = "field_name") val fieldName: String,
+    @Json(name = "old_value") val oldValue: String? = null,
+    @Json(name = "requested_value") val requestedValue: String,
+    @Json(name = "approved_value") val approvedValue: String? = null,
+    @Json(name = "effective_date") val effectiveDate: String,
+    val reason: String,
+    val notes: String? = null,
+    val status: String,
+    @Json(name = "status_display") val statusDisplay: String? = null,
+    @Json(name = "requested_by") val requestedBy: String? = null,
+    @Json(name = "requested_by_name") val requestedByName: String? = null,
+    @Json(name = "reviewed_by") val reviewedBy: String? = null,
+    @Json(name = "reviewed_by_name") val reviewedByName: String? = null,
+    @Json(name = "reviewed_at") val reviewedAt: String? = null,
+    @Json(name = "rejection_reason") val rejectionReason: String? = null,
+    @Json(name = "created_at") val createdAt: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class CreateRecordAdjustmentRequest(
+    val guard: String,
+    @Json(name = "field_name") val fieldName: String,
+    @Json(name = "requested_value") val requestedValue: String,
+    @Json(name = "effective_date") val effectiveDate: String,
+    val reason: String,
+    val notes: String? = null,
+    @Json(name = "old_value") val oldValue: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ApproveRecordAdjustmentRequest(
+    @Json(name = "approved_value") val approvedValue: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class RejectRecordAdjustmentRequest(
+    @Json(name = "rejection_reason") val rejectionReason: String
+)
+
+@JsonClass(generateAdapter = true)
+data class RecordAdjustmentResponse(
+    val message: String = "",
+    val adjustment: RecordAdjustmentRequest? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ReassignDutyRequest(
+    @Json(name = "guard_id") val guardId: String,
+    @Json(name = "effective_date") val effectiveDate: String,
+    val reason: String,
+    @Json(name = "shift_type") val shiftType: String? = null,
+    @Json(name = "station_id") val stationId: String? = null,
+    @Json(name = "start_time") val startTime: String? = null,
+    @Json(name = "end_time") val endTime: String? = null,
+    @Json(name = "pair_guard_id") val pairGuardId: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ReassignDutyResponse(
+    val message: String = "",
+    @Json(name = "guard_id") val guardId: String? = null,
+    @Json(name = "guard_name") val guardName: String? = null,
+    @Json(name = "effective_date") val effectiveDate: String? = null,
+    @Json(name = "shifts_updated") val shiftsUpdated: Int? = null,
+    @Json(name = "historical_preserved") val historicalPreserved: Boolean = true
+)
+
+@JsonClass(generateAdapter = true)
+data class SetOpeningBalanceRequest(
+    @Json(name = "guard_id") val guardId: String,
+    @Json(name = "effective_date") val effectiveDate: String,
+    val reason: String,
+    val source: String? = null,
+    @Json(name = "vacation_balance") val vacationBalance: Double? = null,
+    @Json(name = "casual_balance") val casualBalance: Double? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SetOpeningBalanceResponse(
+    val message: String = "",
+    val balance: LeaveBalance? = null
 )
 
 @JsonClass(generateAdapter = true)

@@ -1,19 +1,21 @@
-﻿import random
+import random
 from datetime import datetime
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import EscortDuty
+from .models import EscortDuty, EscortStatus
 from .serializers import EscortDutySerializer
 from apps.accounts.models import User, UserRole
-from apps.accounts.permissions import IsSupervisorOrAdmin
+from apps.accounts.permissions import IsSupervisorOrAdmin, IsAdministrator
 from apps.shifts.models import Shift
 from apps.notifications.models import Notification
+from apps.core.sms import send_sms
+from apps.core.models import SecurityAuditEvent
 
 class EscortDutyViewSet(viewsets.ModelViewSet):
-    queryset = EscortDuty.objects.all().select_related("guard")
+    queryset = EscortDuty.objects.all().select_related("guard", "supervisor", "station")
     serializer_class = EscortDutySerializer
     permission_classes = [IsAuthenticated]
 
@@ -22,12 +24,114 @@ class EscortDutyViewSet(viewsets.ModelViewSet):
         qs = super().get_queryset()
         if user.role == UserRole.GUARD:
             return qs.filter(guard=user)
+        elif user.role == UserRole.SUPERVISOR:
+            if user.station_id:
+                return qs.filter(station_id=user.station_id)
+            return qs.filter(supervisor=user)
         return qs
 
     def get_permissions(self):
-        if self.action in ["create", "update", "partial_update", "destroy", "auto_allocate"]:
+        if self.action in ["destroy"]:
+            return [IsAdministrator()]
+        if self.action in ["create", "update", "partial_update", "auto_allocate"]:
             return [IsSupervisorOrAdmin()]
         return [IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        supervisor = serializer.validated_data.get("supervisor") or (user if user.role in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR] else None)
+        station = serializer.validated_data.get("station") or (user.station if user.station else None)
+        duty = serializer.save(supervisor=supervisor, station=station)
+
+        # Notify assigned guard in-app
+        Notification.objects.create(
+            user=duty.guard,
+            title="Escort Mission Assigned",
+            message=f"You have been assigned to escort mission {duty.mission_name} (Ref: {duty.reference}). Origin: {duty.origin} -> Destination: {duty.destination}.",
+            notification_type="DUTY_ASSIGNMENT",
+        )
+
+        # Deliver SMS if phone number configured
+        if duty.guard.phone_number:
+            send_sms(
+                duty.guard.phone_number,
+                f"SGMIS Escort Duty: Ref {duty.reference}. Mission: {duty.mission_name}. From {duty.origin} to {duty.destination}. Report at {duty.start_time.strftime('%Y-%m-%d %H:%M')}."
+            )
+
+    @action(detail=True, methods=["post"], url_path="acknowledge")
+    def acknowledge(self, request, pk=None):
+        """
+        POST /escorts/duties/{id}/acknowledge/
+        Guard acknowledges receipt of assigned escort duty.
+        """
+        duty = self.get_object()
+        if request.user.role == UserRole.GUARD and duty.guard_id != request.user.id:
+            return Response({"detail": "You are not assigned to this escort duty."}, status=status.HTTP_403_FORBIDDEN)
+
+        duty.status = EscortStatus.ACKNOWLEDGED
+        duty.acknowledged_at = timezone.now()
+        remarks = request.data.get("remarks", "").strip()
+        if remarks:
+            duty.remarks = (duty.remarks + f"\n[{timezone.now().strftime('%Y-%m-%d %H:%M')}] {request.user.username}: {remarks}").strip()
+        duty.save()
+
+        if duty.supervisor:
+            Notification.objects.create(
+                user=duty.supervisor,
+                title="Escort Duty Acknowledged",
+                message=f"Guard {request.user.get_full_name() or request.user.username} acknowledged escort mission {duty.reference} ({duty.mission_name}).",
+                notification_type="OPERATIONAL_ALERT",
+            )
+
+        return Response(self.get_serializer(duty).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="update_status")
+    def update_status(self, request, pk=None):
+        """
+        POST /escorts/duties/{id}/update_status/
+        Guard or supervisor updates operational status (ACKNOWLEDGED, EN_ROUTE, COMPLETED, CANCELLED).
+        """
+        duty = self.get_object()
+        if request.user.role == UserRole.GUARD and duty.guard_id != request.user.id:
+            return Response({"detail": "You are not assigned to this escort duty."}, status=status.HTTP_403_FORBIDDEN)
+
+        new_status = request.data.get("status")
+        if not new_status or new_status not in EscortStatus.values:
+            return Response({"detail": f"Invalid status '{new_status}'. Allowed: {', '.join(EscortStatus.values)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_status == EscortStatus.CANCELLED and request.user.role == UserRole.GUARD:
+            return Response({"detail": "Guards cannot cancel escort duties."}, status=status.HTTP_403_FORBIDDEN)
+
+        now = timezone.now()
+        duty.status = new_status
+        if new_status == EscortStatus.ACKNOWLEDGED and not duty.acknowledged_at:
+            duty.acknowledged_at = now
+        elif new_status == EscortStatus.EN_ROUTE and not duty.departure_time:
+            duty.departure_time = now
+        elif new_status == EscortStatus.COMPLETED and not duty.completion_time:
+            duty.completion_time = now
+
+        remarks = request.data.get("remarks", "").strip()
+        if remarks:
+            duty.remarks = (duty.remarks + f"\n[{now.strftime('%Y-%m-%d %H:%M')}] {request.user.username}: {remarks}").strip()
+
+        duty.save()
+
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.OVERRIDE if new_status == EscortStatus.CANCELLED else SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=request.user,
+            actor_username=request.user.username,
+            target_model="EscortDuty",
+            target_id=str(duty.id),
+            details={
+                "action": "ESCORT_STATUS_UPDATE",
+                "reference": duty.reference,
+                "status": new_status,
+                "remarks": remarks,
+            }
+        )
+
+        return Response(self.get_serializer(duty).data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="auto_allocate")
     def auto_allocate(self, request):

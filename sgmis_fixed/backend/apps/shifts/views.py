@@ -728,6 +728,139 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
         """POST /shifts/shifts/{id}/generate-early-clockout-otp/"""
         return handle_early_clockout_otp_generation(request, pk=pk)
 
+    @action(detail=False, methods=["post"], url_path="reassign_duty", permission_classes=[IsAdministrator])
+    def reassign_duty(self, request):
+        """
+        POST /shifts/shifts/reassign_duty/
+        Administrative endpoint for Superusers to adjust future shift and duty assignments
+        from a specified effective date forward.
+        STRICT HISTORICAL PROTECTION: Shifts and attendance before effective_date remain untouched.
+        """
+        guard_id = request.data.get("guard_id") or request.data.get("guard")
+        if not guard_id:
+            return Response({"detail": "guard_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        guard = get_object_or_404(User, id=guard_id)
+
+        effective_date_str = request.data.get("effective_date")
+        if not effective_date_str:
+            return Response({"detail": "effective_date is required (YYYY-MM-DD)."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            effective_date = datetime.strptime(effective_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response({"detail": "Invalid effective_date format. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+
+        reason = request.data.get("reason", "").strip()
+        if not reason:
+            return Response({"detail": "Mandatory operational reason / ledger citation is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # STRICT HISTORICAL FILTER: ONLY dates >= effective_date
+        future_shifts = Shift.objects.filter(guard=guard, date__gte=effective_date)
+        update_fields = {}
+
+        station_id = request.data.get("station_id") or request.data.get("station")
+        if station_id:
+            station = get_object_or_404(Station, id=station_id)
+            update_fields["station"] = station
+            guard.station = station
+            guard.save()
+
+        shift_type = request.data.get("shift_type")
+        if shift_type:
+            shift_type_norm = shift_type.strip().upper()
+            if shift_type_norm not in [ShiftType.DAY, ShiftType.NIGHT]:
+                return Response({"detail": "Invalid shift_type. Must be DAY or NIGHT."}, status=status.HTTP_400_BAD_REQUEST)
+            update_fields["shift_type"] = shift_type_norm
+            if shift_type_norm == ShiftType.DAY:
+                update_fields["start_time"] = time(7, 0)
+                update_fields["end_time"] = time(18, 0)
+            else:
+                update_fields["start_time"] = time(18, 0)
+                update_fields["end_time"] = time(7, 0)
+
+        start_time_str = request.data.get("start_time")
+        if start_time_str:
+            try:
+                update_fields["start_time"] = datetime.strptime(start_time_str, "%H:%M:%S").time()
+            except ValueError:
+                try:
+                    update_fields["start_time"] = datetime.strptime(start_time_str, "%H:%M").time()
+                except ValueError:
+                    return Response({"detail": "Invalid start_time format (HH:MM or HH:MM:SS)."}, status=status.HTTP_400_BAD_REQUEST)
+
+        end_time_str = request.data.get("end_time")
+        if end_time_str:
+            try:
+                update_fields["end_time"] = datetime.strptime(end_time_str, "%H:%M:%S").time()
+            except ValueError:
+                try:
+                    update_fields["end_time"] = datetime.strptime(end_time_str, "%H:%M").time()
+                except ValueError:
+                    return Response({"detail": "Invalid end_time format (HH:MM or HH:MM:SS)."}, status=status.HTTP_400_BAD_REQUEST)
+
+        pair_guard_id = request.data.get("pair_guard_id") or request.data.get("pair_guard")
+        if pair_guard_id:
+            from apps.stations.models import GuardPair
+            from django.db.models import Q, Max
+            pair_guard = get_object_or_404(User, id=pair_guard_id)
+            target_station = update_fields.get("station", guard.station)
+            pair = GuardPair.objects.filter(
+                (Q(guard_a=guard, guard_b=pair_guard) | Q(guard_a=pair_guard, guard_b=guard))
+            ).first()
+            if not pair:
+                max_order = GuardPair.objects.filter(station=target_station).aggregate(Max("rotation_order"))["rotation_order__max"] or 0
+                pair = GuardPair.objects.create(guard_a=guard, guard_b=pair_guard, station=target_station, rotation_order=max_order + 1)
+            update_fields["pair"] = pair
+
+        updated_count = 0
+        if update_fields and future_shifts.exists():
+            updated_count = future_shifts.update(**update_fields)
+
+        # Audit logging
+        SupervisorOverrideAudit.objects.create(
+            supervisor=request.user,
+            action_type="SHIFT_DUTY_REASSIGNMENT",
+            target_model="Shift",
+            target_id=str(guard.id),
+            reason=reason,
+            admin_notified=True,
+        )
+
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=request.user,
+            actor_username=request.user.username,
+            target_model="Shift",
+            target_id=str(guard.id),
+            details={
+                "action": "SHIFT_DUTY_REASSIGNMENT",
+                "guard": guard.username,
+                "effective_date": effective_date.isoformat(),
+                "updated_shifts_count": updated_count,
+                "reason": reason,
+                "fields_updated": [k for k in update_fields.keys()],
+            },
+        )
+
+        Notification.objects.create(
+            user=guard,
+            title="Duty / Shift Assignment Updated",
+            message=f"Your duty assignment has been adjusted effective {effective_date.isoformat()} by Administrator {request.user.get_full_name() or request.user.username}. Reason: {reason}.",
+            notification_type="DUTY_ASSIGNMENT",
+        )
+
+        return Response({
+            "message": f"Successfully updated {updated_count} shift(s) for {guard.username} from {effective_date.isoformat()} forward.",
+            "guard_id": str(guard.id),
+            "guard_name": guard.get_full_name() or guard.username,
+            "effective_date": effective_date.isoformat(),
+            "shifts_updated": updated_count,
+            "historical_preserved": True,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="reassign-duty", permission_classes=[IsAdministrator])
+    def reassign_duty_hyphen(self, request):
+        return self.reassign_duty(request)
+
 class AttendanceViewSet(viewsets.ModelViewSet):
     """
     Operational attendance tracking.
