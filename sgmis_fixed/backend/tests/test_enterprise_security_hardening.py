@@ -47,6 +47,7 @@ class EnterpriseSecurityHardeningTests(TestCase):
             role=UserRole.GUARD,
             station=self.station,
             employee_number="SEC-101",
+            phone_number="+263771234567",
         )
         self.guard_2 = User.objects.create_user(
             username="guard_bob",
@@ -93,7 +94,13 @@ class EnterpriseSecurityHardeningTests(TestCase):
         self.assertIsNotNone(otp)
         self.assertEqual(len(otp.otp_code_hash), 64)
         self.assertEqual(otp.otp_code, "")
-        otp_value = req_resp.data.get("dev_otp")
+        self.assertNotIn("dev_otp", req_resp.data)
+
+        from apps.core.sms import InMemorySMSProvider
+        import re
+        sms_msg = InMemorySMSProvider.get_last_sms("+263771234567")
+        self.assertIsNotNone(sms_msg)
+        otp_value = re.search(r"\b(\d{6})\b", sms_msg["message"]).group(1)
 
         # 2. Confirm reset
         confirm_resp = self.client.post("/auth/password_reset/confirm/", {
@@ -306,8 +313,13 @@ class EnterpriseSecurityHardeningTests(TestCase):
             "identifier": self.guard_1.username,
         }, format="json")
         self.assertEqual(req_resp.status_code, status.HTTP_200_OK)
-        self.assertIn("dev_otp", req_resp.data)
-        otp_code = req_resp.data["dev_otp"]
+        self.assertNotIn("dev_otp", req_resp.data)
+
+        from apps.core.sms import InMemorySMSProvider
+        import re
+        sms_msg = InMemorySMSProvider.get_last_sms("+263771234567")
+        self.assertIsNotNone(sms_msg)
+        otp_code = re.search(r"\b(\d{6})\b", sms_msg["message"]).group(1)
 
         # Confirm OTP without trailing slash
         new_pass = "CourtAdmissiblePass2026!"

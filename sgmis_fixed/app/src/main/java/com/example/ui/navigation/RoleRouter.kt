@@ -82,9 +82,17 @@ object RoleRouter {
         return when (role) {
             AppRole.ADMINISTRATOR -> true // Superuser / Administrator has global system access
             AppRole.SUPERVISOR -> {
-                // Supervisors can access all operational and supervisory routes,
-                // but cannot access admin-only station provisioning or admin dashboard directly.
+                // Supervisors focus on supervisory command, roster management, attendance/override,
+                // inspection, verification, and station oversight.
+                // Guard-only operational execution routes (patrol submission, shift handover submission,
+                // guard today shift, guard panic SOS) and admin-only routes are disallowed.
                 route !in listOf(
+                    NavRoutes.PATROL,
+                    NavRoutes.HANDOVER,
+                    NavRoutes.TODAY_SHIFT,
+                    NavRoutes.EMERGENCY_SOS,
+                    NavRoutes.GUARD_DUTY_PLAN,
+                    NavRoutes.GUARD_DASHBOARD,
                     NavRoutes.STATION_MANAGEMENT,
                     NavRoutes.ADMIN_DASHBOARD
                 )

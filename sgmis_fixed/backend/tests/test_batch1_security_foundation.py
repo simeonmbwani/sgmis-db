@@ -61,6 +61,7 @@ class Batch1SecurityFoundationTests(TestCase):
             role=UserRole.GUARD,
             station=self.station_a,
             employee_number="SEC-101",
+            phone_number="+263771234567",
         )
         self.guard_b = User.objects.create_user(
             username="guard_bob",
@@ -148,8 +149,13 @@ class Batch1SecurityFoundationTests(TestCase):
         self.assertIsNotNone(otp)
         self.assertEqual(len(otp.otp_code_hash), 64)
         self.assertEqual(otp.otp_code, "")
-        raw_otp = req_resp.data.get("dev_otp")
-        self.assertIsNotNone(raw_otp)
+        self.assertNotIn("dev_otp", req_resp.data)
+
+        from apps.core.sms import InMemorySMSProvider
+        import re
+        sms_record = InMemorySMSProvider.get_last_sms("+263771234567")
+        self.assertIsNotNone(sms_record)
+        self.assertIn("SGMIS security verification code", sms_record["message"])
 
         # 2. Rapid second request hits cooldown
         req_again = self.client.post("/auth/password_reset/request/", {
@@ -171,7 +177,13 @@ class Batch1SecurityFoundationTests(TestCase):
             "identifier": "guard_alice",
         })
         self.assertEqual(req_resp.status_code, status.HTTP_200_OK)
-        raw_otp = req_resp.data["dev_otp"]
+        self.assertNotIn("dev_otp", req_resp.data)
+
+        from apps.core.sms import InMemorySMSProvider
+        import re
+        sms_record = InMemorySMSProvider.get_last_sms("+263771234567")
+        self.assertIsNotNone(sms_record)
+        raw_otp = re.search(r"\b(\d{6})\b", sms_record["message"]).group(1)
 
         # Submit 4 wrong attempts
         for _ in range(4):

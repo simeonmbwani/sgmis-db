@@ -24,6 +24,7 @@ from .serializers import (
     UserDeactivateSerializer,
 )
 from .permissions import IsAdministrator, IsSupervisorOrAdmin
+from apps.core.sms import send_sms, mask_phone_number
 
 def get_client_ip(request):
     x_forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
@@ -181,6 +182,19 @@ class PasswordResetRequestView(APIView):
                 "expires_in_minutes": 10,
             }, status=status.HTTP_200_OK)
 
+        # Guard recovery MUST validate that the user has a valid registered mobile number
+        if not user.phone_number or not user.phone_number.strip():
+            log_security_event(
+                event_type=SecurityAuditEvent.EventType.PASSWORD_RESET_FAILED,
+                actor=user,
+                actor_username=user.username,
+                ip_address=client_ip,
+                details={"reason": "missing_registered_phone_number"}
+            )
+            return Response({
+                "detail": "No registered mobile phone number found for this account. Please contact your station supervisor or administrator.",
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         # Resend cooldown: 60 seconds
         recent_otp = PasswordResetOTP.objects.filter(
             user=user,
@@ -192,10 +206,30 @@ class PasswordResetRequestView(APIView):
                 "detail": "A recovery code was recently requested. Please wait 60 seconds before requesting a new code.",
             }, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
+        otp_val = f"{secrets.randbelow(900000) + 100000}"
+
+        # Deliver the 6-digit reset code via real SMS provider abstraction
+        sms_result = send_sms(
+            user.phone_number,
+            f"Your SGMIS security verification code is: {otp_val}. Valid for 10 minutes. Do not share this code."
+        )
+
+        if not sms_result.success:
+            log_security_event(
+                event_type=SecurityAuditEvent.EventType.PASSWORD_RESET_FAILED,
+                actor=user,
+                actor_username=user.username,
+                ip_address=client_ip,
+                details={"reason": "sms_dispatch_failed", "provider": sms_result.provider, "error": sms_result.error}
+            )
+            err_status = status.HTTP_400_BAD_REQUEST if "format" in sms_result.error.lower() else status.HTTP_502_BAD_GATEWAY
+            return Response({
+                "detail": f"Failed to dispatch recovery SMS to registered mobile number: {sms_result.error}. Please try again later or contact your supervisor.",
+            }, status=err_status)
+
         # Invalidate old unused OTPs
         PasswordResetOTP.objects.filter(user=user, is_used=False).update(is_used=True)
 
-        otp_val = f"{secrets.randbelow(900000) + 100000}"
         expires = timezone.now() + timedelta(minutes=10)
         otp = PasswordResetOTP(
             user=user,
@@ -217,16 +251,14 @@ class PasswordResetRequestView(APIView):
             actor=user,
             actor_username=user.username,
             ip_address=client_ip,
-            details={"status": "otp_generated"}
+            details={"status": "otp_generated_and_sms_dispatched", "destination": mask_phone_number(user.phone_number)}
         )
 
         resp_data = {
-            "message": "If an active account matches the details provided, a 6-digit recovery OTP has been generated.",
+            "message": f"A 6-digit recovery OTP has been dispatched via SMS to your registered mobile number ending in {user.phone_number[-4:]}.",
+            "destination": mask_phone_number(user.phone_number),
             "expires_in_minutes": 10,
         }
-        import sys
-        if settings.DEBUG or "test" in sys.argv or getattr(settings, "TESTING", False):
-            resp_data["dev_otp"] = otp_val
 
         return Response(resp_data, status=status.HTTP_200_OK)
 
@@ -299,6 +331,9 @@ class PasswordResetConfirmView(APIView):
 
         otp.is_used = True
         otp.save(update_fields=["is_used"])
+
+        # Invalidate all prior unused reset codes for this user
+        PasswordResetOTP.objects.filter(user=user, is_used=False).update(is_used=True)
 
         # Clear login lockout record on password recovery
         LoginAttempt.objects.filter(identifier=user.username).update(failed_attempts=0, locked_until=None)

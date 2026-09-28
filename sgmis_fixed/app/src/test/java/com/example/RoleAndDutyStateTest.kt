@@ -206,6 +206,12 @@ class RoleAndDutyStateTest {
         // Disallowed admin-only routes
         assertFalse(RoleRouter.isRouteAllowed(NavRoutes.STATION_MANAGEMENT, AppRole.SUPERVISOR))
         assertFalse(RoleRouter.isRouteAllowed(NavRoutes.ADMIN_DASHBOARD, AppRole.SUPERVISOR))
+
+        // Disallowed guard-only operational execution routes
+        assertFalse(RoleRouter.isRouteAllowed(NavRoutes.PATROL, AppRole.SUPERVISOR))
+        assertFalse(RoleRouter.isRouteAllowed(NavRoutes.HANDOVER, AppRole.SUPERVISOR))
+        assertFalse(RoleRouter.isRouteAllowed(NavRoutes.TODAY_SHIFT, AppRole.SUPERVISOR))
+        assertFalse(RoleRouter.isRouteAllowed(NavRoutes.EMERGENCY_SOS, AppRole.SUPERVISOR))
     }
 
     @Test
@@ -452,10 +458,8 @@ class RoleAndDutyStateTest {
             NavRoutes.USER_MANAGEMENT,
             NavRoutes.OCCURRENCE_BOOK,
             NavRoutes.INCIDENTS,
-            NavRoutes.PATROL,
             NavRoutes.LEAVE,
             NavRoutes.VISITORS,
-            NavRoutes.HANDOVER,
             NavRoutes.REPORTS,
             NavRoutes.NOTIFICATIONS,
             NavRoutes.PROFILE,
@@ -464,6 +468,21 @@ class RoleAndDutyStateTest {
 
         for (route in allowedSupervisorRoutes) {
             assertTrue("Supervisor must be permitted access to route: $route", RoleRouter.isRouteAllowed(route, AppRole.SUPERVISOR))
+        }
+
+        val prohibitedSupervisorRoutes = listOf(
+            NavRoutes.PATROL,
+            NavRoutes.HANDOVER,
+            NavRoutes.TODAY_SHIFT,
+            NavRoutes.EMERGENCY_SOS,
+            NavRoutes.GUARD_DUTY_PLAN,
+            NavRoutes.GUARD_DASHBOARD,
+            NavRoutes.STATION_MANAGEMENT,
+            NavRoutes.ADMIN_DASHBOARD
+        )
+
+        for (route in prohibitedSupervisorRoutes) {
+            assertFalse("Supervisor must not have access to guard-execution or admin-only route: $route", RoleRouter.isRouteAllowed(route, AppRole.SUPERVISOR))
         }
     }
 
@@ -737,6 +756,8 @@ class RoleAndDutyStateTest {
         // Supervisor must be blocked from admin dashboard and station provisioning
         assertFalse("Supervisor must NOT access admin dashboard", RoleRouter.isRouteAllowed(NavRoutes.ADMIN_DASHBOARD, AppRole.SUPERVISOR))
         assertFalse("Supervisor must NOT access station management", RoleRouter.isRouteAllowed(NavRoutes.STATION_MANAGEMENT, AppRole.SUPERVISOR))
+        assertFalse("Supervisor must NOT access guard patrol execution", RoleRouter.isRouteAllowed(NavRoutes.PATROL, AppRole.SUPERVISOR))
+        assertFalse("Supervisor must NOT access guard handover execution", RoleRouter.isRouteAllowed(NavRoutes.HANDOVER, AppRole.SUPERVISOR))
 
         // Guard must be blocked from all supervisory and administrative management consoles
         assertFalse("Guard must NOT access admin dashboard", RoleRouter.isRouteAllowed(NavRoutes.ADMIN_DASHBOARD, AppRole.GUARD))

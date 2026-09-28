@@ -72,6 +72,7 @@ from apps.accounts.permissions import IsAdministrator, IsSupervisorOrAdmin
 from apps.core.models import SupervisorOverrideAudit, SecurityAuditEvent
 from apps.core.idempotency import check_idempotency, store_idempotency
 from apps.notifications.models import Notification
+from apps.core.sms import send_sms, mask_phone_number
 
 def handle_early_clockout_otp_generation(request, pk=None):
     """
@@ -140,7 +141,24 @@ def handle_early_clockout_otp_generation(request, pk=None):
     cache_key = f"early_clockout_otp_{shift.id}"
     cache.set(cache_key, cache_data, timeout=300)
 
-    # Immutable audit logging
+    # Deliver OTP through real configured SMS provider to the intended guard
+    sms_delivered = False
+    if shift.guard.phone_number and shift.guard.phone_number.strip():
+        sms_res = send_sms(
+            shift.guard.phone_number,
+            f"SGMIS Early Release Authorization: Your 5-minute departure code is {otp_val}. Authorized by {request.user.get_full_name() or request.user.username}."
+        )
+        sms_delivered = sms_res.success
+
+    # Deliver OTP through in-app Notification to the intended guard
+    Notification.objects.create(
+        user=shift.guard,
+        title="Early Departure Authorization Code",
+        message=f"Early departure authorization code: {otp_val}. Valid for 5 minutes. Authorized by {request.user.get_full_name() or request.user.username} ({request.user.get_role_display()}). Reason: {reason}.",
+        notification_type="OPERATIONAL_ALERT",
+    )
+
+    # Immutable audit logging (OTP is never logged in plaintext)
     SecurityAuditEvent.objects.create(
         event_type=SecurityAuditEvent.EventType.OVERRIDE,
         actor=request.user,
@@ -154,6 +172,8 @@ def handle_early_clockout_otp_generation(request, pk=None):
             "station": shift.station.name,
             "reason": reason,
             "expires_at": expires_at.isoformat(),
+            "sms_delivered": sms_delivered,
+            "guard_phone": mask_phone_number(shift.guard.phone_number) if shift.guard.phone_number else "",
         }
     )
 
@@ -166,6 +186,7 @@ def handle_early_clockout_otp_generation(request, pk=None):
         "station_name": shift.station.name,
         "expires_at": expires_at.isoformat(),
         "reason": reason,
+        "sms_delivered": sms_delivered,
     }, status=status.HTTP_201_CREATED)
 
 
@@ -1160,6 +1181,12 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                         "detail": "Invalid early clock-out authorization OTP code."
                     }, status=status.HTTP_400_BAD_REQUEST)
 
+                # Validate guard identity: ensure the OTP is used by the guard for whom it was authorized
+                if str(request.user.id) != str(cached_otp.get("guard_id")):
+                    return Response({
+                        "detail": "This early departure authorization OTP was issued for another officer."
+                    }, status=status.HTTP_403_FORBIDDEN)
+
                 # Invalidate OTP immediately upon successful verification to prevent reuse
                 cache.delete(cache_key)
 
@@ -1168,6 +1195,12 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                     return Response({
                         "detail": "Authorizing supervisor account no longer exists."
                     }, status=status.HTTP_400_BAD_REQUEST)
+
+                # Validate authorizer station authority
+                if authorizer.role == UserRole.SUPERVISOR and authorizer.station_id != shift.station_id:
+                    return Response({
+                        "detail": f"Authorizing supervisor {authorizer.username} station mismatch with shift station."
+                    }, status=status.HTTP_403_FORBIDDEN)
 
                 sup_user = authorizer
                 override_reason = cached_otp.get("reason", override_reason or "Authorized early departure via OTP override.")

@@ -214,3 +214,12 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }
+
+# SMS Gateway Configuration
+SMS_BACKEND = os.getenv("SMS_BACKEND", "console" if DEBUG else "memory")
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
+SMS_GATEWAY_URL = os.getenv("SMS_GATEWAY_URL", "")
+SMS_GATEWAY_API_KEY = os.getenv("SMS_GATEWAY_API_KEY", "")
+

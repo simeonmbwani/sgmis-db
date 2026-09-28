@@ -2365,9 +2365,6 @@ private fun SupervisorCurrentShiftCard(
                         }
                     )
                 }
-                TextButton(onClick = { onNavigate(NavRoutes.HANDOVER) }) {
-                    Text("Handover", style = MaterialTheme.typography.labelMedium)
-                }
             }
         }
     }
@@ -2995,16 +2992,6 @@ private fun SupervisorPatrolCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
-            OutlinedButton(
-                onClick = { onNavigate(NavRoutes.PATROL) },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Icon(Icons.AutoMirrored.Filled.DirectionsWalk, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("PATROL MONITORING CONSOLE")
-            }
         }
     }
 }
@@ -3247,16 +3234,6 @@ private fun SupervisorHandoverCard(
                     }
                 }
             }
-
-            OutlinedButton(
-                onClick = { onNavigate(NavRoutes.HANDOVER) },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("OPEN HANDOVER REGISTER")
-            }
         }
     }
 }
@@ -3269,8 +3246,6 @@ private fun SupervisorActionGrid(onNavigate: (String) -> Unit) {
         BlueprintAction("Occurrence Book", "Station OB review & entries", Icons.AutoMirrored.Filled.MenuBook, NavRoutes.OCCURRENCE_BOOK, "nav_ob"),
         BlueprintAction("Visitor Register", "Station visitor logs & passes", Icons.Default.Badge, NavRoutes.VISITOR_BOOK, "nav_visitors"),
         BlueprintAction("Incident Reports", "Station incident management", Icons.Default.Warning, NavRoutes.INCIDENTS, "nav_incidents"),
-        BlueprintAction("Station Patrols", "Patrol oversight & checkpoints", Icons.AutoMirrored.Filled.DirectionsWalk, NavRoutes.PATROL, "nav_patrol"),
-        BlueprintAction("Shift Handover", "Handover notes & verification", Icons.Default.SwapHoriz, NavRoutes.HANDOVER, "nav_handover"),
         BlueprintAction("Leave Manager", "Approve & track guard leaves", Icons.AutoMirrored.Filled.EventNote, NavRoutes.LEAVE, "nav_leave"),
         BlueprintAction("Personnel & Guards", "Staff & station assignments", Icons.Default.People, NavRoutes.USER_MANAGEMENT, "nav_users"),
         BlueprintAction("Operations Reports", "Filter & analyze station records", Icons.Default.Assessment, NavRoutes.REPORTS, "nav_reports"),
@@ -4038,13 +4013,10 @@ private fun NationalAdministrationGrid(onNavigate: (String) -> Unit) {
         BlueprintAction("Stations & Pairs", "Posts, checkpoints & pairs", Icons.Default.Business, NavRoutes.STATION_MANAGEMENT, "nav_stations"),
         BlueprintAction("Occurrence Book", "Global OB records", Icons.AutoMirrored.Filled.MenuBook, NavRoutes.OCCURRENCE_BOOK, "nav_ob"),
         BlueprintAction("Incident Reports", "System-wide incidents", Icons.Default.Warning, NavRoutes.INCIDENTS, "nav_incidents"),
-        BlueprintAction("Patrol Monitoring", "All patrol logs & checkpoints", Icons.AutoMirrored.Filled.DirectionsWalk, NavRoutes.PATROL, "nav_patrol"),
         BlueprintAction("Executive Reports", "National security analytics", Icons.Default.Assessment, NavRoutes.REPORTS, "nav_reports"),
         BlueprintAction("Leave Management", "System-wide leave requests", Icons.AutoMirrored.Filled.EventNote, NavRoutes.LEAVE, "nav_leave"),
         BlueprintAction("Visitor Register", "National visitor records", Icons.Default.Badge, NavRoutes.VISITOR_BOOK, "nav_visitors"),
-        BlueprintAction("Emergency SOS", "Distress beacon monitoring", Icons.Default.Warning, NavRoutes.SOS, "nav_emergency_sos"),
         BlueprintAction("Notifications", "Operational alerts and messages", Icons.Default.Notifications, NavRoutes.NOTIFICATIONS, "nav_notifications"),
-        BlueprintAction("Shift Handover", "Cross-station handover notes", Icons.Default.SwapHoriz, NavRoutes.HANDOVER, "nav_handover"),
         BlueprintAction("Settings & About", "Theme, app version & preferences", Icons.Default.Settings, NavRoutes.SETTINGS, "nav_settings")
     )
 
