@@ -120,13 +120,19 @@ fun DashboardScreen(
         SimpleDateFormat("dd MMM yyyy", Locale.US).apply { timeZone = harareTz }.format(Date())
     }
 
-    // Server-derived next duty shift for off-duty display
-    val nextDutyShift = remember(uiState.rosterShifts, todayStr) {
+    // Server-derived next duty shift for off-duty display (strictly filtered to current guard)
+    val nextDutyShift = remember(uiState.rosterShifts, user, todayStr) {
+        val uid = user?.id
+        val uName = user?.username
+        val emp = user?.employeeNumber
         uiState.rosterShifts
             .filter { s ->
                 s.date >= todayStr &&
                 s.shiftType.uppercase() != "OFF" &&
-                s.assignmentType.uppercase() != "TIME_OFF"
+                s.assignmentType.uppercase() != "TIME_OFF" &&
+                ((uid != null && s.guard == uid) ||
+                 (uName != null && s.guardName.equals(uName, ignoreCase = true)) ||
+                 (emp != null && s.employeeNumber == emp))
             }
             .minByOrNull { it.date }
     }
@@ -1198,6 +1204,300 @@ fun DashboardScreen(
                             }
                         }
                     }
+
+                    // ----------------------------------------------------------
+                    // STATE: GUARD ON EXAMINATION DUTY (SUPERVISOR ALLOCATED)
+                    // ----------------------------------------------------------
+                    GuardDutyState.EXAM -> {
+                        val exam = uiState.serverDutyState?.examDuty
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("quick_shift_status_card"),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.4f)),
+                            shape = RoundedCornerShape(16.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Default.School,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.tertiary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "SPECIAL DUTY ASSIGNMENT",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.tertiary
+                                        )
+                                    }
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.tertiary,
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "EXAM INVIGILATION",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onTertiary,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Text(
+                                    text = exam?.examTitle ?: "Examination Security Duty",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+
+                                Text(
+                                    text = "Center: ${exam?.institution ?: uiState.currentStationName} • Hall/Post: ${exam?.hallPost ?: "Main"}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                Text(
+                                    text = "Hours: ${exam?.startTime ?: "08:00"}–${exam?.endTime ?: "17:00"} • Supervisor: ${exam?.supervisorName ?: "Station Supervisor"}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                if (!exam?.instructions.isNullOrBlank()) {
+                                    Text(
+                                        text = "Instructions: ${exam?.instructions}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+
+                                Text(
+                                    text = "You are assigned to official Examination Security duty today under Supervisor direction. Standard shift rotations are superseded during this examination assignment.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+
+                        // Operational Modules for Exam Duty
+                        Text(
+                            text = "Special Duty Operational Modules",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        val examActions = listOf(
+                            BlueprintAction(
+                                title = "Occurrence Book",
+                                subtitle = "Log exam room events & entries",
+                                icon = Icons.AutoMirrored.Filled.MenuBook,
+                                route = NavRoutes.OCCURRENCE_BOOK,
+                                testTag = "nav_ob"
+                            ),
+                            BlueprintAction(
+                                title = "Incident Reporting",
+                                subtitle = "Report exam security issues",
+                                icon = Icons.Default.Warning,
+                                route = NavRoutes.INCIDENTS,
+                                testTag = "nav_incidents"
+                            ),
+                            BlueprintAction(
+                                title = "SOS Emergency",
+                                subtitle = "Immediate emergency alert",
+                                icon = Icons.Default.Warning,
+                                route = NavRoutes.EMERGENCY_SOS,
+                                testTag = "nav_emergency_sos",
+                                isEmergency = true
+                            ),
+                            BlueprintAction(
+                                title = "Duty Roster",
+                                subtitle = "View monthly duty schedule",
+                                icon = Icons.Default.CalendarMonth,
+                                route = NavRoutes.GUARD_DUTY_PLAN,
+                                testTag = "nav_guard_duty_plan"
+                            )
+                        )
+
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            for (pair in examActions.chunked(2)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    for (action in pair) {
+                                        BlueprintActionCard(
+                                            action = action,
+                                            onClick = { onNavigate(action.route) },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (pair.size == 1) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ----------------------------------------------------------
+                    // STATE: GUARD ON ESCORT DUTY (SUPERVISOR ALLOCATED)
+                    // ----------------------------------------------------------
+                    GuardDutyState.ESCORT -> {
+                        val escort = uiState.serverDutyState?.escortDuty
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("quick_shift_status_card"),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)),
+                            shape = RoundedCornerShape(16.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Default.DirectionsCar,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.secondary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "SPECIAL DUTY ASSIGNMENT",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.secondary
+                                        )
+                                    }
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.secondary,
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "ESCORT MISSION",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSecondary,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Text(
+                                    text = escort?.missionName ?: "Authorized Transit Escort Duty",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+
+                                Text(
+                                    text = "Route: ${escort?.origin ?: uiState.currentStationName} → ${escort?.destination ?: "Designated Location"}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                Text(
+                                    text = "Hours: ${escort?.startTime ?: "07:00"}–${escort?.endTime ?: "19:00"} • Supervisor: ${escort?.supervisorName ?: "Station Supervisor"}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                if (!escort?.instructions.isNullOrBlank()) {
+                                    Text(
+                                        text = "Instructions: ${escort?.instructions}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+
+                                Text(
+                                    text = "You are assigned to official Escort Security duty today under Supervisor direction. Standard static post rotations are superseded during this transit assignment.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+
+                        // Operational Modules for Escort Duty
+                        Text(
+                            text = "Special Duty Operational Modules",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        val escortActions = listOf(
+                            BlueprintAction(
+                                title = "Occurrence Book",
+                                subtitle = "Log transit checkpoints & OB",
+                                icon = Icons.AutoMirrored.Filled.MenuBook,
+                                route = NavRoutes.OCCURRENCE_BOOK,
+                                testTag = "nav_ob"
+                            ),
+                            BlueprintAction(
+                                title = "Incident Reporting",
+                                subtitle = "Report transit incident or delay",
+                                icon = Icons.Default.Warning,
+                                route = NavRoutes.INCIDENTS,
+                                testTag = "nav_incidents"
+                            ),
+                            BlueprintAction(
+                                title = "SOS Emergency",
+                                subtitle = "Immediate transit distress alert",
+                                icon = Icons.Default.Warning,
+                                route = NavRoutes.EMERGENCY_SOS,
+                                testTag = "nav_emergency_sos",
+                                isEmergency = true
+                            ),
+                            BlueprintAction(
+                                title = "Duty Roster",
+                                subtitle = "View monthly duty schedule",
+                                icon = Icons.Default.CalendarMonth,
+                                route = NavRoutes.GUARD_DUTY_PLAN,
+                                testTag = "nav_guard_duty_plan"
+                            )
+                        )
+
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            for (pair in escortActions.chunked(2)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    for (action in pair) {
+                                        BlueprintActionCard(
+                                            action = action,
+                                            onClick = { onNavigate(action.route) },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (pair.size == 1) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1736,6 +2036,15 @@ private fun SupervisorCommandConsole(
         SupervisorUnassignedStationBanner(onViewProfile = { onNavigate(NavRoutes.PROFILE) })
     }
 
+    // Station Coverage Alert Banner (Supervisor Operational Alert)
+    val coverage = uiState.stationCoverage
+    if (coverage != null && coverage.coverageWarning) {
+        SupervisorCoverageAlertBanner(
+            coverage = coverage,
+            onManageDuties = { onNavigate(NavRoutes.ROSTER_MANAGEMENT) }
+        )
+    }
+
     // 2. Live Operational Metrics (Command Telemetry Grid)
     Text(
         text = "Station Live Metrics",
@@ -1778,6 +2087,24 @@ private fun SupervisorCommandConsole(
         conflictReport = uiState.conflictReport,
         onNavigate = onNavigate
     )
+
+    // 4b. Guard Pair Day/Night Management Card (Operational Day/Night Authority)
+    if (coverage != null && coverage.pair != null) {
+        SupervisorPairDutyManagementCard(
+            coverage = coverage,
+            isSwapping = uiState.dutySwapping,
+            onSwapPairDuties = { pairId ->
+                viewModel.swapPairDuties(
+                    SwapPairDutiesRequest(
+                        pairId = pairId,
+                        date = todayStr,
+                        reason = "Supervisor day/night duty swap"
+                    )
+                )
+            },
+            onNavigateToRoster = { onNavigate(NavRoutes.ROSTER_MANAGEMENT) }
+        )
+    }
 
     // 5. Occurrence Book Live Feed
     SupervisorOccurrenceBookCard(
@@ -2538,6 +2865,346 @@ private fun SupervisorRosterCard(
                 Text("OPEN ROSTER MANAGEMENT CONSOLE", fontWeight = FontWeight.Bold)
             }
         }
+    }
+}
+
+@Composable
+private fun SupervisorCoverageAlertBanner(
+    coverage: StationCoverageResponse,
+    onManageDuties: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("station_coverage_warning_banner"),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "UNBALANCED SHIFT COVERAGE ALERT",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+            Text(
+                text = coverage.warningMessage ?: "Shift duties require immediate supervisor action. One or more shifts are unassigned or unbalanced.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Day Covered: ${if (coverage.isDayCovered) "YES" else "NO"} • Night Covered: ${if (coverage.isNightCovered) "YES" else "NO"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+                Button(
+                    onClick = onManageDuties,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.SwapHoriz, null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("REBALANCE DUTIES", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SupervisorPairDutyManagementCard(
+    coverage: StationCoverageResponse,
+    isSwapping: Boolean,
+    onSwapPairDuties: (String) -> Unit,
+    onNavigateToRoster: () -> Unit
+) {
+    var showSwapConfirmDialog by remember { mutableStateOf(false) }
+    val pair = coverage.pair ?: return
+
+    val dayGuardDisplayName = coverage.dayGuard?.guardName ?: pair.guardAName
+    val dayGuardEmp = coverage.dayGuard?.employeeNumber
+    val nightGuardDisplayName = coverage.nightGuard?.guardName ?: pair.guardBName
+    val nightGuardEmp = coverage.nightGuard?.employeeNumber
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("pair_duty_management_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.SwapHoriz,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "GUARD PAIR DUTY ASSIGNMENTS",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        text = "Pair #${pair.id.take(8)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = "Day & Night Duty Control (Pair Rule: 1 Day / 1 Night)",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            Text(
+                text = "In normal working periods, each guard pair consists of two guards: one on DAY and one on NIGHT. As the Station Supervisor, you have operational authority to swap or reassign Day and Night duties.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // Active pair display
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Rotation Order #${pair.rotationOrder}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        OutlinedButton(
+                            onClick = { showSwapConfirmDialog = true },
+                            enabled = !isSwapping,
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.SwapHoriz, null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("SWAP DAY / NIGHT", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Day Guard Block
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(8.dp),
+                            border = CardDefaults.outlinedCardBorder()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp)) {
+                                Text(
+                                    text = "DAY DUTY (06:00–18:00)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = dayGuardDisplayName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                if (!dayGuardEmp.isNullOrBlank()) {
+                                    Text(
+                                        text = "ID: $dayGuardEmp",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        // Night Guard Block
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(8.dp),
+                            border = CardDefaults.outlinedCardBorder()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp)) {
+                                Text(
+                                    text = "NIGHT DUTY (18:00–06:00)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = nightGuardDisplayName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                if (!nightGuardEmp.isNullOrBlank()) {
+                                    Text(
+                                        text = "ID: $nightGuardEmp",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Available Relief Guards
+            if (coverage.availableReliefGuards.isNotEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.People, null, tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "AVAILABLE NON-DUTY RELIEF GUARDS (${coverage.availableReliefGuards.size})",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
+                        Text(
+                            text = "Guards currently off-duty and eligible for emergency relief assignment:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            for (g in coverage.availableReliefGuards.take(4)) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surface,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        text = "${g.fullName} (${g.employeeNumber ?: "—"})",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Quick action to full Roster Management for single shift reassignment
+            TextButton(
+                onClick = onNavigateToRoster,
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Text("Open Roster For Relief Reassignment", fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(Icons.Default.ChevronRight, null, modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+
+    // Confirmation Dialog for Day/Night swap
+    if (showSwapConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showSwapConfirmDialog = false },
+            title = { Text("Swap Day / Night Duties?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("This operation will atomically swap the Day and Night shifts for this pair today:")
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("• Day Guard: $dayGuardDisplayName → NIGHT", fontWeight = FontWeight.Bold)
+                    Text("• Night Guard: $nightGuardDisplayName → DAY", fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Both guards will be notified through the authoritative communication system.", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val pid = pair.id
+                        showSwapConfirmDialog = false
+                        onSwapPairDuties(pid)
+                    },
+                    enabled = !isSwapping
+                ) {
+                    Text("Confirm Duty Swap")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSwapConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

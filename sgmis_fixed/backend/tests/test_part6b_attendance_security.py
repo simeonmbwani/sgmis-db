@@ -67,13 +67,13 @@ class Phase6BAttendanceSecurityTests(APITestCase):
         self.out_lon = 36.8800
 
     def test_A_missing_latitude_rejected_on_clock_in(self):
-        today = timezone.localdate()
+        start_dt = timezone.localtime() - timedelta(minutes=5)
         shift = Shift.objects.create(
             station=self.station_a,
             guard=self.guard,
-            date=today,
-            start_time=(timezone.localtime() - timedelta(minutes=5)).time(),
-            end_time=(timezone.localtime() + timedelta(hours=8)).time(),
+            date=start_dt.date(),
+            start_time=start_dt.time(),
+            end_time=(start_dt + timedelta(hours=8)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,
             duty_location="Gate 1",
@@ -88,13 +88,13 @@ class Phase6BAttendanceSecurityTests(APITestCase):
         self.assertIn("required", resp.data["detail"])
 
     def test_B_missing_longitude_rejected_on_clock_in(self):
-        today = timezone.localdate()
+        start_dt = timezone.localtime() - timedelta(minutes=5)
         shift = Shift.objects.create(
             station=self.station_a,
             guard=self.guard,
-            date=today,
-            start_time=(timezone.localtime() - timedelta(minutes=5)).time(),
-            end_time=(timezone.localtime() + timedelta(hours=8)).time(),
+            date=start_dt.date(),
+            start_time=start_dt.time(),
+            end_time=(start_dt + timedelta(hours=8)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,
             duty_location="Gate 1",
@@ -165,13 +165,13 @@ class Phase6BAttendanceSecurityTests(APITestCase):
         self.assertIn("required", resp.data["detail"])
 
     def test_E_out_of_geofence_clock_in_rejected(self):
-        today = timezone.localdate()
+        start_dt = timezone.localtime() - timedelta(minutes=5)
         shift = Shift.objects.create(
             station=self.station_a,
             guard=self.guard,
-            date=today,
-            start_time=(timezone.localtime() - timedelta(minutes=5)).time(),
-            end_time=(timezone.localtime() + timedelta(hours=8)).time(),
+            date=start_dt.date(),
+            start_time=start_dt.time(),
+            end_time=(start_dt + timedelta(hours=8)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,
             duty_location="Gate 1",
@@ -214,13 +214,13 @@ class Phase6BAttendanceSecurityTests(APITestCase):
         self.assertIn("Geofence violation", resp.data["detail"])
 
     def test_G_guard_assigned_to_station_a_cannot_clock_into_station_b_shift(self):
-        today = timezone.localdate()
+        start_dt = timezone.localtime() - timedelta(minutes=5)
         shift_b = Shift.objects.create(
             station=self.station_b,
             guard=self.guard,
-            date=today,
-            start_time=(timezone.localtime() - timedelta(minutes=5)).time(),
-            end_time=(timezone.localtime() + timedelta(hours=8)).time(),
+            date=start_dt.date(),
+            start_time=start_dt.time(),
+            end_time=(start_dt + timedelta(hours=8)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,
             duty_location="Station B Main Gate",
@@ -235,15 +235,13 @@ class Phase6BAttendanceSecurityTests(APITestCase):
         self.assertIn("Station mismatch", resp.data["detail"])
 
     def test_H_clock_in_16_minutes_after_start_is_late_true(self):
-        today = timezone.localdate()
-        # Shift started exactly 16 minutes ago
-        start_time = (timezone.localtime() - timedelta(minutes=16)).time()
+        start_dt = timezone.localtime() - timedelta(minutes=16)
         shift = Shift.objects.create(
             station=self.station_a,
             guard=self.guard,
-            date=today,
-            start_time=start_time,
-            end_time=(timezone.localtime() + timedelta(hours=8)).time(),
+            date=start_dt.date(),
+            start_time=start_dt.time(),
+            end_time=(start_dt + timedelta(hours=8)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,
             duty_location="Gate 1",
@@ -265,15 +263,13 @@ class Phase6BAttendanceSecurityTests(APITestCase):
         self.assertFalse(att.is_serious_late)
 
     def test_I_clock_in_60_minutes_after_start_serious_lateness_recorded(self):
-        today = timezone.localdate()
-        # Shift started exactly 65 minutes ago
-        start_time = (timezone.localtime() - timedelta(minutes=65)).time()
+        start_dt = timezone.localtime() - timedelta(minutes=65)
         shift = Shift.objects.create(
             station=self.station_a,
             guard=self.guard,
-            date=today,
-            start_time=start_time,
-            end_time=(timezone.localtime() + timedelta(hours=8)).time(),
+            date=start_dt.date(),
+            start_time=start_dt.time(),
+            end_time=(start_dt + timedelta(hours=8)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,
             duty_location="Gate 1",
@@ -295,14 +291,13 @@ class Phase6BAttendanceSecurityTests(APITestCase):
 
     def test_J_first_serious_lateness_recorded_no_escalation(self):
         Notification.objects.filter(notification_type="LATENESS_ESCALATION").delete()
-        today = timezone.localdate()
-        start_time = (timezone.localtime() - timedelta(minutes=70)).time()
+        start_dt = timezone.localtime() - timedelta(minutes=70)
         shift = Shift.objects.create(
             station=self.station_a,
             guard=self.guard,
-            date=today,
-            start_time=start_time,
-            end_time=(timezone.localtime() + timedelta(hours=6)).time(),
+            date=start_dt.date(),
+            start_time=start_dt.time(),
+            end_time=(start_dt + timedelta(hours=6)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,
             duty_location="Gate 1",
@@ -343,13 +338,13 @@ class Phase6BAttendanceSecurityTests(APITestCase):
         )
 
         # Clock into a 2nd shift seriously late
-        start_time = (timezone.localtime() - timedelta(minutes=75)).time()
+        start_dt = timezone.localtime() - timedelta(minutes=75)
         s2 = Shift.objects.create(
             station=self.station_a,
             guard=self.guard,
-            date=today,
-            start_time=start_time,
-            end_time=(timezone.localtime() + timedelta(hours=6)).time(),
+            date=start_dt.date(),
+            start_time=start_dt.time(),
+            end_time=(start_dt + timedelta(hours=6)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,
         )
@@ -390,13 +385,13 @@ class Phase6BAttendanceSecurityTests(APITestCase):
             )
 
         # 3rd serious lateness occurrence
-        start_time = (timezone.localtime() - timedelta(minutes=80)).time()
+        start_dt = timezone.localtime() - timedelta(minutes=80)
         s3 = Shift.objects.create(
             station=self.station_a,
             guard=self.guard,
-            date=today,
-            start_time=start_time,
-            end_time=(timezone.localtime() + timedelta(hours=6)).time(),
+            date=start_dt.date(),
+            start_time=start_dt.time(),
+            end_time=(start_dt + timedelta(hours=6)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,
         )
@@ -445,13 +440,13 @@ class Phase6BAttendanceSecurityTests(APITestCase):
                 is_serious_late=True,
             )
 
-        start_time = (timezone.localtime() - timedelta(minutes=80)).time()
+        start_dt = timezone.localtime() - timedelta(minutes=80)
         s3 = Shift.objects.create(
             station=self.station_a,
             guard=self.guard,
-            date=today,
-            start_time=start_time,
-            end_time=(timezone.localtime() + timedelta(hours=6)).time(),
+            date=start_dt.date(),
+            start_time=start_dt.time(),
+            end_time=(start_dt + timedelta(hours=6)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,
         )

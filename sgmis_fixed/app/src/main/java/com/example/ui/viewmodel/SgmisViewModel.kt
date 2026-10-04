@@ -105,6 +105,11 @@ data class SgmisUiState(
     val openingBalanceSaving: Boolean = false,
     val dutyReassignmentSaving: Boolean = false,
 
+    // Station Coverage & Duty Swapping
+    val stationCoverage: StationCoverageResponse? = null,
+    val stationCoverageLoading: Boolean = false,
+    val dutySwapping: Boolean = false,
+
     // Public Holidays & Early Clockout OTP
     val publicHolidays: List<PublicHoliday> = emptyList(),
     val holidayDutyRecords: List<PublicHolidayDutyRecord> = emptyList(),
@@ -129,6 +134,8 @@ data class SgmisUiState(
             "TIME_OFF" -> GuardDutyState.TIME_OFF
             "ELIGIBLE_FOR_DUTY" -> GuardDutyState.ELIGIBLE_FOR_DUTY
             "EARLY_EXIT_PENDING" -> GuardDutyState.EARLY_EXIT_PENDING
+            "EXAM" -> GuardDutyState.EXAM
+            "ESCORT" -> GuardDutyState.ESCORT
             else -> GuardDutyState.OFF_DUTY
         }
     } ?: GuardDutyState.fromShift(todayShift)
@@ -137,9 +144,11 @@ data class SgmisUiState(
     val isOffDuty: Boolean get() = guardDutyState.isOffDuty
     val isEligibleForDuty: Boolean get() = guardDutyState == GuardDutyState.ELIGIBLE_FOR_DUTY
     val isOnLeave: Boolean get() = guardDutyState == GuardDutyState.ON_LEAVE
+    val isExamDuty: Boolean get() = guardDutyState == GuardDutyState.EXAM
+    val isEscortDuty: Boolean get() = guardDutyState == GuardDutyState.ESCORT
 
-    // Guard operational capability check (enforces that guards must be ON_DUTY to execute operational events)
-    val canPerformGuardOperations: Boolean get() = !isGuard || isOnDuty
+    // Guard operational capability check (enforces that guards must be ON_DUTY or on special duty to execute operational events)
+    val canPerformGuardOperations: Boolean get() = !isGuard || isOnDuty || guardDutyState.isSpecialDuty
 
     // Authoritative station context
     val currentStationId: String? get() = currentUser?.station ?: todayShift?.station
@@ -252,15 +261,44 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     }
 
     fun reassignSingleShift(shiftId: String, request: ReassignSingleShiftRequest, onSuccess: () -> Unit = {}) {
-        if (!adminOnly()) return
+        if (_uiState.value.currentUser?.appRole == AppRole.GUARD) return
         viewModelScope.launch {
             _uiState.update { it.copy(dutyReassignmentSaving = true, errorMessage = null) }
             repository.reassignSingleShift(shiftId, request).onSuccess { response ->
                 _uiState.update { it.copy(dutyReassignmentSaving = false, successMessage = response.message) }
                 fetchRosterShifts()
+                fetchStationCoverage()
                 fetchAdministrativeHistory()
                 onSuccess()
             }.onFailure { e -> _uiState.update { it.copy(dutyReassignmentSaving = false, errorMessage = e.message) } }
+        }
+    }
+
+    fun fetchStationCoverage(stationId: String? = null, date: String? = null) {
+        if (_uiState.value.currentUser?.appRole == AppRole.GUARD) return
+        val effectiveStation = stationId ?: _uiState.value.currentUser?.station
+        viewModelScope.launch {
+            _uiState.update { it.copy(stationCoverageLoading = true) }
+            repository.getStationCoverage(effectiveStation, date).onSuccess { coverage ->
+                _uiState.update { it.copy(stationCoverage = coverage, stationCoverageLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(stationCoverageLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun swapPairDuties(request: SwapPairDutiesRequest, onSuccess: () -> Unit = {}) {
+        if (_uiState.value.currentUser?.appRole == AppRole.GUARD) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(dutySwapping = true, errorMessage = null) }
+            repository.swapPairDuties(request).onSuccess { res ->
+                _uiState.update { it.copy(dutySwapping = false, successMessage = res.message) }
+                fetchRosterShifts()
+                fetchStationCoverage()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(dutySwapping = false, errorMessage = err.message) }
+            }
         }
     }
 
@@ -436,6 +474,9 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         val role = _uiState.value.currentUser?.role?.uppercase()
         if (role == "SUPERVISOR" || role == "ADMIN" || role == "ADMINISTRATOR") {
             fetchTelemetry()
+            fetchStationCoverage()
+            fetchUsers(role = "GUARD")
+            fetchRosterShifts()
         }
     }
 
@@ -464,6 +505,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             fetchStations()
             fetchGuardPairs()
             fetchRosterShifts()
+            fetchStationCoverage()
             fetchAttendanceRecords()
             fetchPublicHolidays()
             fetchHolidayDutyRecords()
@@ -485,6 +527,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             fetchDirectMessages()
             if (_uiState.value.isSupervisorOrAdmin) {
                 fetchTelemetry()
+                fetchStationCoverage()
                 fetchIncidents()
                 fetchPatrolLogs()
                 fetchHandovers()

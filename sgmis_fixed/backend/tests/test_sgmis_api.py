@@ -168,7 +168,7 @@ class SGMISBackendEndToEndTests(TestCase):
         self.assertEqual(resp2.data["user"]["username"], "guard_a")
 
     def test_roster_generation_and_today_shift(self):
-        today = timezone.now().date()
+        today = timezone.localdate()
         shifts = generate_roster_for_station(self.station, today, cycle_days=4)
         self.assertTrue(len(shifts) > 0)
 
@@ -185,15 +185,16 @@ class SGMISBackendEndToEndTests(TestCase):
         self.assertEqual(shift_data["partner_employee_number"], "SEC-502")
 
     def test_clock_in_and_clock_out(self):
-        today = timezone.now().date()
+        today = timezone.localdate()
         generate_roster_for_station(self.station, today, cycle_days=2)
 
         shift = Shift.objects.filter(guard=self.guard_a, date=today).first()
         self.assertIsNotNone(shift)
         # Ensure scheduled start time is within the clock-in window and end time is in future regardless of test time
-        now_local = timezone.localtime()
-        shift.start_time = (now_local - timedelta(minutes=5)).time()
-        shift.end_time = (now_local + timedelta(hours=8)).time()
+        start_dt = timezone.localtime() - timedelta(minutes=5)
+        shift.date = start_dt.date()
+        shift.start_time = start_dt.time()
+        shift.end_time = (start_dt + timedelta(hours=8)).time()
         shift.save()
 
         self.client.force_authenticate(user=self.guard_a)
@@ -224,7 +225,7 @@ class SGMISBackendEndToEndTests(TestCase):
         self.assertIsNotNone(clock_out_resp.data["clock_out"])
 
     def test_handover_backend_resolution_and_acceptance(self):
-        today = timezone.now().date()
+        today = timezone.localdate()
         generate_roster_for_station(self.station, today, cycle_days=2)
 
         day_shift = Shift.objects.filter(station=self.station, date=today, shift_type=ShiftType.DAY, guard=self.guard_a).first()
@@ -272,7 +273,7 @@ class SGMISBackendEndToEndTests(TestCase):
         self.assertIsNotNone(accept_resp.data["incoming_accepted_at"])
 
     def test_handover_rejection(self):
-        today = timezone.now().date()
+        today = timezone.localdate()
         generate_roster_for_station(self.station, today, cycle_days=2)
         day_shift = Shift.objects.filter(station=self.station, date=today, shift_type=ShiftType.DAY, guard=self.guard_a).first()
         self.assertIsNotNone(day_shift)
@@ -310,7 +311,7 @@ class SGMISBackendEndToEndTests(TestCase):
 
     def test_generate_roster_endpoint(self):
         self.client.force_authenticate(user=self.admin)
-        today = timezone.now().date()
+        today = timezone.localdate()
         resp = self.client.post("/shifts/shifts/generate/", {
             "station_id": str(self.station.id),
             "start_date": str(today),
@@ -324,7 +325,7 @@ class SGMISBackendEndToEndTests(TestCase):
 
     def test_leave_application_and_review(self):
         self.client.force_authenticate(user=self.guard_a)
-        today = timezone.now().date()
+        today = timezone.localdate()
 
         # Submit leave
         leave_resp = self.client.post("/leave/applications/", {
@@ -967,7 +968,7 @@ class SGMISBackendEndToEndTests(TestCase):
     def test_leave_application_emergency_details_and_routing(self):
         """Leave application stores emergency contacts and notifies administrators."""
         self.client.force_authenticate(user=self.guard_a)
-        today = timezone.now().date()
+        today = timezone.localdate()
         leave_resp = self.client.post("/leave/applications/", {
             "leave_type": "VACATION",
             "start_date": str(today + timedelta(days=15)),
@@ -1006,7 +1007,7 @@ class SGMISBackendEndToEndTests(TestCase):
     def test_escort_duty_conflict_prevention(self):
         """Reject overlapping assignments if guard is active on another post/duty."""
         self.client.force_authenticate(user=self.admin)
-        today = timezone.now().date()
+        today = timezone.localdate()
         # Ensure guard_a has a shift today
         Shift.objects.get_or_create(
             station=self.station,
@@ -1020,14 +1021,15 @@ class SGMISBackendEndToEndTests(TestCase):
         )
 
         # Attempt to assign guard_a to escort duty overlapping today
-        now = timezone.now()
+        escort_start = timezone.make_aware(datetime.combine(today, time(8, 0)))
+        escort_end = timezone.make_aware(datetime.combine(today, time(12, 0)))
         conflict_resp = self.client.post("/escorts/duties/", {
             "guard": str(self.guard_a.id),
             "mission_name": "VIP Transport",
             "origin": "Airport",
             "destination": "Embassy",
-            "start_time": now.isoformat(),
-            "end_time": (now + timedelta(hours=4)).isoformat(),
+            "start_time": escort_start.isoformat(),
+            "end_time": escort_end.isoformat(),
         })
         self.assertEqual(conflict_resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("already assigned to active duty on another post", str(conflict_resp.data))
@@ -1165,8 +1167,8 @@ class SGMISBackendEndToEndTests(TestCase):
         leave_echo = LeaveApplication.objects.create(
             guard=guard_echo,
             leave_type="CASUAL",
-            start_date=timezone.now().date(),
-            end_date=timezone.now().date() + timedelta(days=2),
+            start_date=timezone.localdate(),
+            end_date=timezone.localdate() + timedelta(days=2),
             reason="Family matter",
             status=LeaveStatus.PENDING,
         )
@@ -1363,7 +1365,7 @@ class SGMISBackendEndToEndTests(TestCase):
 
         # Step 2: Guard attempts to create a public holiday -> 403 Forbidden
         self.client.force_authenticate(user=self.guard_a)
-        holiday_date = timezone.now().date() + timedelta(days=10)
+        holiday_date = timezone.localdate() + timedelta(days=10)
         guard_holiday_resp = self.client.post("/shifts/public-holidays/", {
             "name": "Workers Day",
             "date": holiday_date.isoformat(),
@@ -1536,11 +1538,12 @@ class SGMISBackendEndToEndTests(TestCase):
     def test_late_arrival_report_and_clock_in(self):
         """Phase 13: Late arrival report filing and clock-in authorization."""
         now_local = timezone.localtime()
+        start_dt = now_local - timedelta(minutes=75)
         shift = Shift.objects.create(
             station=self.station,
             guard=self.guard_a,
-            date=now_local.date(),
-            start_time=(now_local - timedelta(minutes=75)).time(),
+            date=start_dt.date(),
+            start_time=start_dt.time(),
             end_time=(now_local + timedelta(hours=4)).time(),
             shift_type=ShiftType.DAY,
         )

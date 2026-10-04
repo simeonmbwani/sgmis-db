@@ -33,12 +33,15 @@ enum class GuardDutyState {
     ON_DUTY,           // Formally clocked in on authoritative shift, actively on post
     TIME_OFF,          // Scheduled off-duty day
     ON_LEAVE,          // Approved leave
-    EARLY_EXIT_PENDING; // Early departure requested/pending
+    EARLY_EXIT_PENDING,// Early departure requested/pending
+    EXAM,              // Assigned to Examination Supervision duty
+    ESCORT;            // Assigned to Transit / Protective Escort mission
 
     val isOnDuty: Boolean get() = this == ON_DUTY
     val isOffDuty: Boolean get() = this == OFF_DUTY || this == TIME_OFF || this == ON_LEAVE
     val isEligibleForDuty: Boolean get() = this == ELIGIBLE_FOR_DUTY
     val isOnLeave: Boolean get() = this == ON_LEAVE
+    val isSpecialDuty: Boolean get() = this == EXAM || this == ESCORT
 
     companion object {
         fun fromShift(shift: Shift?): GuardDutyState {
@@ -50,9 +53,13 @@ enum class GuardDutyState {
             if (raw == "OFF_DUTY") return OFF_DUTY
             if (raw == "ELIGIBLE_FOR_DUTY") return ELIGIBLE_FOR_DUTY
             if (raw == "EARLY_EXIT_PENDING") return EARLY_EXIT_PENDING
+            if (raw == "EXAM") return EXAM
+            if (raw == "ESCORT") return ESCORT
 
             val shiftTypeUpper = shift.shiftType.uppercase()
             val assignmentTypeUpper = shift.assignmentType.uppercase()
+            if (assignmentTypeUpper == "EXAM") return EXAM
+            if (assignmentTypeUpper == "ESCORT") return ESCORT
             if (shiftTypeUpper == "OFF" || assignmentTypeUpper == "TIME_OFF") {
                 return OFF_DUTY
             }
@@ -62,6 +69,8 @@ enum class GuardDutyState {
                 "CLOCKED_OUT", "OFF_DUTY" -> OFF_DUTY
                 "ON_LEAVE" -> ON_LEAVE
                 "TIME_OFF" -> TIME_OFF
+                "EXAM" -> EXAM
+                "ESCORT" -> ESCORT
                 else -> OFF_DUTY
             }
         }
@@ -1293,5 +1302,54 @@ data class DutyStateResponse(
     @Json(name = "duty_state") val dutyState: String = "OFF_DUTY",
     @Json(name = "leave_type") val leaveType: String? = null,
     @Json(name = "is_on_duty") val isOnDuty: Boolean = false,
-    @Json(name = "is_off_duty") val isOffDuty: Boolean = true
+    @Json(name = "is_off_duty") val isOffDuty: Boolean = true,
+    @Json(name = "is_eligible_for_duty") val isEligibleForDuty: Boolean = false,
+    val shift: Shift? = null,
+    @Json(name = "exam_duty") val examDuty: ExamDuty? = null,
+    @Json(name = "escort_duty") val escortDuty: EscortDuty? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class AvailableReliefGuard(
+    val id: String,
+    val username: String,
+    @Json(name = "full_name") val fullName: String,
+    @Json(name = "employee_number") val employeeNumber: String? = null,
+    @Json(name = "station_name") val stationName: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class StationCoveragePair(
+    val id: String,
+    @Json(name = "rotation_order") val rotationOrder: Int,
+    @Json(name = "guard_a_id") val guardAId: String,
+    @Json(name = "guard_a_name") val guardAName: String,
+    @Json(name = "guard_b_id") val guardBId: String,
+    @Json(name = "guard_b_name") val guardBName: String
+)
+
+@JsonClass(generateAdapter = true)
+data class StationCoverageResponse(
+    val date: String,
+    @Json(name = "station_id") val stationId: String,
+    @Json(name = "station_name") val stationName: String,
+    @Json(name = "is_day_covered") val isDayCovered: Boolean = false,
+    @Json(name = "is_night_covered") val isNightCovered: Boolean = false,
+    @Json(name = "coverage_warning") val coverageWarning: Boolean = false,
+    @Json(name = "warning_message") val warningMessage: String? = null,
+    val pair: StationCoveragePair? = null,
+    @Json(name = "day_guard") val dayGuard: Shift? = null,
+    @Json(name = "night_guard") val nightGuard: Shift? = null,
+    @Json(name = "day_shifts") val dayShifts: List<Shift> = emptyList(),
+    @Json(name = "night_shifts") val nightShifts: List<Shift> = emptyList(),
+    @Json(name = "time_off_shifts") val timeOffShifts: List<Shift> = emptyList(),
+    @Json(name = "available_relief_guards") val availableReliefGuards: List<AvailableReliefGuard> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class SwapPairDutiesRequest(
+    val date: String? = null,
+    @Json(name = "pair_id") val pairId: String? = null,
+    @Json(name = "station_id") val stationId: String? = null,
+    val reason: String
 )

@@ -229,15 +229,30 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
 
         return qs
 
-    @action(detail=True, methods=["post"], url_path="reassign", permission_classes=[IsAdministrator])
+    @action(detail=True, methods=["post"], url_path="reassign", permission_classes=[IsSupervisorOrAdmin])
     def reassign_single(self, request, pk=None):
-        """Reassign one unstarted current/future shift without regenerating its roster."""
+        """
+        Reassign one unstarted current/future shift without regenerating its roster.
+        Permitted for Station Supervisors (on their assigned station) and Administrators.
+        Enforces conflict protection:
+        - Prevents assigning guards on approved leave.
+        - Prevents assigning guards scheduled for active exam or escort duties.
+        - Prevents overlapping shifts.
+        """
         shift = self.get_object()
         if shift.date < timezone.localdate():
             return Response({"detail": "Past shifts cannot be reassigned."}, status=status.HTTP_400_BAD_REQUEST)
         attendance = Attendance.objects.filter(shift=shift).first()
         if attendance and (attendance.clock_in or attendance.clock_out):
             return Response({"detail": "A shift with attendance records cannot be reassigned."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Station boundary check for Supervisors
+        if request.user.role == UserRole.SUPERVISOR and not (request.user.is_staff or request.user.is_superuser):
+            if not request.user.station_id or str(request.user.station_id) != str(shift.station_id):
+                return Response(
+                    {"detail": "Supervisors can only reassign shifts at their assigned station."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
         guard_id = request.data.get("guard_id")
         reason = str(request.data.get("reason", "")).strip()
@@ -246,19 +261,77 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
         guard = get_object_or_404(User, id=guard_id, role=UserRole.GUARD, is_active=True)
         station_id = request.data.get("station_id")
         station = get_object_or_404(Station, id=station_id) if station_id else shift.station
+
+        # 1. Active shift conflict check
         conflict = Shift.objects.filter(guard=guard, date=shift.date).exclude(id=shift.id).exclude(
             assignment_type=AssignmentType.TIME_OFF
         ).exclude(shift_type=ShiftType.OFF).exists()
         if conflict:
             return Response({"detail": "The selected guard already has another active shift on this date."}, status=status.HTTP_409_CONFLICT)
 
+        # 2. Approved leave conflict check
+        from apps.leave.models import LeaveApplication, LeaveStatus
+        on_leave = LeaveApplication.objects.filter(
+            guard=guard,
+            status=LeaveStatus.APPROVED,
+            start_date__lte=shift.date,
+            end_date__gte=shift.date,
+        ).exists()
+        if on_leave:
+            return Response({"detail": "The selected guard is on approved leave on this date and cannot be assigned to a shift."}, status=status.HTTP_409_CONFLICT)
+
+        # 3. Exam duty conflict check
+        from apps.exams.models import ExamDuty, ExamStatus
+        on_exam = ExamDuty.objects.filter(
+            guard=guard,
+            date=shift.date,
+            status__in=[ExamStatus.ASSIGNED, ExamStatus.ACKNOWLEDGED, ExamStatus.IN_PROGRESS],
+        ).exists()
+        if on_exam:
+            return Response({"detail": "The selected guard is assigned to examination duty on this date and cannot be assigned to a normal shift."}, status=status.HTTP_409_CONFLICT)
+
+        # 4. Escort duty conflict check
+        from apps.escorts.models import EscortDuty, EscortStatus
+        on_escort = EscortDuty.objects.filter(
+            guard=guard,
+            start_time__date__lte=shift.date,
+            end_time__date__gte=shift.date,
+            status__in=[EscortStatus.SCHEDULED, EscortStatus.ASSIGNED, EscortStatus.ACKNOWLEDGED, EscortStatus.EN_ROUTE],
+        ).exists()
+        if on_escort:
+            return Response({"detail": "The selected guard is assigned to escort duty on this date and cannot be assigned to a normal shift."}, status=status.HTTP_409_CONFLICT)
+
         old_guard = shift.guard
         old_station = shift.station
         shift.guard = guard
         shift.station = station
+
+        # Optional shift_type adjustment (e.g. DAY <-> NIGHT)
+        new_shift_type = request.data.get("shift_type")
+        if new_shift_type:
+            st_norm = str(new_shift_type).strip().upper()
+            if st_norm in [ShiftType.DAY, ShiftType.NIGHT, ShiftType.OFF]:
+                shift.shift_type = st_norm
+                if st_norm == ShiftType.DAY:
+                    shift.start_time = time(7, 0)
+                    shift.end_time = time(18, 0)
+                elif st_norm == ShiftType.NIGHT:
+                    shift.start_time = time(18, 0)
+                    shift.end_time = time(7, 0)
+
+        # Optional assignment_type adjustment (e.g. RELIEF)
+        new_assignment_type = request.data.get("assignment_type")
+        if new_assignment_type:
+            at_norm = str(new_assignment_type).strip().upper()
+            if at_norm in [AssignmentType.NORMAL, AssignmentType.RELIEF, AssignmentType.EXAM, AssignmentType.ESCORT]:
+                shift.assignment_type = at_norm
+        elif old_guard.id != guard.id and shift.assignment_type == AssignmentType.NORMAL:
+            if not shift.pair or guard.id not in (shift.pair.guard_a_id, shift.pair.guard_b_id):
+                shift.assignment_type = AssignmentType.RELIEF
+
         if shift.pair and guard.id not in (shift.pair.guard_a_id, shift.pair.guard_b_id):
             shift.pair = None
-        shift.save(update_fields=["guard", "station", "pair"])
+        shift.save()
 
         details = {
             "action": "SINGLE_SHIFT_REASSIGNED", "date": shift.date.isoformat(),
@@ -266,7 +339,7 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
             "new_guard_id": str(guard.id), "new_guard": guard.get_full_name() or guard.username,
             "old_station_id": str(old_station.id) if old_station else None,
             "new_station_id": str(station.id) if station else None,
-            "shift_type": shift.shift_type, "reason": reason,
+            "shift_type": shift.shift_type, "assignment_type": shift.assignment_type, "reason": reason,
         }
         SupervisorOverrideAudit.objects.create(
             supervisor=request.user, action_type="SINGLE_SHIFT_REASSIGNMENT",
@@ -277,19 +350,258 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
             actor=request.user, actor_username=request.user.username,
             target_model="Shift", target_id=str(shift.id), details=details,
         )
+        actor_role = "supervisor" if request.user.role == UserRole.SUPERVISOR else "administrator"
         Notification.objects.create(
             user=guard, title="Duty Assignment Updated",
-            message=f"You were assigned to a {shift.shift_type} shift at {station.name if station else 'station'} on {shift.date}. Reason: {reason}",
+            message=f"You were assigned to a {shift.shift_type} ({shift.assignment_type}) shift at {station.name if station else 'station'} on {shift.date}. Reason: {reason}",
             notification_type="DUTY_ASSIGNMENT",
         )
         if old_guard.id != guard.id:
             Notification.objects.create(
                 user=old_guard, title="Duty Assignment Changed",
-                message=f"Your {shift.shift_type} shift on {shift.date} has been reassigned by an administrator.",
+                message=f"Your {shift.shift_type} shift on {shift.date} has been reassigned by a {actor_role}.",
                 notification_type="DUTY_ASSIGNMENT",
             )
         return Response({"message": "Single shift reassigned.", "shift": ShiftSerializer(shift).data,
                          "historical_preserved": True, "roster_regenerated": False}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="swap_pair_duties", permission_classes=[IsSupervisorOrAdmin])
+    def swap_pair_duties(self, request):
+        """
+        POST /shifts/shifts/swap_pair_duties/
+        Authoritative supervisor action: Swaps DAY and NIGHT duties between the two guards
+        of a working pair on a specified date.
+        """
+        date_str = request.data.get("date")
+        target_date = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else timezone.localdate()
+        if target_date < timezone.localdate():
+            return Response({"detail": "Past shifts cannot be swapped."}, status=status.HTTP_400_BAD_REQUEST)
+
+        reason = str(request.data.get("reason", "")).strip()
+        if not reason:
+            return Response({"detail": "A mandatory operational reason is required for duty swapping."}, status=status.HTTP_400_BAD_REQUEST)
+
+        station_id = request.data.get("station_id") or request.data.get("station")
+        if request.user.role == UserRole.SUPERVISOR and not (request.user.is_staff or request.user.is_superuser):
+            if not request.user.station:
+                return Response({"detail": "Supervisor has no assigned station."}, status=status.HTTP_403_FORBIDDEN)
+            station = request.user.station
+        else:
+            station = get_object_or_404(Station, id=station_id) if station_id else request.user.station
+            if not station:
+                return Response({"detail": "station_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        pair_id = request.data.get("pair_id")
+        shifts_qs = Shift.objects.filter(station=station, date=target_date).exclude(
+            assignment_type=AssignmentType.TIME_OFF
+        ).exclude(shift_type=ShiftType.OFF).select_related("guard", "pair")
+        if pair_id:
+            shifts_qs = shifts_qs.filter(pair_id=pair_id)
+
+        shifts_list = list(shifts_qs)
+        day_shift = next((s for s in shifts_list if s.shift_type == ShiftType.DAY), None)
+        night_shift = next((s for s in shifts_list if s.shift_type == ShiftType.NIGHT), None)
+
+        if not day_shift or not night_shift:
+            return Response(
+                {"detail": "Cannot swap: Station must have both an active DAY shift and an active NIGHT shift on this date."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        for s in (day_shift, night_shift):
+            att = Attendance.objects.filter(shift=s).first()
+            if att and (att.clock_in or att.clock_out):
+                return Response(
+                    {"detail": f"Shift {s.shift_type} already has clock-in/out attendance records and cannot be swapped."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        guard_day = day_shift.guard
+        guard_night = night_shift.guard
+
+        from django.db import transaction
+        with transaction.atomic():
+            day_shift.guard = guard_night
+            day_shift.save(update_fields=["guard"])
+
+            night_shift.guard = guard_day
+            night_shift.save(update_fields=["guard"])
+
+            SupervisorOverrideAudit.objects.create(
+                supervisor=request.user,
+                action_type="PAIR_DUTY_SWAP",
+                target_model="Shift",
+                target_id=f"{day_shift.id},{night_shift.id}",
+                reason=reason,
+            )
+            SecurityAuditEvent.objects.create(
+                event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+                actor=request.user,
+                actor_username=request.user.username,
+                target_model="Shift",
+                target_id=str(day_shift.id),
+                details={
+                    "action": "PAIR_DUTIES_SWAPPED",
+                    "date": target_date.isoformat(),
+                    "station_id": str(station.id),
+                    "new_day_guard": guard_night.get_full_name() or guard_night.username,
+                    "new_night_guard": guard_day.get_full_name() or guard_day.username,
+                    "reason": reason,
+                },
+            )
+
+            Notification.objects.create(
+                user=guard_night,
+                title="Duty Shift Changed to DAY",
+                message=f"Your assignment on {target_date} has been changed to DAY shift (07:00 – 18:00) at {station.name}. Reason: {reason}",
+                notification_type="DUTY_ASSIGNMENT",
+            )
+            Notification.objects.create(
+                user=guard_day,
+                title="Duty Shift Changed to NIGHT",
+                message=f"Your assignment on {target_date} has been changed to NIGHT shift (18:00 – 07:00) at {station.name}. Reason: {reason}",
+                notification_type="DUTY_ASSIGNMENT",
+            )
+
+        return Response({
+            "message": f"Successfully swapped Day and Night duty assignments for {station.name} on {target_date}.",
+            "day_shift": ShiftSerializer(day_shift).data,
+            "night_shift": ShiftSerializer(night_shift).data,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="station_coverage", permission_classes=[IsSupervisorOrAdmin])
+    def station_coverage(self, request):
+        """
+        GET /shifts/shifts/station_coverage/
+        Returns comprehensive station duty coverage status for a specified date:
+        - Day duty guard & Night duty guard
+        - Pair details
+        - Coverage warning banner flag and human-readable message
+        - Available non-duty relief guards with conflict checking
+        """
+        date_str = request.query_params.get("date")
+        try:
+            target_date = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else timezone.localdate()
+        except ValueError:
+            return Response({"detail": "Invalid date format. Use YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+
+        station_id = request.query_params.get("station") or request.query_params.get("station_id")
+        if request.user.role == UserRole.SUPERVISOR and not (request.user.is_staff or request.user.is_superuser):
+            if not request.user.station:
+                return Response({"detail": "Supervisor has no assigned station."}, status=status.HTTP_403_FORBIDDEN)
+            station = request.user.station
+        else:
+            if station_id:
+                station = get_object_or_404(Station, id=station_id)
+            elif request.user.station:
+                station = request.user.station
+            else:
+                station = Station.objects.filter(is_active=True).first()
+
+        if not station:
+            return Response({"detail": "No station found."}, status=status.HTTP_404_NOT_FOUND)
+
+        shifts = list(Shift.objects.filter(station=station, date=target_date).select_related("guard", "pair"))
+        day_shifts = [s for s in shifts if s.shift_type == ShiftType.DAY and s.assignment_type != AssignmentType.TIME_OFF]
+        night_shifts = [s for s in shifts if s.shift_type == ShiftType.NIGHT and s.assignment_type != AssignmentType.TIME_OFF]
+        time_off_shifts = [s for s in shifts if s.shift_type == ShiftType.OFF or s.assignment_type == AssignmentType.TIME_OFF]
+
+        is_day_covered = len(day_shifts) > 0
+        is_night_covered = len(night_shifts) > 0
+        coverage_warning = not is_day_covered or not is_night_covered
+
+        if not is_day_covered and not is_night_covered:
+            warning_message = f"CRITICAL: NO GUARDS SCHEDULED FOR {station.name.upper()} ON {target_date}. BOTH DAY AND NIGHT SHIFTS ARE UNCOVERED."
+        elif not is_day_covered:
+            warning_message = f"CRITICAL: DAY SHIFT (07:00 – 18:00) UNCOVERED AT {station.name.upper()} ON {target_date}. ASSIGN RELIEF GUARD."
+        elif not is_night_covered:
+            warning_message = f"CRITICAL: NIGHT SHIFT (18:00 – 07:00) UNCOVERED AT {station.name.upper()} ON {target_date}. ASSIGN RELIEF GUARD."
+        else:
+            warning_message = None
+
+        from apps.leave.models import LeaveApplication, LeaveStatus
+        from apps.exams.models import ExamDuty, ExamStatus
+        from apps.escorts.models import EscortDuty, EscortStatus
+
+        active_shift_guard_ids = Shift.objects.filter(date=target_date).exclude(
+            assignment_type=AssignmentType.TIME_OFF
+        ).exclude(shift_type=ShiftType.OFF).values_list("guard_id", flat=True)
+
+        leave_guard_ids = LeaveApplication.objects.filter(
+            status=LeaveStatus.APPROVED,
+            start_date__lte=target_date,
+            end_date__gte=target_date,
+        ).values_list("guard_id", flat=True)
+
+        exam_guard_ids = ExamDuty.objects.filter(
+            date=target_date,
+            status__in=[ExamStatus.ASSIGNED, ExamStatus.ACKNOWLEDGED, ExamStatus.IN_PROGRESS],
+        ).values_list("guard_id", flat=True)
+
+        escort_guard_ids = EscortDuty.objects.filter(
+            start_time__date__lte=target_date,
+            end_time__date__gte=target_date,
+            status__in=[EscortStatus.SCHEDULED, EscortStatus.ASSIGNED, EscortStatus.ACKNOWLEDGED, EscortStatus.EN_ROUTE],
+        ).values_list("guard_id", flat=True)
+
+        excluded_ids = set(active_shift_guard_ids) | set(leave_guard_ids) | set(exam_guard_ids) | set(escort_guard_ids)
+
+        candidate_guards = list(User.objects.filter(
+            role=UserRole.GUARD,
+            is_active=True,
+            station=station,
+        ).exclude(id__in=excluded_ids))
+
+        if not candidate_guards:
+            candidate_guards = list(User.objects.filter(
+                role=UserRole.GUARD,
+                is_active=True,
+            ).exclude(id__in=excluded_ids))
+
+        relief_data = [
+            {
+                "id": str(g.id),
+                "username": g.username,
+                "full_name": g.get_full_name() or g.username,
+                "employee_number": g.employee_number or "",
+                "station_name": g.station.name if g.station else "Floating",
+            }
+            for g in candidate_guards[:20]
+        ]
+
+        active_pair = None
+        if day_shifts and day_shifts[0].pair:
+            active_pair = day_shifts[0].pair
+        elif night_shifts and night_shifts[0].pair:
+            active_pair = night_shifts[0].pair
+
+        pair_data = None
+        if active_pair:
+            pair_data = {
+                "id": str(active_pair.id),
+                "rotation_order": active_pair.rotation_order,
+                "guard_a_id": str(active_pair.guard_a_id),
+                "guard_a_name": active_pair.guard_a.get_full_name() or active_pair.guard_a.username,
+                "guard_b_id": str(active_pair.guard_b_id),
+                "guard_b_name": active_pair.guard_b.get_full_name() or active_pair.guard_b.username,
+            }
+
+        return Response({
+            "date": target_date.isoformat(),
+            "station_id": str(station.id),
+            "station_name": station.name,
+            "is_day_covered": is_day_covered,
+            "is_night_covered": is_night_covered,
+            "coverage_warning": coverage_warning,
+            "warning_message": warning_message,
+            "pair": pair_data,
+            "day_guard": ShiftSerializer(day_shifts[0]).data if day_shifts else None,
+            "night_guard": ShiftSerializer(night_shifts[0]).data if night_shifts else None,
+            "day_shifts": ShiftSerializer(day_shifts, many=True).data,
+            "night_shifts": ShiftSerializer(night_shifts, many=True).data,
+            "time_off_shifts": ShiftSerializer(time_off_shifts, many=True).data,
+            "available_relief_guards": relief_data,
+        }, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["get"], url_path="today")
     def today(self, request):
@@ -328,6 +640,11 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
                 shift = qs.filter(guard=user, date=target_date).first()
 
             from apps.leave.models import LeaveApplication, LeaveStatus
+            from apps.exams.models import ExamDuty, ExamStatus
+            from apps.exams.serializers import ExamDutySerializer
+            from apps.escorts.models import EscortDuty, EscortStatus
+            from apps.escorts.serializers import EscortDutySerializer
+
             leave_app = LeaveApplication.objects.filter(
                 guard=user,
                 status=LeaveStatus.APPROVED,
@@ -335,18 +652,44 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
                 end_date__gte=target_date,
             ).first()
 
+            exam_duty = ExamDuty.objects.filter(
+                guard=user,
+                date=target_date,
+                status__in=[ExamStatus.ASSIGNED, ExamStatus.ACKNOWLEDGED, ExamStatus.IN_PROGRESS],
+            ).first()
+
+            escort_duty = EscortDuty.objects.filter(
+                guard=user,
+                start_time__date__lte=target_date,
+                end_time__date__gte=target_date,
+                status__in=[EscortStatus.SCHEDULED, EscortStatus.ASSIGNED, EscortStatus.ACKNOWLEDGED, EscortStatus.EN_ROUTE],
+            ).first()
+
             if not shift:
-                duty_state = "ON_LEAVE" if leave_app else "OFF_DUTY"
-                leave_type = leave_app.leave_type if leave_app else None
+                if leave_app:
+                    duty_state = "ON_LEAVE"
+                    leave_type = leave_app.leave_type
+                elif exam_duty:
+                    duty_state = "EXAM"
+                    leave_type = None
+                elif escort_duty:
+                    duty_state = "ESCORT"
+                    leave_type = None
+                else:
+                    duty_state = "OFF_DUTY"
+                    leave_type = None
+
                 return Response(
                     {
-                        "detail": "No shift scheduled for today.",
+                        "detail": f"Duty assignment: {duty_state}" if duty_state not in ("OFF_DUTY", "TIME_OFF") else "No shift scheduled for today.",
                         "shift": None,
                         "attendance_status": duty_state,
                         "duty_state": duty_state,
                         "leave_type": leave_type,
                         "is_on_duty": False,
-                        "is_off_duty": True,
+                        "is_off_duty": duty_state in ("OFF_DUTY", "TIME_OFF"),
+                        "exam_duty": ExamDutySerializer(exam_duty).data if exam_duty else None,
+                        "escort_duty": EscortDutySerializer(escort_duty).data if escort_duty else None,
                     },
                     status=status.HTTP_200_OK,
                 )
@@ -356,6 +699,12 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
             if leave_app and data.get("duty_state") != "ON_LEAVE":
                 data["duty_state"] = "ON_LEAVE"
                 data["leave_type"] = leave_app.leave_type
+            elif exam_duty:
+                data["duty_state"] = "EXAM"
+                data["exam_duty"] = ExamDutySerializer(exam_duty).data
+            elif escort_duty:
+                data["duty_state"] = "ESCORT"
+                data["escort_duty"] = EscortDutySerializer(escort_duty).data
             return Response(data, status=status.HTTP_200_OK)
 
         elif user.role == UserRole.SUPERVISOR:
@@ -404,15 +753,38 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
         """
         GET /shifts/shifts/duty_state/
         Returns server-authoritative duty state for the authenticated guard.
+        Order of precedence:
+        1. Approved Leave -> ON_LEAVE
+        2. Active Exam Duty -> EXAM
+        3. Active Escort Duty -> ESCORT
+        4. Scheduled Shift -> ON_DUTY / ELIGIBLE_FOR_DUTY / TIME_OFF / OFF_DUTY
         """
         user = request.user
         today = timezone.localdate()
         from apps.leave.models import LeaveApplication, LeaveStatus
+        from apps.exams.models import ExamDuty, ExamStatus
+        from apps.exams.serializers import ExamDutySerializer
+        from apps.escorts.models import EscortDuty, EscortStatus
+        from apps.escorts.serializers import EscortDutySerializer
+
         leave_app = LeaveApplication.objects.filter(
             guard=user,
             status=LeaveStatus.APPROVED,
             start_date__lte=today,
             end_date__gte=today,
+        ).first()
+
+        exam_duty = ExamDuty.objects.filter(
+            guard=user,
+            date=today,
+            status__in=[ExamStatus.ASSIGNED, ExamStatus.ACKNOWLEDGED, ExamStatus.IN_PROGRESS],
+        ).first()
+
+        escort_duty = EscortDuty.objects.filter(
+            guard=user,
+            start_time__date__lte=today,
+            end_time__date__gte=today,
+            status__in=[EscortStatus.SCHEDULED, EscortStatus.ASSIGNED, EscortStatus.ACKNOWLEDGED, EscortStatus.EN_ROUTE],
         ).first()
 
         shift = Shift.objects.filter(guard=user, date=today).select_related("station", "pair", "pair__guard_a", "pair__guard_b").first()
@@ -425,6 +797,12 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
         if leave_app:
             duty_state = "ON_LEAVE"
             leave_type = leave_app.leave_type
+        elif exam_duty:
+            duty_state = "EXAM"
+            leave_type = None
+        elif escort_duty:
+            duty_state = "ESCORT"
+            leave_type = None
         elif not shift:
             duty_state = "OFF_DUTY"
             leave_type = None
@@ -443,6 +821,8 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
             "is_off_duty": duty_state in ("OFF_DUTY", "TIME_OFF"),
             "is_eligible_for_duty": duty_state == "ELIGIBLE_FOR_DUTY",
             "shift": ShiftSerializer(shift).data if shift else None,
+            "exam_duty": ExamDutySerializer(exam_duty).data if exam_duty else None,
+            "escort_duty": EscortDutySerializer(escort_duty).data if escort_duty else None,
         }, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["get"], url_path="operational", permission_classes=[IsAuthenticated])

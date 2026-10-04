@@ -67,7 +67,10 @@ fun RosterManagementScreen(
         viewModel.fetchStations()
         viewModel.fetchGuardPairs()
         viewModel.fetchLeave()
-        if (isAdmin) viewModel.fetchUsers(role = "GUARD")
+        if (isAdmin || isSupervisor) {
+            viewModel.fetchUsers(role = "GUARD")
+            viewModel.fetchStationCoverage()
+        }
     }
 
     // Harare Zimbabwe CAT TimeZone for all authoritative roster rendering
@@ -762,7 +765,7 @@ fun RosterManagementScreen(
                     items(targetOperationalShifts) { shift ->
                         Column {
                             RosterShiftCard(shift)
-                            if (isAdmin) TextButton(onClick = { shiftForReassignment = shift }) { Text("Reassign This Shift") }
+                            if (isAdmin || isSupervisor) TextButton(onClick = { shiftForReassignment = shift }) { Text("Reassign This Shift") }
                         }
                     }
                 }

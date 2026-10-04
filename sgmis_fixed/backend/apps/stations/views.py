@@ -1,8 +1,11 @@
-from rest_framework import viewsets
+from rest_framework import viewsets, status
+from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import Station, GuardPair
 from .serializers import StationSerializer, GuardPairSerializer
-from apps.accounts.permissions import IsAdministrator
+from rest_framework.exceptions import PermissionDenied
+from apps.accounts.permissions import IsAdministrator, IsSupervisorOrAdmin
+from apps.accounts.models import UserRole
 from apps.core.models import SecurityAuditEvent
 
 class StationViewSet(viewsets.ModelViewSet):
@@ -47,6 +50,8 @@ class StationViewSet(viewsets.ModelViewSet):
 class GuardPairViewSet(viewsets.ModelViewSet):
     """
     CRUD for Guard Pairs.
+    Guards and Supervisors have read-only access.
+    Administrators have master cross-station pair control.
     """
     queryset = GuardPair.objects.all().select_related("station", "guard_a", "guard_b")
     serializer_class = GuardPairSerializer

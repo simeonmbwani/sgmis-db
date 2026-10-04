@@ -972,4 +972,87 @@ class RoleAndDutyStateTest {
         val pendingLeave = leaves.count { it.status == "PENDING" }
         assertEquals(1, pendingLeave)
     }
+
+    // ==========================================
+    // 16. Dynamic Guard & Supervisor Duty Management (Exam, Escort, Pair Day/Night Swaps)
+    // ==========================================
+
+    @Test
+    fun testExamAndEscortDutyStates() {
+        val examState = GuardDutyState.EXAM
+        assertTrue(examState.isSpecialDuty)
+        assertFalse(examState.isOffDuty)
+
+        val escortState = GuardDutyState.ESCORT
+        assertTrue(escortState.isSpecialDuty)
+        assertFalse(escortState.isOffDuty)
+
+        val offState = GuardDutyState.OFF_DUTY
+        assertFalse(offState.isSpecialDuty)
+        assertTrue(offState.isOffDuty)
+
+        val onDutyState = GuardDutyState.ON_DUTY
+        assertFalse(onDutyState.isSpecialDuty)
+        assertFalse(onDutyState.isOffDuty)
+    }
+
+    @Test
+    fun testSpecialDutyOperationalPermissions() {
+        // Special duties (Exam, Escort) grant operational event permission
+        assertTrue(RoleRouter.canPerformLiveOperation(AppRole.GUARD, GuardDutyState.EXAM))
+        assertTrue(RoleRouter.canPerformLiveOperation(AppRole.GUARD, GuardDutyState.ESCORT))
+        assertTrue(RoleRouter.canPerformLiveOperation(AppRole.GUARD, GuardDutyState.ON_DUTY))
+        assertFalse(RoleRouter.canPerformLiveOperation(AppRole.GUARD, GuardDutyState.OFF_DUTY))
+
+        // Operational routes accessible when on special duty
+        assertTrue(RoleRouter.isRouteAccessible(NavRoutes.OCCURRENCE_BOOK, AppRole.GUARD, GuardDutyState.EXAM))
+        assertTrue(RoleRouter.isRouteAccessible(NavRoutes.INCIDENTS, AppRole.GUARD, GuardDutyState.ESCORT))
+        assertFalse(RoleRouter.isRouteAccessible(NavRoutes.OCCURRENCE_BOOK, AppRole.GUARD, GuardDutyState.OFF_DUTY))
+
+        // SOS is an operational route and is locked when off-duty
+        assertFalse(RoleRouter.isRouteAccessible(NavRoutes.EMERGENCY_SOS, AppRole.GUARD, GuardDutyState.OFF_DUTY))
+    }
+
+    @Test
+    fun testStationCoverageAndPairSwapModels() {
+        val pair = StationCoveragePair(
+            id = "pair-1",
+            rotationOrder = 1,
+            guardAId = "g-1",
+            guardAName = "Alice Guard",
+            guardBId = "g-2",
+            guardBName = "Bob Guard"
+        )
+        assertEquals("pair-1", pair.id)
+        assertEquals(1, pair.rotationOrder)
+        assertEquals("Alice Guard", pair.guardAName)
+        assertEquals("Bob Guard", pair.guardBName)
+
+        val relief = AvailableReliefGuard(
+            id = "g-3",
+            username = "charlie",
+            fullName = "Charlie Relief",
+            employeeNumber = "SEC-003",
+            stationName = "Harare Main"
+        )
+        assertEquals("Charlie Relief", relief.fullName)
+        assertEquals("SEC-003", relief.employeeNumber)
+
+        val coverage = StationCoverageResponse(
+            stationId = "st-1",
+            stationName = "Harare Main",
+            date = "2026-10-04",
+            isDayCovered = true,
+            isNightCovered = true,
+            coverageWarning = false,
+            warningMessage = null,
+            pair = pair,
+            availableReliefGuards = listOf(relief)
+        )
+        assertFalse(coverage.coverageWarning)
+        assertTrue(coverage.isDayCovered)
+        assertTrue(coverage.isNightCovered)
+        assertNotNull(coverage.pair)
+        assertEquals(1, coverage.availableReliefGuards.size)
+    }
 }

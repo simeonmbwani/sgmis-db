@@ -128,14 +128,13 @@ class AuthoritativeAttendanceSecurityTests(APITestCase):
         self.assertIn("Shift expired", resp.data["detail"])
 
     def test_guard_cannot_clock_in_too_early(self):
-        today = timezone.localdate()
-        future_time = (timezone.localtime() + timedelta(hours=2)).time()
+        future_dt = timezone.localtime() + timedelta(hours=2)
         shift = Shift.objects.create(
             station=self.station,
             guard=self.guard_1,
-            date=today,
-            start_time=future_time,
-            end_time=time(23, 59),
+            date=future_dt.date(),
+            start_time=future_dt.time(),
+            end_time=(future_dt + timedelta(hours=8)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,
             duty_location="Main Campus",
@@ -148,13 +147,12 @@ class AuthoritativeAttendanceSecurityTests(APITestCase):
         self.assertIn("Duty time not reached", resp.data["detail"])
 
     def test_duplicate_clock_in_rejected(self):
-        today = timezone.localdate()
-        active_time = (timezone.localtime() - timedelta(minutes=5)).time()
+        active_dt = timezone.localtime() - timedelta(minutes=5)
         shift = Shift.objects.create(
             station=self.station,
             guard=self.guard_1,
-            date=today,
-            start_time=active_time,
+            date=active_dt.date(),
+            start_time=active_dt.time(),
             end_time=(timezone.localtime() + timedelta(hours=8)).time(),
             shift_type=ShiftType.DAY,
             assignment_type=AssignmentType.NORMAL,

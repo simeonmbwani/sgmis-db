@@ -132,6 +132,17 @@ interface ApiService {
     @POST("shifts/shifts/{id}/reassign/")
     suspend fun reassignSingleShift(@Path("id") id: String, @Body request: ReassignSingleShiftRequest): Response<ReassignSingleShiftResponse>
 
+    @GET("shifts/shifts/station_coverage/")
+    suspend fun getStationCoverage(
+        @Query("station") station: String? = null,
+        @Query("date") date: String? = null
+    ): Response<StationCoverageResponse>
+
+    @POST("shifts/shifts/swap_pair_duties/")
+    suspend fun swapPairDuties(
+        @Body request: SwapPairDutiesRequest
+    ): Response<NotificationActionResponse>
+
     @POST("shifts/shifts/schedule_escort/")
     suspend fun scheduleEscort(@Body request: ScheduleExamEscortRequest): Response<ScheduleExamEscortResponse>
 

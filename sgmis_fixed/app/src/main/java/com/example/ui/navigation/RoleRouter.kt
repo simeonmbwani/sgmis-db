@@ -144,7 +144,7 @@ object RoleRouter {
      */
     fun isRouteAccessible(route: String, role: AppRole, dutyState: GuardDutyState): Boolean {
         if (!isRouteAllowed(route, role)) return false
-        if (role == AppRole.GUARD && isOperationalRoute(route) && dutyState != GuardDutyState.ON_DUTY) {
+        if (role == AppRole.GUARD && isOperationalRoute(route) && dutyState != GuardDutyState.ON_DUTY && !dutyState.isSpecialDuty) {
             return false
         }
         return true
@@ -152,11 +152,11 @@ object RoleRouter {
 
     /**
      * Checks if a user is permitted to perform live operational events.
-     * Guards must be ON_DUTY (clocked in) to submit live operational records (OB, Patrol, Handover, SOS).
+     * Guards must be ON_DUTY (clocked in) or on authorized SPECIAL_DUTY (Exam/Escort) to submit live operational records.
      * Non-guards (Supervisors/Admins) are not subject to guard duty-lockout.
      */
     fun canPerformLiveOperation(role: AppRole, dutyState: GuardDutyState): Boolean {
         if (role != AppRole.GUARD) return true
-        return dutyState == GuardDutyState.ON_DUTY
+        return dutyState == GuardDutyState.ON_DUTY || dutyState.isSpecialDuty
     }
 }

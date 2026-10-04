@@ -71,7 +71,7 @@ fun GuardDutyPlanScreen(
             (uName != null && s.guardName.equals(uName, ignoreCase = true)) ||
             (emp != null && s.employeeNumber == emp)
         }
-        if (filtered.isNotEmpty()) filtered else shifts
+        filtered
     }
 
     // Server-derived statistics (no hardcoded 4 ON / 8 OFF rules)
@@ -170,7 +170,7 @@ fun GuardDutyPlanScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Service ID: ${user?.employeeNumber ?: "SEC-ACTIVE"} • Post: ${uiState.currentStationName}",
+                                text = "Service ID: ${user?.employeeNumber ?: "—"} • Post: ${uiState.currentStationName}",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant

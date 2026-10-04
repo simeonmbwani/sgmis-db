@@ -148,6 +148,18 @@ class SgmisRepository(
         else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to reassign shift")))
     } catch (e: Exception) { Result.failure(sanitizeException(e)) }
 
+    suspend fun getStationCoverage(stationId: String? = null, date: String? = null): Result<StationCoverageResponse> = try {
+        val response = api.getStationCoverage(stationId, date)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to load station coverage")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e, "Failed to load station coverage")) }
+
+    suspend fun swapPairDuties(request: SwapPairDutiesRequest): Result<NotificationActionResponse> = try {
+        val response = api.swapPairDuties(request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to swap pair duties")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e, "Failed to swap pair duties")) }
+
     // --- Authentication ---
     suspend fun login(identifier: String, pass: String): Result<User> {
         return try {

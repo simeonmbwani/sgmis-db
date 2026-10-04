@@ -41,6 +41,13 @@ class EscortDutyViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
+        target_guard = serializer.validated_data.get("guard")
+        start_time = serializer.validated_data.get("start_time")
+        if target_guard and start_time:
+            target_date = start_time.date()
+            from apps.leave.models import LeaveApplication, LeaveStatus
+            if LeaveApplication.objects.filter(guard=target_guard, status=LeaveStatus.APPROVED, start_date__lte=target_date, end_date__gte=target_date).exists():
+                raise ValidationError({"guard": "The selected guard is on approved leave on this date."})
         supervisor = serializer.validated_data.get("supervisor") or (user if user.role in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR] else None)
         station = serializer.validated_data.get("station") or (user.station if user.station else None)
         duty = serializer.save(supervisor=supervisor, station=station)
@@ -194,14 +201,31 @@ class EscortDutyViewSet(viewsets.ModelViewSet):
 
         target_date = start_dt.date()
 
-        # Non-duty guards: exclude guards with scheduled shifts on target_date
-        scheduled_guards = Shift.objects.filter(date=target_date).values_list("guard_id", flat=True)
-        already_assigned = EscortDuty.objects.filter(start_time__date=target_date).values_list("guard_id", flat=True)
+        # Non-duty guards: exclude guards with scheduled shifts, approved leave, or conflicting duties
+        from apps.shifts.models import Shift, ShiftType, AssignmentType
+        from apps.exams.models import ExamDuty, ExamStatus
+        from apps.leave.models import LeaveApplication, LeaveStatus
+
+        scheduled_guards = Shift.objects.filter(date=target_date).exclude(
+            assignment_type=AssignmentType.TIME_OFF
+        ).exclude(shift_type=ShiftType.OFF).values_list("guard_id", flat=True)
+
+        already_assigned = EscortDuty.objects.filter(
+            start_time__date__lte=target_date, end_time__date__gte=target_date
+        ).exclude(status=EscortStatus.CANCELLED).values_list("guard_id", flat=True)
+
+        exam_assigned = ExamDuty.objects.filter(
+            date=target_date
+        ).exclude(status=ExamStatus.CANCELLED).values_list("guard_id", flat=True)
+
+        on_leave_guards = LeaveApplication.objects.filter(
+            status=LeaveStatus.APPROVED, start_date__lte=target_date, end_date__gte=target_date
+        ).values_list("guard_id", flat=True)
+
+        excluded_ids = set(scheduled_guards) | set(already_assigned) | set(exam_assigned) | set(on_leave_guards)
 
         candidate_guards = list(
-            User.objects.filter(role=UserRole.GUARD, is_active=True)
-            .exclude(id__in=scheduled_guards)
-            .exclude(id__in=already_assigned)
+            User.objects.filter(role=UserRole.GUARD, is_active=True).exclude(id__in=excluded_ids)
         )
 
         if not candidate_guards:
