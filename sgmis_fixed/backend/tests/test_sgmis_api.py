@@ -534,12 +534,12 @@ class SGMISBackendEndToEndTests(TestCase):
         self.assertIn("name", resp.data)
         self.assertIn("code", resp.data)
 
-    def test_acceptance_supervisor_station_creation(self):
+    def test_supervisor_cannot_create_national_station(self):
         """
-        TEST: Authorized supervisor can create a station.
+        TEST: Station master records are administrator-only.
         POST /stations/stations/
-        -> HTTP 201
-        -> record persists
+        -> HTTP 403 for supervisor
+        -> no record is created
         """
         self.client.force_authenticate(user=self.supervisor)
         resp = self.client.post("/stations/stations/", {
@@ -550,9 +550,8 @@ class SGMISBackendEndToEndTests(TestCase):
             "longitude": 36.8200,
             "geofence_radius": 250,
         })
-        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(resp.data["geofence_radius_meters"], 250.0)
-        self.assertTrue(Station.objects.filter(code="STN-SUP01").exists())
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(Station.objects.filter(code="STN-SUP01").exists())
 
     def test_regression_station_duplicate_code_returns_400(self):
         """
@@ -573,9 +572,10 @@ class SGMISBackendEndToEndTests(TestCase):
         """
         Tests the authoritative station assignment workflow:
         1. Guard without station is rejected from creating OB
-        2. Supervisor/Admin assigns guard to station via PATCH /accounts/users/{id}/
-        3. GET /accounts/users/me/ returns the assigned station
-        4. Guard can now create OB entries successfully
+        2. Supervisor cannot edit master station assignment
+        3. Administrator assigns guard via PATCH /accounts/users/{id}/
+        4. GET /accounts/users/me/ returns the assigned station
+        5. Guard can now create OB entries successfully
         """
         guard = UserModel.objects.create_user(
             username="guard_assigned_test",
@@ -596,15 +596,20 @@ class SGMISBackendEndToEndTests(TestCase):
         self.assertIn(resp1.status_code, [status.HTTP_400_BAD_REQUEST, status.HTTP_403_FORBIDDEN])
         self.assertIn("station", str(resp1.data).lower())
 
-        # Step 2: Supervisor assigns guard to self.station
+        # Step 2: Supervisor cannot directly change a master personnel record
         self.client.force_authenticate(user=self.supervisor)
-        patch_resp = self.client.patch(f"/accounts/users/{guard.id}/", {
+        denied = self.client.patch(f"/accounts/users/{guard.id}/", {
             "station": str(self.station.id),
         })
+        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Step 3: Administrator performs the approved master-record update
+        self.client.force_authenticate(user=self.admin)
+        patch_resp = self.client.patch(f"/accounts/users/{guard.id}/", {"station": str(self.station.id)})
         self.assertEqual(patch_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(str(patch_resp.data["station"]), str(self.station.id))
 
-        # Step 3: Guard calls GET /accounts/users/me/
+        # Step 4: Guard calls GET /accounts/users/me/
         self.client.force_authenticate(user=guard)
         guard.refresh_from_db()
         me_resp = self.client.get("/accounts/users/me/")
@@ -612,7 +617,7 @@ class SGMISBackendEndToEndTests(TestCase):
         self.assertEqual(str(me_resp.data["station"]), str(self.station.id))
         self.assertEqual(me_resp.data["station_name"], self.station.name)
 
-        # Step 4: Guard can now create OB entry
+        # Step 5: Guard can now create OB entry
         resp2 = self.client.post("/occurrence_book/entries/", {
             "category": "ROUTINE",
             "occurrence_text": "After assignment: Station secured.",
@@ -1573,8 +1578,6 @@ class SGMISBackendEndToEndTests(TestCase):
         })
         self.assertEqual(clockin_resp.status_code, status.HTTP_200_OK)
         self.assertIn(case_no, clockin_resp.data["late_reason"])
-
-
 
 
 

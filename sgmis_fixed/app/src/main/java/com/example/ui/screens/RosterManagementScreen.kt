@@ -39,6 +39,8 @@ fun RosterManagementScreen(
     val uiState by viewModel.uiState.collectAsState()
     var showGenerateDialog by remember { mutableStateOf(false) }
     var showResumeNormalDialog by remember { mutableStateOf(false) }
+    var showConfirmRosterApproval by remember { mutableStateOf(false) }
+    var shiftForReassignment by remember { mutableStateOf<Shift?>(null) }
 
     val role = uiState.currentUser?.role?.uppercase()
     val isAdmin = role == "ADMINISTRATOR" || role == "ADMIN"
@@ -65,6 +67,7 @@ fun RosterManagementScreen(
         viewModel.fetchStations()
         viewModel.fetchGuardPairs()
         viewModel.fetchLeave()
+        if (isAdmin) viewModel.fetchUsers(role = "GUARD")
     }
 
     // Harare Zimbabwe CAT TimeZone for all authoritative roster rendering
@@ -720,9 +723,7 @@ fun RosterManagementScreen(
 
                                     Button(
                                         onClick = {
-                                            selectedApprovalStation?.let { stId ->
-                                                viewModel.approveRoster(stId)
-                                            }
+                                            showConfirmRosterApproval = true
                                         },
                                         enabled = !uiState.isLoading && selectedApprovalStation != null && uiState.conflictReport?.hasConflicts != true,
                                         shape = RoundedCornerShape(8.dp)
@@ -759,13 +760,32 @@ fun RosterManagementScreen(
                     }
                 } else {
                     items(targetOperationalShifts) { shift ->
-                        RosterShiftCard(shift)
+                        Column {
+                            RosterShiftCard(shift)
+                            if (isAdmin) TextButton(onClick = { shiftForReassignment = shift }) { Text("Reassign This Shift") }
+                        }
                     }
                 }
             }
         }
     }
 }
+
+    if (showConfirmRosterApproval) {
+        val stationName = uiState.stations.firstOrNull { it.id == selectedApprovalStation }?.name ?: "selected station"
+        AlertDialog(
+            onDismissRequest = { showConfirmRosterApproval = false },
+            title = { Text("Approve roster for deployment?") },
+            text = { Text("This formally approves the current rotational schedule for $stationName. Verify the roster and validation results before approval.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    selectedApprovalStation?.let(viewModel::approveRoster)
+                    showConfirmRosterApproval = false
+                }) { Text("Approve roster") }
+            },
+            dismissButton = { TextButton(onClick = { showConfirmRosterApproval = false }) { Text("Cancel") } }
+        )
+    }
 
     if (showGenerateDialog) {
         GenerateRosterDialog(
@@ -797,6 +817,70 @@ fun RosterManagementScreen(
                     showResumeNormalDialog = false
                 }
             }
+        )
+    }
+    shiftForReassignment?.let { shift ->
+        ReassignSingleShiftDialog(
+            shift = shift,
+            guards = uiState.users.filter { it.role.equals("GUARD", true) },
+            stations = uiState.stations,
+            saving = uiState.dutyReassignmentSaving,
+            onDismiss = { shiftForReassignment = null },
+            onSubmit = { request -> viewModel.reassignSingleShift(shift.id, request) { shiftForReassignment = null } }
+        )
+    }
+}
+
+@Composable
+private fun ReassignSingleShiftDialog(
+    shift: Shift,
+    guards: List<User>,
+    stations: List<Station>,
+    saving: Boolean,
+    onDismiss: () -> Unit,
+    onSubmit: (ReassignSingleShiftRequest) -> Unit
+) {
+    var confirmReassignment by remember(shift.id) { mutableStateOf(false) }
+    var guardId by remember(shift.id) { mutableStateOf(shift.guard) }
+    var stationId by remember(shift.id) { mutableStateOf(shift.station) }
+    var reason by remember(shift.id) { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Reassign One Shift") },
+        text = {
+            Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("${shift.date} · ${shift.shiftType} · ${shift.stationName}", fontWeight = FontWeight.Bold)
+                Text("This changes only this unstarted shift. Past shifts and attendance remain unchanged.", style = MaterialTheme.typography.bodySmall)
+                Text("Replacement guard")
+                guards.forEach { guard ->
+                    TextButton(onClick = { guardId = guard.id }) { Text("${if (guardId == guard.id) "✓ " else ""}${guard.fullName ?: guard.username} · ${guard.employeeNumber.orEmpty()}") }
+                }
+                Text("Station")
+                stations.forEach { station ->
+                    TextButton(onClick = { stationId = station.id }) { Text("${if (stationId == station.id) "✓ " else ""}${station.name}") }
+                }
+                OutlinedTextField(reason, { reason = it }, label = { Text("Reason (required)") }, minLines = 2)
+            }
+        },
+        confirmButton = { TextButton(enabled = !saving && guardId.isNotBlank() && reason.isNotBlank(), onClick = { confirmReassignment = true }) { Text("Review reassignment") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+    if (confirmReassignment) {
+        val oldGuard = shift.guardName ?: shift.guard
+        val newGuard = guards.firstOrNull { it.id == guardId }?.let { it.fullName ?: it.username } ?: guardId
+        val oldStation = shift.stationName
+        val newStation = stations.firstOrNull { it.id == stationId }?.name ?: stationId
+        AlertDialog(
+            onDismissRequest = { confirmReassignment = false },
+            title = { Text("Save these changes?") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Shift: ${shift.date} · ${shift.shiftType}")
+                Text("Guard: $oldGuard → $newGuard")
+                Text("Station: $oldStation → $newStation")
+                Text("Reason: $reason")
+            } },
+            confirmButton = { TextButton(enabled = !saving, onClick = { confirmReassignment = false; onSubmit(ReassignSingleShiftRequest(guardId = guardId, stationId = stationId, reason = reason)) }) { Text(if (saving) "Saving…" else "Confirm reassignment") } },
+            dismissButton = { TextButton(onClick = { confirmReassignment = false }) { Text("Back") } }
         )
     }
 }

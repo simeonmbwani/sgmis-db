@@ -1,6 +1,7 @@
 import re
 import secrets
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
+from unittest.mock import patch
 from django.utils import timezone
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
@@ -278,8 +279,10 @@ class EarlyReleaseAndSMSPasswordResetTests(TestCase):
         })
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_early_clockout_execution_with_valid_otp(self):
+    @patch("apps.shifts.views.timezone.now")
+    def test_early_clockout_execution_with_valid_otp(self, mock_now):
         """Guard clocks out early using valid 5-minute authorization OTP."""
+        mock_now.return_value = timezone.make_aware(datetime.combine(date.today(), time(12, 0)))
         shift, att = self._setup_active_shift(self.guard_1, self.station_harare)
 
         # Supervisor generates OTP
@@ -323,8 +326,10 @@ class EarlyReleaseAndSMSPasswordResetTests(TestCase):
         })
         self.assertEqual(reuse_resp.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_guard_cannot_use_another_guards_otp(self):
+    @patch("apps.shifts.views.timezone.now")
+    def test_guard_cannot_use_another_guards_otp(self, mock_now):
         """Guard 2 cannot use an early departure OTP issued for Guard 1."""
+        mock_now.return_value = timezone.make_aware(datetime.combine(date.today(), time(12, 0)))
         shift_1, att_1 = self._setup_active_shift(self.guard_1, self.station_harare)
         shift_2, att_2 = self._setup_active_shift(self.guard_2, self.station_harare)
 

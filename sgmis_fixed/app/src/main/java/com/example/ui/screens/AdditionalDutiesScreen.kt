@@ -42,6 +42,7 @@ fun AdditionalDutiesScreen(
     var showAutoAllocateDialog by remember { mutableStateOf(false) }
 
     val isSupervisorOrAdmin = uiState.currentUser?.role?.uppercase() in listOf("SUPERVISOR", "ADMINISTRATOR", "ADMIN")
+    val isAdmin = uiState.currentUser?.appRole == com.example.data.model.AppRole.ADMINISTRATOR
 
     LaunchedEffect(Unit) {
         viewModel.fetchEscortDuties()
@@ -205,6 +206,7 @@ fun AdditionalDutiesScreen(
                         items(uiState.escortDuties) { duty ->
                             EscortCard(
                                 duty = duty,
+                                canUpdateStatus = !isAdmin,
                                 onUpdateStatus = { st -> viewModel.updateEscortStatus(duty.id, st) }
                             )
                         }
@@ -224,6 +226,7 @@ fun AdditionalDutiesScreen(
                         items(uiState.examDuties) { duty ->
                             ExamDutyCard(
                                 duty = duty,
+                                canUpdateStatus = !isAdmin,
                                 onUpdateStatus = { st -> viewModel.updateExamStatus(duty.id, st) }
                             )
                         }
@@ -235,7 +238,9 @@ fun AdditionalDutiesScreen(
 
     if (showCreateEscortDialog) {
         CreateEscortDialog(
-            guards = uiState.users.filter { it.role == "GUARD" }.ifEmpty { listOfNotNull(uiState.currentUser) },
+            guards = uiState.users.filter { it.role.equals("GUARD", true) },
+            supervisors = uiState.users.filter { it.role.equals("SUPERVISOR", true) },
+            stations = uiState.stations,
             isLoading = uiState.isLoading,
             errorMessage = uiState.errorMessage,
             onDismiss = {
@@ -252,7 +257,9 @@ fun AdditionalDutiesScreen(
 
     if (showCreateExamDialog) {
         CreateExamDialog(
-            guards = uiState.users.filter { it.role == "GUARD" }.ifEmpty { listOfNotNull(uiState.currentUser) },
+            guards = uiState.users.filter { it.role.equals("GUARD", true) },
+            supervisors = uiState.users.filter { it.role.equals("SUPERVISOR", true) },
+            stations = uiState.stations,
             isLoading = uiState.isLoading,
             errorMessage = uiState.errorMessage,
             onDismiss = {
@@ -270,7 +277,7 @@ fun AdditionalDutiesScreen(
     if (showPaperEscortDialog) {
         SchedulePaperEscortDialog(
             stations = uiState.stations,
-            guards = uiState.users.filter { it.role == "GUARD" }.ifEmpty { listOfNotNull(uiState.currentUser) },
+            guards = uiState.users.filter { it.role.equals("GUARD", true) },
             isLoading = uiState.isLoading,
             errorMessage = uiState.errorMessage,
             onDismiss = {
@@ -314,6 +321,7 @@ fun AdditionalDutiesScreen(
 @Composable
 fun EscortCard(
     duty: EscortDuty,
+    canUpdateStatus: Boolean = true,
     onUpdateStatus: (String) -> Unit
 ) {
     Card(
@@ -391,7 +399,7 @@ fun EscortCard(
                 Text("Remarks: ${duty.remarks}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
 
-            if (duty.status != "COMPLETED" && duty.status != "CANCELLED") {
+            if (canUpdateStatus && duty.status != "COMPLETED" && duty.status != "CANCELLED") {
                 Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                     if (duty.status == "SCHEDULED" || duty.status == "ASSIGNED") {
@@ -420,6 +428,7 @@ fun EscortCard(
 @Composable
 fun ExamDutyCard(
     duty: ExamDuty,
+    canUpdateStatus: Boolean = true,
     onUpdateStatus: (String) -> Unit
 ) {
     Card(
@@ -488,7 +497,7 @@ fun ExamDutyCard(
                 Text("Remarks: ${duty.remarks}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
 
-            if (duty.status != "COMPLETED" && duty.status != "CANCELLED") {
+            if (canUpdateStatus && duty.status != "COMPLETED" && duty.status != "CANCELLED") {
                 Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                     if (duty.status == "ASSIGNED") {
@@ -517,6 +526,8 @@ fun ExamDutyCard(
 @Composable
 fun CreateEscortDialog(
     guards: List<com.example.data.model.User>,
+    supervisors: List<com.example.data.model.User> = emptyList(),
+    stations: List<com.example.data.model.Station> = emptyList(),
     isLoading: Boolean = false,
     errorMessage: String? = null,
     onDismiss: () -> Unit,
@@ -528,17 +539,24 @@ fun CreateEscortDialog(
     val defaultEnd = remember { isoFormat.format(Date(now.time + 8 * 3600 * 1000)) }
 
     var selectedGuardId by remember { mutableStateOf(guards.firstOrNull()?.id ?: "") }
+    var supervisorId by remember { mutableStateOf("") }
+    var stationId by remember { mutableStateOf("") }
     var missionName by remember { mutableStateOf("") }
     var origin by remember { mutableStateOf("") }
     var destination by remember { mutableStateOf("") }
     var startTime by remember { mutableStateOf(defaultStart) }
     var endTime by remember { mutableStateOf(defaultEnd) }
+    var purpose by remember { mutableStateOf("") }
+    var instructions by remember { mutableStateOf("") }
+    var contacts by remember { mutableStateOf("") }
+    var notes by remember { mutableStateOf("") }
+    var confirmCreate by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
         title = { Text("Assign Vehicle Escort") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (errorMessage != null) {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
@@ -560,6 +578,13 @@ fun CreateEscortDialog(
                     }
                 }
 
+                Text("Assigned guard *", style = MaterialTheme.typography.labelMedium)
+                guards.forEach { guard -> TextButton(onClick = { selectedGuardId = guard.id }) { Text("${if (selectedGuardId == guard.id) "✓ " else ""}${guard.fullName ?: guard.username}") } }
+                Text("Supervisor (optional)", style = MaterialTheme.typography.labelMedium)
+                supervisors.forEach { supervisor -> TextButton(onClick = { supervisorId = supervisor.id }) { Text("${if (supervisorId == supervisor.id) "✓ " else ""}${supervisor.fullName ?: supervisor.username}") } }
+                Text("Station (optional)", style = MaterialTheme.typography.labelMedium)
+                stations.forEach { station -> TextButton(onClick = { stationId = station.id }) { Text("${if (stationId == station.id) "✓ " else ""}${station.name}") } }
+
                 OutlinedTextField(
                     value = missionName,
                     onValueChange = { missionName = it },
@@ -577,8 +602,8 @@ fun CreateEscortDialog(
                         enabled = !isLoading,
                         modifier = Modifier.weight(1f)
                     )
-                    OutlinedTextField(
-                        value = destination,
+                OutlinedTextField(
+                    value = destination,
                         onValueChange = { destination = it },
                         label = { Text("Destination *") },
                         singleLine = true,
@@ -594,6 +619,9 @@ fun CreateEscortDialog(
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(purpose, { purpose = it }, label = { Text("Purpose") }, enabled = !isLoading, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(instructions, { instructions = it }, label = { Text("Instructions") }, enabled = !isLoading, minLines = 2, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(contacts, { contacts = it }, label = { Text("Contact numbers") }, enabled = !isLoading, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(
                     value = endTime,
                     onValueChange = { endTime = it },
@@ -602,22 +630,14 @@ fun CreateEscortDialog(
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, enabled = !isLoading, minLines = 2, modifier = Modifier.fillMaxWidth())
             }
         },
         confirmButton = {
             Button(
                 onClick = {
                     if (selectedGuardId.isNotBlank() && missionName.isNotBlank() && origin.isNotBlank() && destination.isNotBlank()) {
-                        onSubmit(
-                            CreateEscortDutyRequest(
-                                guard = selectedGuardId,
-                                missionName = missionName.trim(),
-                                origin = origin.trim(),
-                                destination = destination.trim(),
-                                startTime = startTime.trim(),
-                                endTime = endTime.trim()
-                            )
-                        )
+                        confirmCreate = true
                     }
                 },
                 enabled = !isLoading && selectedGuardId.isNotBlank() && missionName.isNotBlank() && origin.isNotBlank() && destination.isNotBlank()
@@ -639,11 +659,23 @@ fun CreateEscortDialog(
             TextButton(onClick = onDismiss, enabled = !isLoading) { Text("Cancel") }
         }
     )
+    if (confirmCreate) AlertDialog(
+        onDismissRequest = { confirmCreate = false },
+        title = { Text("Confirm escort assignment") },
+        text = { Text("Assign ${guards.firstOrNull { it.id == selectedGuardId }?.fullName ?: "selected guard"} to $missionName?\n$origin → $destination\n$startTime – $endTime") },
+        confirmButton = { TextButton(enabled = !isLoading, onClick = {
+            confirmCreate = false
+            onSubmit(CreateEscortDutyRequest(selectedGuardId, supervisorId.ifBlank { null }, stationId.ifBlank { null }, missionName.trim(), origin.trim(), destination.trim(), purpose.trim(), instructions.trim(), contacts.trim(), startTime.trim(), endTime.trim(), notes.trim()))
+        }) { Text("Confirm assignment") } },
+        dismissButton = { TextButton(onClick = { confirmCreate = false }) { Text("Back") } }
+    )
 }
 
 @Composable
 fun CreateExamDialog(
     guards: List<com.example.data.model.User>,
+    supervisors: List<com.example.data.model.User> = emptyList(),
+    stations: List<com.example.data.model.Station> = emptyList(),
     isLoading: Boolean = false,
     errorMessage: String? = null,
     onDismiss: () -> Unit,
@@ -653,17 +685,25 @@ fun CreateExamDialog(
     val defaultDate = remember { dateFormat.format(Date()) }
 
     var selectedGuardId by remember { mutableStateOf(guards.firstOrNull()?.id ?: "") }
+    var supervisorId by remember { mutableStateOf("") }
+    var stationId by remember { mutableStateOf("") }
     var institution by remember { mutableStateOf("") }
     var examTitle by remember { mutableStateOf("") }
     var date by remember { mutableStateOf(defaultDate) }
     var startTime by remember { mutableStateOf("08:00:00") }
     var endTime by remember { mutableStateOf("16:00:00") }
+    var hallPost by remember { mutableStateOf("") }
+    var supervisorContact by remember { mutableStateOf("") }
+    var instructions by remember { mutableStateOf("") }
+    var reportingTime by remember { mutableStateOf("") }
+    var notes by remember { mutableStateOf("") }
+    var confirmCreate by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
         title = { Text("Schedule Exam Escort Duty") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (errorMessage != null) {
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer,
@@ -684,6 +724,12 @@ fun CreateExamDialog(
                         }
                     }
                 }
+                Text("Assigned guard *", style = MaterialTheme.typography.labelMedium)
+                guards.forEach { guard -> TextButton(onClick = { selectedGuardId = guard.id }) { Text("${if (selectedGuardId == guard.id) "✓ " else ""}${guard.fullName ?: guard.username}") } }
+                Text("Supervisor (optional)", style = MaterialTheme.typography.labelMedium)
+                supervisors.forEach { supervisor -> TextButton(onClick = { supervisorId = supervisor.id }) { Text("${if (supervisorId == supervisor.id) "✓ " else ""}${supervisor.fullName ?: supervisor.username}") } }
+                Text("Station (optional)", style = MaterialTheme.typography.labelMedium)
+                stations.forEach { station -> TextButton(onClick = { stationId = station.id }) { Text("${if (stationId == station.id) "✓ " else ""}${station.name}") } }
 
                 OutlinedTextField(
                     value = examTitle,
@@ -701,6 +747,9 @@ fun CreateExamDialog(
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(hallPost, { hallPost = it }, label = { Text("Hall / post") }, enabled = !isLoading, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(supervisorContact, { supervisorContact = it }, label = { Text("Supervisor contact") }, enabled = !isLoading, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(instructions, { instructions = it }, label = { Text("Instructions") }, enabled = !isLoading, minLines = 2, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(
                     value = date,
                     onValueChange = { date = it },
@@ -709,6 +758,7 @@ fun CreateExamDialog(
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth()
                 )
+                OutlinedTextField(reportingTime, { reportingTime = it }, label = { Text("Reporting time (HH:MM:SS)") }, enabled = !isLoading, modifier = Modifier.fillMaxWidth())
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = startTime,
@@ -727,22 +777,14 @@ fun CreateExamDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, enabled = !isLoading, minLines = 2, modifier = Modifier.fillMaxWidth())
             }
         },
         confirmButton = {
             Button(
                 onClick = {
                     if (selectedGuardId.isNotBlank() && examTitle.isNotBlank() && institution.isNotBlank()) {
-                        onSubmit(
-                            CreateExamDutyRequest(
-                                guard = selectedGuardId,
-                                institution = institution.trim(),
-                                examTitle = examTitle.trim(),
-                                date = date.trim(),
-                                startTime = startTime.trim(),
-                                endTime = endTime.trim()
-                            )
-                        )
+                        confirmCreate = true
                     }
                 },
                 enabled = !isLoading && selectedGuardId.isNotBlank() && examTitle.isNotBlank() && institution.isNotBlank()
@@ -763,6 +805,16 @@ fun CreateExamDialog(
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !isLoading) { Text("Cancel") }
         }
+    )
+    if (confirmCreate) AlertDialog(
+        onDismissRequest = { confirmCreate = false },
+        title = { Text("Confirm exam duty") },
+        text = { Text("Assign ${guards.firstOrNull { it.id == selectedGuardId }?.fullName ?: "selected guard"} to $examTitle at $institution?\n$date · $startTime – $endTime") },
+        confirmButton = { TextButton(enabled = !isLoading, onClick = {
+            confirmCreate = false
+            onSubmit(CreateExamDutyRequest(selectedGuardId, supervisorId.ifBlank { null }, stationId.ifBlank { null }, institution.trim(), examTitle.trim(), hallPost.trim(), supervisorContact.trim(), instructions.trim(), date.trim(), reportingTime.ifBlank { null }, startTime.trim(), endTime.trim(), notes.trim()))
+        }) { Text("Confirm assignment") } },
+        dismissButton = { TextButton(onClick = { confirmCreate = false }) { Text("Back") } }
     )
 }
 
@@ -1021,4 +1073,3 @@ fun SchedulePaperEscortDialog(
         }
     )
 }
-

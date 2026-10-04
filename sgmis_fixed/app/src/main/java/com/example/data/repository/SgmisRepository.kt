@@ -41,13 +41,17 @@ class SgmisRepository(
     // --- Error Parser Helper ---
     private fun sanitizeException(e: Throwable, fallback: String = "Server communication error"): Exception {
         val msg = e.message ?: ""
+        Log.e("SgmisRepository", "Request failed", e)
         if (msg.contains("setLenient", ignoreCase = true) || msg.contains("malformed JSON", ignoreCase = true) || msg.contains("Expected BEGIN_", ignoreCase = true)) {
-            return Exception("Invalid or unexpected response format from server. Please verify your connection or try again.")
+            return Exception("Unable to process the server response. Please try again.")
         }
-        if (msg.contains("End of input", ignoreCase = true)) {
-            return Exception("Empty response received from server.")
+        if (e is java.net.SocketTimeoutException) {
+            return Exception("The request timed out. Please try again.")
         }
-        return if (e is Exception) e else Exception(fallback, e)
+        if (e is java.io.IOException) {
+            return Exception("Unable to connect. Please check your connection and try again.")
+        }
+        return Exception(fallback)
     }
 
     private fun parseDrfError(errorBody: String?, fallback: String): String {
@@ -59,23 +63,23 @@ class SgmisRepository(
         return try {
             val jsonObj = org.json.JSONObject(trimmed)
             if (jsonObj.has("detail")) {
-                return jsonObj.getString("detail")
+                return userSafeMessage(jsonObj.getString("detail"), fallback)
             }
             if (jsonObj.has("message")) {
-                return jsonObj.getString("message")
+                return userSafeMessage(jsonObj.getString("message"), fallback)
             }
             if (jsonObj.has("non_field_errors")) {
                 val arr = jsonObj.getJSONArray("non_field_errors")
-                if (arr.length() > 0) return arr.getString(0)
+                if (arr.length() > 0) return userSafeMessage(arr.getString(0), fallback)
             }
             val keys = jsonObj.keys()
             if (keys.hasNext()) {
                 val firstKey = keys.next()
                 val firstVal = jsonObj.get(firstKey)
                 if (firstVal is org.json.JSONArray && firstVal.length() > 0) {
-                    "${firstKey.replace('_', ' ').capitalize()}: ${firstVal.getString(0)}"
+                    userSafeMessage("${firstKey.replace('_', ' ').capitalize()}: ${firstVal.getString(0)}", fallback)
                 } else {
-                    "${firstKey.replace('_', ' ').capitalize()}: $firstVal"
+                    userSafeMessage("${firstKey.replace('_', ' ').capitalize()}: $firstVal", fallback)
                 }
             } else {
                 fallback
@@ -84,6 +88,65 @@ class SgmisRepository(
             fallback
         }
     }
+
+    private fun userSafeMessage(message: String, fallback: String): String {
+        val technical = Regex("(?i)(exception|traceback|stack trace|retrofit|java\\.|kotlin\\.|sqlite|operationalerror|expected begin_|http\\s+5\\d\\d|/api/[a-z0-9_/-]+)")
+        return if (technical.containsMatchIn(message)) fallback else message
+    }
+
+    suspend fun fetchRecordAdjustments(status: String? = null): Result<List<RecordAdjustmentRequest>> = try {
+        val response = api.getRecordAdjustments(status)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to load record adjustments")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
+
+    suspend fun createRecordAdjustment(request: CreateRecordAdjustmentRequest): Result<RecordAdjustmentRequest> = try {
+        val response = api.createRecordAdjustment(request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to submit record adjustment")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
+
+    suspend fun approveRecordAdjustment(id: String, value: String? = null): Result<RecordAdjustmentResponse> = try {
+        val response = api.approveRecordAdjustment(id, ApproveRecordAdjustmentRequest(value))
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to approve adjustment")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
+
+    suspend fun rejectRecordAdjustment(id: String, reason: String): Result<RecordAdjustmentResponse> = try {
+        val response = api.rejectRecordAdjustment(id, RejectRecordAdjustmentRequest(reason))
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to reject adjustment")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
+
+    suspend fun fetchAdministrativeHistory(): Result<List<AdministrativeHistoryEntry>> = try {
+        val response = api.getAdministrativeHistory()
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to load administrative history")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
+
+    suspend fun fetchLeaveAdjustments(): Result<List<LeaveAdjustmentRecord>> = try {
+        val response = api.getLeaveAdjustments()
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to load leave adjustment history")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
+
+    suspend fun setOpeningBalance(request: SetOpeningBalanceRequest): Result<SetOpeningBalanceResponse> = try {
+        val response = api.setOpeningLeaveBalance(request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to set opening leave balance")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
+
+    suspend fun reassignDuty(request: ReassignDutyRequest): Result<ReassignDutyResponse> = try {
+        val response = api.reassignDuty(request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to reassign duty")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
+
+    suspend fun reassignSingleShift(id: String, request: ReassignSingleShiftRequest): Result<ReassignSingleShiftResponse> = try {
+        val response = api.reassignSingleShift(id, request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to reassign shift")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
 
     // --- Authentication ---
     suspend fun login(identifier: String, pass: String): Result<User> {
@@ -162,7 +225,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch shift: ${response.code()}"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -245,7 +308,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch handovers"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -275,7 +338,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -289,7 +352,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -303,7 +366,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -333,7 +396,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch OB records"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -355,7 +418,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -372,7 +435,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -386,7 +449,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch visitors register"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -442,7 +505,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch incidents"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -458,7 +521,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -475,7 +538,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -539,7 +602,7 @@ class SgmisRepository(
                     )
                 })
             } else {
-                Result.failure(e)
+                Result.failure(sanitizeException(e))
             }
         }
     }
@@ -574,7 +637,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -589,7 +652,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -603,7 +666,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -617,7 +680,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -631,7 +694,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch leave balance"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -644,7 +707,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch leave & compensation summary"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -657,7 +720,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch leave records"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -691,7 +754,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -710,7 +773,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -724,7 +787,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -738,7 +801,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -752,7 +815,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -766,7 +829,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -780,7 +843,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -794,7 +857,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -808,7 +871,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -822,7 +885,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -850,7 +913,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -878,7 +941,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -892,7 +955,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to load user directory"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -906,7 +969,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -920,7 +983,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -934,9 +997,15 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
+
+    suspend fun updateManagedUser(userId: String, request: UpdateUserRequest): Result<User> = try {
+        val response = api.updateUser(userId, request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to update personnel record")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
 
     // --- Station & Guard Pair Management ---
     suspend fun fetchStations(): Result<List<Station>> {
@@ -994,7 +1063,7 @@ class SgmisRepository(
                     )
                 })
             } else {
-                Result.failure(e)
+                Result.failure(sanitizeException(e))
             }
         }
     }
@@ -1038,9 +1107,15 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
+
+    suspend fun updateStation(id: String, request: UpdateStationRequest): Result<Station> = try {
+        val response = api.updateStation(id, request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to update station")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
 
     suspend fun fetchGuardPairs(station: String? = null): Result<List<GuardPair>> {
         return try {
@@ -1051,7 +1126,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch guard pairings"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1065,9 +1140,15 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
+
+    suspend fun updateGuardPair(id: String, request: UpdateGuardPairRequest): Result<GuardPair> = try {
+        val response = api.updateGuardPair(id, request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to update guard pair")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
 
     // --- Shift Roster & Management ---
     suspend fun fetchShifts(date: String? = null, station: String? = null): Result<List<Shift>> {
@@ -1142,7 +1223,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1162,7 +1243,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1192,7 +1273,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1212,7 +1293,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1225,7 +1306,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch temporary assignment audits"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1238,7 +1319,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch examination periods"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1266,7 +1347,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1280,7 +1361,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch attendance records"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1295,7 +1376,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1309,7 +1390,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1323,7 +1404,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch escort duties"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1337,13 +1418,13 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
     suspend fun updateEscortStatus(id: String, status: String): Result<EscortDuty> {
         return try {
-            val response = api.updateEscortDuty(id, UpdateDutyStatusRequest(status = status))
+            val response = api.setEscortDutyStatus(id, UpdateDutyStatusRequest(status = status))
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
@@ -1351,9 +1432,21 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
+
+    suspend fun updateEscortDuty(id: String, request: UpdateEscortDutyRequest): Result<EscortDuty> = try {
+        val response = api.updateEscortDuty(id, request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to update escort duty")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
+
+    suspend fun deleteEscortDuty(id: String): Result<Unit> = try {
+        val response = api.deleteEscortDuty(id)
+        if (response.isSuccessful) Result.success(Unit)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to cancel escort duty")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
 
     // --- Exam Duties ---
     suspend fun fetchExamDuties(): Result<List<ExamDuty>> {
@@ -1365,7 +1458,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch exam duties"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1379,13 +1472,13 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
     suspend fun updateExamStatus(id: String, status: String): Result<ExamDuty> {
         return try {
-            val response = api.updateExamDuty(id, UpdateDutyStatusRequest(status = status))
+            val response = api.setExamDutyStatus(id, UpdateDutyStatusRequest(status = status))
             if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
@@ -1393,9 +1486,21 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
+
+    suspend fun updateExamDuty(id: String, request: UpdateExamDutyRequest): Result<ExamDuty> = try {
+        val response = api.updateExamDuty(id, request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to update exam duty")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
+
+    suspend fun deleteExamDuty(id: String): Result<Unit> = try {
+        val response = api.deleteExamDuty(id)
+        if (response.isSuccessful) Result.success(Unit)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to cancel exam duty")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e)) }
 
     // --- Notifications ---
     suspend fun fetchNotifications(): Result<List<NotificationAlert>> {
@@ -1407,7 +1512,7 @@ class SgmisRepository(
                 Result.failure(Exception("Failed to fetch notifications"))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1417,7 +1522,7 @@ class SgmisRepository(
             if (response.isSuccessful) Result.success(Unit)
             else Result.failure(Exception("Failed to mark alert as read"))
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1427,7 +1532,7 @@ class SgmisRepository(
             if (response.isSuccessful) Result.success(Unit)
             else Result.failure(Exception("Failed to mark all alerts as read"))
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1445,7 +1550,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 
@@ -1472,7 +1577,7 @@ class SgmisRepository(
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            Result.failure(sanitizeException(e))
         }
     }
 

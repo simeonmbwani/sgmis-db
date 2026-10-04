@@ -5,10 +5,11 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
 from .models import ExamDuty, ExamStatus
 from .serializers import ExamDutySerializer
 from apps.accounts.models import User, UserRole
-from apps.accounts.permissions import IsSupervisorOrAdmin, IsAdministrator
+from apps.accounts.permissions import IsSupervisorOrAdmin
 from apps.shifts.models import Shift
 from apps.notifications.models import Notification
 from apps.core.sms import send_sms
@@ -31,17 +32,28 @@ class ExamDutyViewSet(viewsets.ModelViewSet):
         return qs
 
     def get_permissions(self):
-        if self.action in ["destroy"]:
-            return [IsAdministrator()]
         if self.action in ["create", "update", "partial_update", "auto_allocate"]:
             return [IsSupervisorOrAdmin()]
         return [IsAuthenticated()]
+
+    def destroy(self, request, *args, **kwargs):
+        raise PermissionDenied("Exam duty history is retained; cancel the duty to preserve its audit trail.")
 
     def perform_create(self, serializer):
         user = self.request.user
         supervisor = serializer.validated_data.get("supervisor") or (user if user.role in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR] else None)
         station = serializer.validated_data.get("station") or (user.station if user.station else None)
         duty = serializer.save(supervisor=supervisor, station=station)
+
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=user,
+            actor_username=user.username,
+            target_model="ExamDuty",
+            target_id=str(duty.id),
+            details={"action": "EXAM_DUTY_CREATED", "reference": duty.reference,
+                     "guard_id": str(duty.guard_id), "station_id": str(duty.station_id)},
+        )
 
         Notification.objects.create(
             user=duty.guard,
@@ -54,6 +66,27 @@ class ExamDutyViewSet(viewsets.ModelViewSet):
             send_sms(
                 duty.guard.phone_number,
                 f"SGMIS Exam Duty: Ref {duty.reference}. {duty.exam_title} at {duty.institution} on {duty.date} ({duty.start_time}-{duty.end_time})."
+            )
+
+    def perform_update(self, serializer):
+        old_guard_id = serializer.instance.guard_id
+        changed = {key: str(value) for key, value in serializer.validated_data.items()}
+        duty = serializer.save()
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=self.request.user,
+            actor_username=self.request.user.username,
+            target_model="ExamDuty",
+            target_id=str(duty.id),
+            details={"action": "EXAM_DUTY_UPDATED", "reference": duty.reference,
+                     "old_guard_id": str(old_guard_id), "new_guard_id": str(duty.guard_id),
+                     "changed_fields": changed},
+        )
+        if old_guard_id != duty.guard_id:
+            Notification.objects.create(
+                user=duty.guard, title="Exam Period Duty Reassigned",
+                message=f"Exam duty {duty.reference} has been assigned to you.",
+                notification_type="DUTY_ASSIGNMENT",
             )
 
     @action(detail=True, methods=["post"], url_path="acknowledge")
@@ -99,6 +132,8 @@ class ExamDutyViewSet(viewsets.ModelViewSet):
 
         if new_status == ExamStatus.CANCELLED and request.user.role == UserRole.GUARD:
             return Response({"detail": "Guards cannot cancel exam duties."}, status=status.HTTP_403_FORBIDDEN)
+        if request.user.role == UserRole.ADMINISTRATOR and new_status != ExamStatus.CANCELLED:
+            return Response({"detail": "Administrators may cancel exam duties; operational progress is recorded by guards."}, status=status.HTTP_403_FORBIDDEN)
 
         now = timezone.now()
         duty.status = new_status

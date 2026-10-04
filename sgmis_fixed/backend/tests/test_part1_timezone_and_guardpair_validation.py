@@ -389,6 +389,11 @@ class GuardPairValidationTests(TestCase):
 
     def test_api_viewset_returns_400_bad_request_on_invalid_pair(self):
         """API endpoints return clean 400 Bad Request with JSON error dictionary, not 500."""
+        admin = UserModel.objects.create_superuser(
+            username="pair_validation_admin", email="pair-admin@sgmis.local", password=self.password,
+            employee_number="ADM-9901", role=UserRole.ADMINISTRATOR,
+        )
+        self.client.force_authenticate(user=admin)
         # Post self-pair via API
         response = self.client.post("/api/stations/pairs/", {
             "station": str(self.station.id),
@@ -413,4 +418,3 @@ class GuardPairValidationTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("rotation_order", response.data)
-

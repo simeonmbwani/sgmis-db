@@ -3335,6 +3335,7 @@ private fun AdministratorNationalControlCenter(
     todayFormatted: String,
     onNavigate: (String) -> Unit
 ) {
+    LaunchedEffect(Unit) { viewModel.fetchRecordAdjustments() }
     val totalStations = uiState.stations.size
     val activeStations = uiState.stations.size
     val guardsOnDuty = uiState.attendanceRecords.count { it.clockIn != null && it.clockOut == null }
@@ -3420,7 +3421,7 @@ private fun AdministratorNationalControlCenter(
         fontWeight = FontWeight.Bold,
         color = MaterialTheme.colorScheme.onSurface
     )
-    NationalAdministrationGrid(onNavigate = onNavigate)
+    NationalAdministrationGrid(onNavigate = onNavigate, pendingAdjustments = uiState.recordAdjustments.count { it.status == "PENDING" })
 
     // 6. Section E: Zimbabwe Public Holiday Control
     Text(
@@ -3523,7 +3524,7 @@ private fun AdministratorNationalHeader(
                     color = MaterialTheme.colorScheme.primary
                 )
                 Text(
-                    text = "${user?.fullName ?: "Administrator"} (@${user?.username ?: "simeonmbwani"})",
+                    text = "${user?.fullName ?: "Administrator"}${user?.username?.let { " (@$it)" }.orEmpty()}",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )
@@ -3984,7 +3985,7 @@ private fun NationalRosterOversightCard(
 
             // Invariant Notice
             Text(
-                text = "Identity Invariant: Superuser simeonmbwani and Station Supervisors are strictly prohibited from guard roster assignments.",
+                text = "Administrators and supervisors must not be assigned to guard rosters.",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -4053,7 +4054,7 @@ private fun NationalRosterOversightCard(
 }
 
 @Composable
-private fun NationalAdministrationGrid(onNavigate: (String) -> Unit) {
+private fun NationalAdministrationGrid(onNavigate: (String) -> Unit, pendingAdjustments: Int) {
     val adminItems = listOf(
         BlueprintAction("Attendance Console", "National clock-in monitoring", Icons.Default.HowToReg, NavRoutes.ATTENDANCE_MANAGEMENT, "nav_attendance_management"),
         BlueprintAction("Duty Roster Engine", "National schedule generation", Icons.Default.CalendarMonth, NavRoutes.ROSTER_MANAGEMENT, "nav_roster"),
@@ -4061,8 +4062,14 @@ private fun NationalAdministrationGrid(onNavigate: (String) -> Unit) {
         BlueprintAction("Stations & Pairs", "Posts, checkpoints & pairs", Icons.Default.Business, NavRoutes.STATION_MANAGEMENT, "nav_stations"),
         BlueprintAction("Occurrence Book", "Global OB records", Icons.AutoMirrored.Filled.MenuBook, NavRoutes.OCCURRENCE_BOOK, "nav_ob"),
         BlueprintAction("Incident Reports", "System-wide incidents", Icons.Default.Warning, NavRoutes.INCIDENTS, "nav_incidents"),
+        BlueprintAction("Patrol Monitoring", "Read-only national patrol and checkpoint activity", Icons.AutoMirrored.Filled.DirectionsWalk, NavRoutes.PATROL, "nav_admin_patrol_monitoring"),
         BlueprintAction("Executive Reports", "National security analytics", Icons.Default.Assessment, NavRoutes.REPORTS, "nav_reports"),
         BlueprintAction("Leave Management", "System-wide leave requests", Icons.AutoMirrored.Filled.EventNote, NavRoutes.LEAVE, "nav_leave"),
+        BlueprintAction("Master Record Adjustments", "$pendingAdjustments pending · Review and reconcile personnel records", Icons.Default.EditNote, NavRoutes.RECORD_ADJUSTMENTS, "nav_record_adjustments"),
+        BlueprintAction("Administrative History", "Read-only audit and adjustment history", Icons.Default.History, NavRoutes.ADMIN_HISTORY, "nav_admin_history"),
+        BlueprintAction("Leave & Duty Master Control", "Opening balances and future reassignment", Icons.Default.Tune, NavRoutes.ADMIN_MASTER_TOOLS, "nav_admin_master_tools"),
+        BlueprintAction("Escort Duties", "National escort assignments", Icons.Default.DirectionsCar, NavRoutes.ESCORT_DUTIES, "nav_escort_duties"),
+        BlueprintAction("Exam Duties", "National exam assignments", Icons.Default.School, NavRoutes.EXAM_DUTIES, "nav_exam_duties"),
         BlueprintAction("Visitor Register", "National visitor records", Icons.Default.Badge, NavRoutes.VISITOR_BOOK, "nav_visitors"),
         BlueprintAction("Notifications", "Operational alerts and messages", Icons.Default.Notifications, NavRoutes.NOTIFICATIONS, "nav_notifications"),
         BlueprintAction("Settings & About", "Theme, app version & preferences", Icons.Default.Settings, NavRoutes.SETTINGS, "nav_settings")
@@ -4095,6 +4102,7 @@ private fun ZimbabwePublicHolidayControlCard(
     uiState: SgmisUiState
 ) {
     var decisionNotes by remember { mutableStateOf("") }
+    var pendingDecision by remember { mutableStateOf<Pair<com.example.data.model.PublicHolidayDutyRecord, Boolean>?>(null) }
 
     Card(
         modifier = Modifier
@@ -4282,7 +4290,7 @@ private fun ZimbabwePublicHolidayControlCard(
                                     ) {
                                         Button(
                                             onClick = {
-                                                viewModel.approveHolidayDuty(record.id, decisionNotes)
+                                                pendingDecision = record to true
                                             },
                                             enabled = !uiState.isReviewingHolidayDuty,
                                             colors = ButtonDefaults.buttonColors(containerColor = StatusSuccess),
@@ -4295,7 +4303,7 @@ private fun ZimbabwePublicHolidayControlCard(
                                         }
                                         OutlinedButton(
                                             onClick = {
-                                                viewModel.rejectHolidayDuty(record.id, decisionNotes)
+                                                pendingDecision = record to false
                                             },
                                             enabled = !uiState.isReviewingHolidayDuty,
                                             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
@@ -4314,6 +4322,19 @@ private fun ZimbabwePublicHolidayControlCard(
                 }
             }
         }
+    }
+    pendingDecision?.let { (record, approve) ->
+        AlertDialog(
+            onDismissRequest = { pendingDecision = null },
+            title = { Text(if (approve) "Approve holiday duty?" else "Reject holiday duty?") },
+            text = { Text("${record.guardName ?: "Security guard"} · ${record.publicHolidayName ?: "Public holiday"} · ${record.shiftDate.orEmpty()}\nStatus: ${record.status} → ${if (approve) "APPROVED (+2 compensatory days)" else "REJECTED"}\nReason: ${decisionNotes.ifBlank { "No additional note" }}") },
+            confirmButton = { TextButton(enabled = !uiState.isReviewingHolidayDuty, onClick = {
+                if (approve) viewModel.approveHolidayDuty(record.id, decisionNotes) else viewModel.rejectHolidayDuty(record.id, decisionNotes)
+                pendingDecision = null
+                decisionNotes = ""
+            }) { Text(if (approve) "Confirm approval" else "Confirm rejection") } },
+            dismissButton = { TextButton(onClick = { pendingDecision = null }) { Text("Back") } }
+        )
     }
 }
 
@@ -4661,5 +4682,3 @@ private fun NationalAnalyticsCard(
         }
     }
 }
-
-

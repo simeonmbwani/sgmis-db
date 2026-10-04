@@ -43,6 +43,8 @@ object NavRoutes {
     const val ESCORT_DUTIES = "escort_duties"
     const val EXAM_DUTIES = "exam_duties"
     const val RECORD_ADJUSTMENTS = "record_adjustments"
+    const val ADMIN_HISTORY = "admin_history"
+    const val ADMIN_MASTER_TOOLS = "admin_master_tools"
 }
 
 /**
@@ -83,7 +85,14 @@ object RoleRouter {
      */
     fun isRouteAllowed(route: String, role: AppRole): Boolean {
         return when (role) {
-            AppRole.ADMINISTRATOR -> true // Superuser / Administrator has global system access
+            AppRole.ADMINISTRATOR -> route !in listOf(
+                // National oversight does not grant guard execution authority.
+                NavRoutes.TODAY_SHIFT,
+                NavRoutes.HANDOVER,
+                NavRoutes.EMERGENCY_SOS,
+                NavRoutes.GUARD_DUTY_PLAN,
+                NavRoutes.GUARD_DASHBOARD
+            )
             AppRole.SUPERVISOR -> {
                 // Supervisors focus on supervisory command, roster management, attendance/override,
                 // inspection, verification, and station oversight.
@@ -97,7 +106,9 @@ object RoleRouter {
                     NavRoutes.GUARD_DUTY_PLAN,
                     NavRoutes.GUARD_DASHBOARD,
                     NavRoutes.STATION_MANAGEMENT,
-                    NavRoutes.ADMIN_DASHBOARD
+                    NavRoutes.ADMIN_DASHBOARD,
+                    NavRoutes.ADMIN_HISTORY,
+                    NavRoutes.ADMIN_MASTER_TOOLS
                 )
             }
             AppRole.GUARD -> {
@@ -149,4 +160,3 @@ object RoleRouter {
         return dutyState == GuardDutyState.ON_DUTY
     }
 }
-

@@ -229,6 +229,68 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
 
         return qs
 
+    @action(detail=True, methods=["post"], url_path="reassign", permission_classes=[IsAdministrator])
+    def reassign_single(self, request, pk=None):
+        """Reassign one unstarted current/future shift without regenerating its roster."""
+        shift = self.get_object()
+        if shift.date < timezone.localdate():
+            return Response({"detail": "Past shifts cannot be reassigned."}, status=status.HTTP_400_BAD_REQUEST)
+        attendance = Attendance.objects.filter(shift=shift).first()
+        if attendance and (attendance.clock_in or attendance.clock_out):
+            return Response({"detail": "A shift with attendance records cannot be reassigned."}, status=status.HTTP_400_BAD_REQUEST)
+
+        guard_id = request.data.get("guard_id")
+        reason = str(request.data.get("reason", "")).strip()
+        if not guard_id or not reason:
+            return Response({"detail": "guard_id and a mandatory reason are required."}, status=status.HTTP_400_BAD_REQUEST)
+        guard = get_object_or_404(User, id=guard_id, role=UserRole.GUARD, is_active=True)
+        station_id = request.data.get("station_id")
+        station = get_object_or_404(Station, id=station_id) if station_id else shift.station
+        conflict = Shift.objects.filter(guard=guard, date=shift.date).exclude(id=shift.id).exclude(
+            assignment_type=AssignmentType.TIME_OFF
+        ).exclude(shift_type=ShiftType.OFF).exists()
+        if conflict:
+            return Response({"detail": "The selected guard already has another active shift on this date."}, status=status.HTTP_409_CONFLICT)
+
+        old_guard = shift.guard
+        old_station = shift.station
+        shift.guard = guard
+        shift.station = station
+        if shift.pair and guard.id not in (shift.pair.guard_a_id, shift.pair.guard_b_id):
+            shift.pair = None
+        shift.save(update_fields=["guard", "station", "pair"])
+
+        details = {
+            "action": "SINGLE_SHIFT_REASSIGNED", "date": shift.date.isoformat(),
+            "old_guard_id": str(old_guard.id), "old_guard": old_guard.get_full_name() or old_guard.username,
+            "new_guard_id": str(guard.id), "new_guard": guard.get_full_name() or guard.username,
+            "old_station_id": str(old_station.id) if old_station else None,
+            "new_station_id": str(station.id) if station else None,
+            "shift_type": shift.shift_type, "reason": reason,
+        }
+        SupervisorOverrideAudit.objects.create(
+            supervisor=request.user, action_type="SINGLE_SHIFT_REASSIGNMENT",
+            target_model="Shift", target_id=str(shift.id), reason=reason,
+        )
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=request.user, actor_username=request.user.username,
+            target_model="Shift", target_id=str(shift.id), details=details,
+        )
+        Notification.objects.create(
+            user=guard, title="Duty Assignment Updated",
+            message=f"You were assigned to a {shift.shift_type} shift at {station.name if station else 'station'} on {shift.date}. Reason: {reason}",
+            notification_type="DUTY_ASSIGNMENT",
+        )
+        if old_guard.id != guard.id:
+            Notification.objects.create(
+                user=old_guard, title="Duty Assignment Changed",
+                message=f"Your {shift.shift_type} shift on {shift.date} has been reassigned by an administrator.",
+                notification_type="DUTY_ASSIGNMENT",
+            )
+        return Response({"message": "Single shift reassigned.", "shift": ShiftSerializer(shift).data,
+                         "historical_preserved": True, "roster_regenerated": False}, status=status.HTTP_200_OK)
+
     @action(detail=False, methods=["get"], url_path="today")
     def today(self, request):
         """

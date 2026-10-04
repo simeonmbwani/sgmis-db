@@ -1,4 +1,6 @@
 sgmis_fixed_BACKUP_BEFORE_GEMINI_MERGE/
 .idea/
 et
+/database_backup_before_clean_reset.json
+/database_backup_before_clean_reset.sqlite3
 *.log

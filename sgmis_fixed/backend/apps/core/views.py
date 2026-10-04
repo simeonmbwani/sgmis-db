@@ -10,6 +10,10 @@ from apps.stations.models import Station
 from apps.escorts.models import EscortDuty, EscortStatus
 from apps.shifts.models import Shift, Attendance
 from apps.leave.models import LeaveApplication, LeaveStatus
+from apps.accounts.permissions import IsAdministrator
+from apps.core.models import RecordAdjustmentRequest, SecurityAuditEvent, SupervisorOverrideAudit
+from apps.leave.models import LeaveAdjustmentRecord
+from apps.core.serializers import RecordAdjustmentRequestSerializer
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
@@ -332,6 +336,14 @@ class RecordAdjustmentRequestViewSet(viewsets.ModelViewSet):
                 old_val = guard.last_name or ""
             elif field_name == "station":
                 old_val = guard.station.name if guard.station else ""
+            elif field_name in ["shift", "shift_type", "pair", "pair_guard"]:
+                upcoming = Shift.objects.filter(guard=guard, date__gte=serializer.validated_data["effective_date"]).order_by("date").first()
+                if upcoming:
+                    if field_name in ["shift", "shift_type"]:
+                        old_val = upcoming.shift_type
+                    elif upcoming.pair:
+                        partner = upcoming.pair.get_partner_for(guard)
+                        old_val = (partner.employee_number or partner.username) if partner else ""
             elif field_name == "vacation_balance":
                 b = LeaveBalance.objects.filter(guard=guard).first()
                 old_val = str(b.vacation_days) if b else "0.0"
@@ -470,4 +482,57 @@ class RecordAdjustmentRequestViewSet(viewsets.ModelViewSet):
             "message": "Adjustment request rejected.",
             "adjustment": RecordAdjustmentRequestSerializer(adjustment).data,
         }, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@permission_classes([IsAdministrator])
+def administrative_history(request):
+    """Read-only administrator history sourced from existing audit records."""
+    entries = []
+    for item in RecordAdjustmentRequest.objects.select_related(
+        "guard", "requested_by", "reviewed_by"
+    ).order_by("-created_at")[:300]:
+        entries.append({
+            "id": str(item.id), "kind": "RECORD_ADJUSTMENT",
+            "timestamp": item.reviewed_at.isoformat() if item.reviewed_at else item.created_at.isoformat(),
+            "actor": (item.reviewed_by.get_full_name() or item.reviewed_by.username) if item.reviewed_by else (item.requested_by.get_full_name() or item.requested_by.username) if item.requested_by else "",
+            "target_model": "User", "target_id": str(item.guard_id),
+            "action": item.status, "reason": item.rejection_reason or item.reason,
+            "old_value": item.old_value,
+            "new_value": item.approved_value if item.status == "APPROVED" else item.requested_value,
+            "details": {"field": item.field_name, "employee": item.guard.get_full_name() or item.guard.username,
+                        "requested_by": item.requested_by.get_full_name() if item.requested_by else "",
+                        "status": item.status, "request_id": str(item.id)},
+        })
+    for item in LeaveAdjustmentRecord.objects.select_related("guard", "authorized_by").order_by("-created_at")[:300]:
+        entries.append({
+            "id": str(item.id), "kind": "LEAVE_ADJUSTMENT", "timestamp": item.created_at.isoformat(),
+            "actor": (item.authorized_by.get_full_name() or item.authorized_by.username) if item.authorized_by else "",
+            "target_model": "LeaveBalance", "target_id": str(item.guard_id),
+            "action": item.adjustment_type, "reason": item.reason,
+            "old_value": str(item.previous_balance), "new_value": str(item.new_balance),
+            "details": {"employee": item.guard.get_full_name() or item.guard.username,
+                        "leave_type": item.leave_type, "effective_date": item.effective_date.isoformat(),
+                        "source": item.source},
+        })
+    for item in SecurityAuditEvent.objects.select_related("actor").order_by("-timestamp")[:300]:
+        entries.append({
+            "id": str(item.id), "kind": "SECURITY_AUDIT", "timestamp": item.timestamp.isoformat(),
+            "actor": item.actor_username or ((item.actor.get_full_name() or item.actor.username) if item.actor else ""),
+            "target_model": item.target_model, "target_id": item.target_id,
+            "action": item.details.get("action", item.event_type),
+            "reason": item.details.get("reason") or item.details.get("rejection_reason", ""),
+            "old_value": item.details.get("old_value"), "new_value": item.details.get("new_value"),
+            "details": item.details,
+        })
+    for item in SupervisorOverrideAudit.objects.select_related("supervisor").order_by("-created_at")[:300]:
+        entries.append({
+            "id": str(item.id), "kind": "SUPERVISOR_OVERRIDE", "timestamp": item.created_at.isoformat(),
+            "actor": item.supervisor.get_full_name() or item.supervisor.username,
+            "target_model": item.target_model, "target_id": item.target_id,
+            "action": item.action_type, "reason": item.reason,
+            "details": {"admin_notified": item.admin_notified},
+        })
+    entries.sort(key=lambda row: row["timestamp"], reverse=True)
+    return Response(entries[:500])
 

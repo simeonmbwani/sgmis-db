@@ -81,6 +81,9 @@ class IncidentReportViewSet(viewsets.ModelViewSet):
         if user.role == UserRole.SUPERVISOR:
             raise PermissionDenied("Supervisors have view-only access to incident submissions. Only on-duty guards may file incident reports.")
 
+        if user.role != UserRole.GUARD:
+            raise PermissionDenied("Administrators have incident oversight access; only guards may submit operational incident reports.")
+
         if user.role == UserRole.GUARD and not user.station:
             raise PermissionDenied("Your account has no station assigned. Contact your supervisor or administrator.")
 

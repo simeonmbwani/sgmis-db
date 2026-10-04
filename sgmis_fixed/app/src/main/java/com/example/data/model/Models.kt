@@ -596,6 +596,94 @@ data class RecordAdjustmentResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class LeaveAdjustmentRecord(
+    val id: String,
+    val guard: String,
+    @Json(name = "guard_name") val guardName: String? = null,
+    @Json(name = "adjustment_type") val adjustmentType: String,
+    @Json(name = "adjustment_type_display") val adjustmentTypeDisplay: String? = null,
+    @Json(name = "leave_type") val leaveType: String,
+    @Json(name = "previous_balance") val previousBalance: Double,
+    @Json(name = "new_balance") val newBalance: Double,
+    @Json(name = "effective_date") val effectiveDate: String,
+    val source: String,
+    val reason: String,
+    @Json(name = "authorized_by") val authorizedBy: String? = null,
+    @Json(name = "authorized_by_name") val authorizedByName: String? = null,
+    @Json(name = "created_at") val createdAt: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class AdministrativeHistoryEntry(
+    val id: String,
+    val kind: String,
+    val timestamp: String? = null,
+    val actor: String? = null,
+    @Json(name = "target_model") val targetModel: String? = null,
+    @Json(name = "target_id") val targetId: String? = null,
+    val action: String? = null,
+    val reason: String? = null,
+    @Json(name = "old_value") val oldValue: String? = null,
+    @Json(name = "new_value") val newValue: String? = null,
+    val details: Map<String, Any?>? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class UpdateStationRequest(
+    val name: String? = null,
+    val code: String? = null,
+    val address: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    @Json(name = "geofence_radius_meters") val geofenceRadiusMeters: Double? = null,
+    @Json(name = "is_active") val isActive: Boolean? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class UpdateGuardPairRequest(
+    val station: String? = null,
+    @Json(name = "guard_a") val guardA: String? = null,
+    @Json(name = "guard_b") val guardB: String? = null,
+    @Json(name = "rotation_order") val rotationOrder: Int? = null,
+    @Json(name = "is_active") val isActive: Boolean? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class UpdateEscortDutyRequest(
+    val guard: String? = null,
+    val supervisor: String? = null,
+    val station: String? = null,
+    @Json(name = "mission_name") val missionName: String? = null,
+    val origin: String? = null,
+    val destination: String? = null,
+    val purpose: String? = null,
+    val instructions: String? = null,
+    @Json(name = "contact_numbers") val contactNumbers: String? = null,
+    @Json(name = "start_time") val startTime: String? = null,
+    @Json(name = "end_time") val endTime: String? = null,
+    val status: String? = null,
+    val notes: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class UpdateExamDutyRequest(
+    val guard: String? = null,
+    val supervisor: String? = null,
+    val station: String? = null,
+    val institution: String? = null,
+    @Json(name = "exam_title") val examTitle: String? = null,
+    @Json(name = "hall_post") val hallPost: String? = null,
+    @Json(name = "supervisor_contact") val supervisorContact: String? = null,
+    val instructions: String? = null,
+    val date: String? = null,
+    @Json(name = "reporting_time") val reportingTime: String? = null,
+    @Json(name = "start_time") val startTime: String? = null,
+    @Json(name = "end_time") val endTime: String? = null,
+    val status: String? = null,
+    val notes: String? = null
+)
+
+@JsonClass(generateAdapter = true)
 data class ReassignDutyRequest(
     @Json(name = "guard_id") val guardId: String,
     @Json(name = "effective_date") val effectiveDate: String,
@@ -618,6 +706,21 @@ data class ReassignDutyResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class ReassignSingleShiftRequest(
+    @Json(name = "guard_id") val guardId: String,
+    @Json(name = "station_id") val stationId: String? = null,
+    val reason: String
+)
+
+@JsonClass(generateAdapter = true)
+data class ReassignSingleShiftResponse(
+    val message: String = "",
+    val shift: Shift? = null,
+    @Json(name = "historical_preserved") val historicalPreserved: Boolean = false,
+    @Json(name = "roster_regenerated") val rosterRegenerated: Boolean = true
+)
+
+@JsonClass(generateAdapter = true)
 data class SetOpeningBalanceRequest(
     @Json(name = "guard_id") val guardId: String,
     @Json(name = "effective_date") val effectiveDate: String,
@@ -630,7 +733,8 @@ data class SetOpeningBalanceRequest(
 @JsonClass(generateAdapter = true)
 data class SetOpeningBalanceResponse(
     val message: String = "",
-    val balance: LeaveBalance? = null
+    val balance: LeaveBalance? = null,
+    val adjustments: List<LeaveAdjustmentRecord> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)
@@ -653,6 +757,9 @@ data class Station(
     val longitude: Double? = null,
     @Json(name = "geofence_radius_meters") val geofenceRadiusMeters: Double? = null,
     @Json(name = "geofence_radius") val geofenceRadius: Double? = null,
+    @Json(name = "is_active") val isActive: Boolean = true,
+    @Json(name = "guards_count") val guardsCount: Int = 0,
+    @Json(name = "pairs_count") val pairsCount: Int = 0,
     @Json(name = "created_at") val createdAt: String? = null
 ) {
     val effectiveRadius: Double
@@ -896,21 +1003,34 @@ data class CreditHolidayRequest(
 @JsonClass(generateAdapter = true)
 data class CreateEscortDutyRequest(
     val guard: String,
+    val supervisor: String? = null,
+    val station: String? = null,
     @Json(name = "mission_name") val missionName: String,
     val origin: String,
     val destination: String,
+    val purpose: String? = null,
+    val instructions: String? = null,
+    @Json(name = "contact_numbers") val contactNumbers: String? = null,
     @Json(name = "start_time") val startTime: String,
-    @Json(name = "end_time") val endTime: String
+    @Json(name = "end_time") val endTime: String,
+    val notes: String? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class CreateExamDutyRequest(
     val guard: String,
+    val supervisor: String? = null,
+    val station: String? = null,
     val institution: String,
     @Json(name = "exam_title") val examTitle: String,
+    @Json(name = "hall_post") val hallPost: String? = null,
+    @Json(name = "supervisor_contact") val supervisorContact: String? = null,
+    val instructions: String? = null,
     val date: String,
+    @Json(name = "reporting_time") val reportingTime: String? = null,
     @Json(name = "start_time") val startTime: String,
-    @Json(name = "end_time") val endTime: String
+    @Json(name = "end_time") val endTime: String,
+    val notes: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -1046,7 +1166,11 @@ data class UpdateUserStationRequest(
 @JsonClass(generateAdapter = true)
 data class UpdateUserRequest(
     val station: String? = null,
-    @Json(name = "is_active") val isActive: Boolean? = null
+    @Json(name = "is_active") val isActive: Boolean? = null,
+    @Json(name = "employee_number") val employeeNumber: String? = null,
+    @Json(name = "first_name") val firstName: String? = null,
+    @Json(name = "last_name") val lastName: String? = null,
+    @Json(name = "phone_number") val phoneNumber: String? = null
 )
 
 @JsonClass(generateAdapter = true)

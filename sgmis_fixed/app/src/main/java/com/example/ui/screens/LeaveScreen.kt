@@ -46,6 +46,8 @@ fun LeaveScreen(
     val uiState by viewModel.uiState.collectAsState()
     var showApplyDialog by remember { mutableStateOf(false) }
     var appToReject by remember { mutableStateOf<LeaveApplication?>(null) }
+    var appToApprove by remember { mutableStateOf<LeaveApplication?>(null) }
+    var confirmAccrualRun by remember { mutableStateOf(false) }
     val currentUserRole = uiState.currentUser?.role
     val isSupervisor = currentUserRole?.uppercase() == "SUPERVISOR"
     val isAdmin = currentUserRole?.uppercase() in listOf("ADMINISTRATOR", "ADMIN")
@@ -216,14 +218,14 @@ fun LeaveScreen(
                         balances = uiState.stationLeaveBalances,
                         accrualRecords = uiState.leaveAccrualRecords,
                         isProcessing = uiState.accrualProcessing,
-                        onRunAccrual = { viewModel.processMonthlyAccruals() }
+                        onRunAccrual = { confirmAccrualRun = true }
                     )
                 }
                 isAdmin && selectedTabIndex == 1 -> {
                     ApplicationsReviewQueueView(
                         applications = uiState.leaveApplications,
                         canReview = true,
-                        onApprove = { app -> viewModel.reviewLeaveApplication(app.id, "APPROVED", "Approved by National Administrator") },
+                        onApprove = { app -> appToApprove = app },
                         onReject = { app -> appToReject = app }
                     )
                 }
@@ -284,6 +286,25 @@ fun LeaveScreen(
             }
         )
     }
+    appToApprove?.let { application ->
+        AlertDialog(
+            onDismissRequest = { appToApprove = null },
+            title = { Text("Approve leave application?") },
+            text = { Text("${application.guardName} · ${application.leaveType}\nDates: ${application.startDate} – ${application.endDate}\nStatus: ${application.status} → APPROVED\nApproved leave blocks roster duty for these dates.") },
+            confirmButton = { TextButton(onClick = {
+                viewModel.reviewLeaveApplication(application.id, "APPROVED", "Approved by National Administrator")
+                appToApprove = null
+            }) { Text("Confirm approval") } },
+            dismissButton = { TextButton(onClick = { appToApprove = null }) { Text("Back") } }
+        )
+    }
+    if (confirmAccrualRun) AlertDialog(
+        onDismissRequest = { confirmAccrualRun = false },
+        title = { Text("Process completed-month leave accruals?") },
+        text = { Text("This credits eligible completed months to guard leave balances and records each credit in the backend accrual ledger. No incomplete month is credited.") },
+        confirmButton = { TextButton(onClick = { confirmAccrualRun = false; viewModel.processMonthlyAccruals() }) { Text("Confirm accrual") } },
+        dismissButton = { TextButton(onClick = { confirmAccrualRun = false }) { Text("Cancel") } }
+    )
 }
 
 @Composable

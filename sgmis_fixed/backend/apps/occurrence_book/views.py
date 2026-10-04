@@ -72,6 +72,9 @@ class OccurrenceBookEntryViewSet(viewsets.ModelViewSet):
         if user.role == UserRole.SUPERVISOR:
             raise PermissionDenied("Supervisors have view-only access to Occurrence Book entries.")
 
+        if user.role != UserRole.GUARD:
+            raise PermissionDenied("Administrators have oversight access; only guards may create operational Occurrence Book entries.")
+
         if user.role == UserRole.GUARD:
             if not user.station:
                 raise ValidationError({

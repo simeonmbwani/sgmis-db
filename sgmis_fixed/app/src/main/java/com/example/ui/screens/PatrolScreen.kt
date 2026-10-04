@@ -38,6 +38,7 @@ fun PatrolScreen(
 
     val currentUser = uiState.currentUser
     val isSupervisor = currentUser?.role == "SUPERVISOR"
+    val isAdmin = currentUser?.appRole == com.example.data.model.AppRole.ADMINISTRATOR
     val isGuard = currentUser?.role == "GUARD" || currentUser?.role == null
 
     var elapsedSeconds by remember { mutableIntStateOf(0) }
@@ -302,14 +303,14 @@ fun PatrolScreen(
                                 )
                             }
                         }
-                    } else if (isSupervisor) {
+                    } else if (isSupervisor || isAdmin) {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "Supervisors have view-only access to patrol telemetry and inspection checkpoints. Patrol rounds are conducted by assigned on-duty guards.",
+                                text = if (isAdmin) "Administrator monitoring is read-only. Patrol rounds and checkpoint scans are performed by assigned on-duty guards." else "Supervisors have view-only access to patrol telemetry and inspection checkpoints. Patrol rounds are conducted by assigned on-duty guards.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(12.dp)

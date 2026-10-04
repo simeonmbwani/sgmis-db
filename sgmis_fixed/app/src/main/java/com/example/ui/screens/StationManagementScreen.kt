@@ -23,6 +23,7 @@ import com.example.data.model.GuardPair
 import com.example.data.model.Station
 import com.example.data.model.User
 import com.example.ui.theme.StatusSuccess
+import com.example.ui.theme.StatusWarning
 import com.example.ui.viewmodel.SgmisViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,9 +36,11 @@ fun StationManagementScreen(
     val uiState by viewModel.uiState.collectAsState()
     var showCreateStationDialog by remember { mutableStateOf(false) }
     var showCreatePairDialog by remember { mutableStateOf(false) }
+    var selectedStationForEdit by remember { mutableStateOf<Station?>(null) }
+    var selectedPairForEdit by remember { mutableStateOf<GuardPair?>(null) }
 
     val role = uiState.currentUser?.role?.uppercase()
-    val canManage = role in listOf("ADMINISTRATOR", "ADMIN", "SUPERVISOR")
+    val canManage = role in listOf("ADMINISTRATOR", "ADMIN")
 
     LaunchedEffect(Unit) {
         viewModel.fetchStations()
@@ -135,10 +138,10 @@ fun StationManagementScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     item {
-                        Text("Active Stations (${uiState.stations.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("Stations (${uiState.stations.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     }
                     items(uiState.stations) { st ->
-                        StationCard(st)
+                        StationCard(st, if (canManage) ({ selectedStationForEdit = st }) else null)
                     }
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
@@ -189,6 +192,8 @@ fun StationManagementScreen(
                                 }
                                 Text("Guard A: $guardAName", style = MaterialTheme.typography.bodyMedium)
                                 Text("Guard B: $guardBName", style = MaterialTheme.typography.bodyMedium)
+                                Text("${if (p.isActive) "ACTIVE" else "INACTIVE"} · rotation ${p.rotationOrder ?: p.order}", style = MaterialTheme.typography.labelSmall)
+                                if (canManage) TextButton(onClick = { selectedPairForEdit = p }) { Text("Edit Pair") }
                             }
                         }
                     }
@@ -231,10 +236,21 @@ fun StationManagementScreen(
             }
         )
     }
+
+    selectedStationForEdit?.let { station ->
+        EditStationDialog(station = station, onDismiss = { selectedStationForEdit = null }, onSave = { request ->
+            viewModel.updateStation(station.id, request) { selectedStationForEdit = null }
+        })
+    }
+    selectedPairForEdit?.let { pair ->
+        EditGuardPairDialog(pair, uiState.stations, uiState.users, onDismiss = { selectedPairForEdit = null }, onSave = { request ->
+            viewModel.updateGuardPair(pair.id, request) { selectedPairForEdit = null }
+        })
+    }
 }
 
 @Composable
-fun StationCard(station: Station) {
+fun StationCard(station: Station, onEdit: (() -> Unit)? = null) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -266,8 +282,78 @@ fun StationCard(station: Station) {
                 Text("Address: ${station.address}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text("Coordinates: ${station.latitude ?: 0.0}, ${station.longitude ?: 0.0} (Radius: ${station.effectiveRadius}m)", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+            Text("Assigned personnel: ${station.guardsCount} · Pairs: ${station.pairsCount}", style = MaterialTheme.typography.bodySmall)
+            Text(if (station.isActive) "ACTIVE" else "INACTIVE", color = if (station.isActive) StatusSuccess else StatusWarning, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+            if (onEdit != null) TextButton(onClick = onEdit) { Text("Edit Station Settings") }
         }
     }
+}
+
+@Composable
+private fun EditStationDialog(station: Station, onDismiss: () -> Unit, onSave: (com.example.data.model.UpdateStationRequest) -> Unit) {
+    var confirmSave by remember(station.id) { mutableStateOf(false) }
+    var name by remember(station.id) { mutableStateOf(station.name) }
+    var code by remember(station.id) { mutableStateOf(station.code.orEmpty()) }
+    var address by remember(station.id) { mutableStateOf(station.address.orEmpty()) }
+    var radius by remember(station.id) { mutableStateOf(station.effectiveRadius.toString()) }
+    var active by remember(station.id) { mutableStateOf(station.isActive) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit Station") }, text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(name, { name = it }, label = { Text("Name") })
+            OutlinedTextField(code, { code = it.uppercase() }, label = { Text("Code") })
+            OutlinedTextField(address, { address = it }, label = { Text("Address") })
+            OutlinedTextField(radius, { radius = it }, label = { Text("Geofence radius (m)") })
+            Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(active, { active = it }); Text("Active") }
+        }
+    }, confirmButton = { TextButton(onClick = { confirmSave = true }) { Text("Review changes") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    if (confirmSave) AlertDialog(
+        onDismissRequest = { confirmSave = false },
+        title = { Text("Save these changes?") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Station: ${station.name} → $name")
+            Text("Code: ${station.code.orEmpty()} → $code")
+            Text("Address: ${station.address.orEmpty()} → $address")
+            Text("Geofence radius: ${station.effectiveRadius} m → ${radius} m")
+            Text("Status: ${if (station.isActive) "Active" else "Inactive"} → ${if (active) "Active" else "Inactive"}")
+        } },
+        confirmButton = { TextButton(onClick = { confirmSave = false; onSave(com.example.data.model.UpdateStationRequest(name, code, address, station.latitude, station.longitude, radius.toDoubleOrNull(), active)) }) { Text("Confirm save") } },
+        dismissButton = { TextButton(onClick = { confirmSave = false }) { Text("Back") } }
+    )
+}
+
+@Composable
+private fun EditGuardPairDialog(pair: GuardPair, stations: List<Station>, users: List<User>, onDismiss: () -> Unit, onSave: (com.example.data.model.UpdateGuardPairRequest) -> Unit) {
+    var confirmSave by remember(pair.id) { mutableStateOf(false) }
+    var station by remember(pair.id) { mutableStateOf(pair.station) }
+    var guardA by remember(pair.id) { mutableStateOf(pair.guardA) }
+    var guardB by remember(pair.id) { mutableStateOf(pair.guardB) }
+    var order by remember(pair.id) { mutableStateOf((pair.rotationOrder ?: pair.order).toString()) }
+    var active by remember(pair.id) { mutableStateOf(pair.isActive) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit Guard Pair") }, text = {
+        Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Station")
+            stations.forEach { item -> TextButton(onClick = { station = item.id }) { Text("${if (station == item.id) "✓ " else ""}${item.name}") } }
+            Text("Guard A")
+            users.filter { it.role.equals("GUARD", true) }.forEach { item -> TextButton(onClick = { guardA = item.id }) { Text("${if (guardA == item.id) "✓ " else ""}${item.fullName ?: item.username}") } }
+            Text("Guard B")
+            users.filter { it.role.equals("GUARD", true) }.forEach { item -> TextButton(onClick = { guardB = item.id }) { Text("${if (guardB == item.id) "✓ " else ""}${item.fullName ?: item.username}") } }
+            OutlinedTextField(order, { order = it }, label = { Text("Rotation order (1–3)") })
+            Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(active, { active = it }); Text("Active pair") }
+        }
+    }, confirmButton = { TextButton(onClick = { confirmSave = true }) { Text("Review changes") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    if (confirmSave) AlertDialog(
+        onDismissRequest = { confirmSave = false },
+        title = { Text("Save these changes?") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Station: ${pair.stationName.orEmpty()} → ${stations.firstOrNull { it.id == station }?.name ?: station}")
+            Text("Guard A: ${pair.guardAName ?: pair.guardA} → ${users.firstOrNull { it.id == guardA }?.fullName ?: guardA}")
+            Text("Guard B: ${pair.guardBName ?: pair.guardB} → ${users.firstOrNull { it.id == guardB }?.fullName ?: guardB}")
+            Text("Rotation order: ${pair.rotationOrder ?: pair.order} → ${order}")
+            Text("Status: ${if (pair.isActive) "Active" else "Inactive"} → ${if (active) "Active" else "Inactive"}")
+        } },
+        confirmButton = { TextButton(onClick = { confirmSave = false; onSave(com.example.data.model.UpdateGuardPairRequest(station, guardA, guardB, order.toIntOrNull(), active)) }) { Text("Confirm save") } },
+        dismissButton = { TextButton(onClick = { confirmSave = false }) { Text("Back") } }
+    )
 }
 
 @Composable

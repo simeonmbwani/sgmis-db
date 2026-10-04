@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.CreateUserRequest
 import com.example.data.model.User
+import com.example.data.model.UpdateUserRequest
 import com.example.ui.theme.StatusSuccess
 import com.example.ui.theme.StatusWarning
 import com.example.ui.viewmodel.SgmisViewModel
@@ -36,6 +37,8 @@ fun UserManagementScreen(
     val uiState by viewModel.uiState.collectAsState()
     var showCreateDialog by remember { mutableStateOf(false) }
     var selectedUserForStation by remember { mutableStateOf<User?>(null) }
+    var selectedUserForEdit by remember { mutableStateOf<User?>(null) }
+    var userForActiveChange by remember { mutableStateOf<User?>(null) }
 
     // Auto-dismiss transient messages after 3.5 seconds
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
@@ -150,8 +153,9 @@ fun UserManagementScreen(
                         UserCard(
                             user = u,
                             currentUserRole = uiState.currentUser?.role?.uppercase() ?: "GUARD",
-                            onToggleActive = { viewModel.toggleUserActive(u) },
-                            onAssignStation = { selectedUserForStation = u }
+                            onToggleActive = { userForActiveChange = u },
+                            onAssignStation = { selectedUserForStation = u },
+                            onEdit = { selectedUserForEdit = u }
                         )
                     }
                 }
@@ -180,6 +184,21 @@ fun UserManagementScreen(
             }
         )
     }
+
+    selectedUserForEdit?.let { user ->
+        EditPersonnelDialog(user = user, onDismiss = { selectedUserForEdit = null }, onSave = { req ->
+            viewModel.updateManagedUser(user.id, req) { selectedUserForEdit = null }
+        })
+    }
+    userForActiveChange?.let { user ->
+        AlertDialog(
+            onDismissRequest = { userForActiveChange = null },
+            title = { Text(if (user.isActive) "Deactivate account?" else "Reactivate account?") },
+            text = { Text("${user.fullName ?: user.username} · ${user.employeeNumber.orEmpty()}\nAccount status: ${if (user.isActive) "Active" else "Inactive"} → ${if (user.isActive) "Inactive" else "Active"}") },
+            confirmButton = { TextButton(onClick = { viewModel.toggleUserActive(user); userForActiveChange = null }) { Text("Confirm change") } },
+            dismissButton = { TextButton(onClick = { userForActiveChange = null }) { Text("Cancel") } }
+        )
+    }
 }
 
 @Composable
@@ -187,7 +206,8 @@ fun UserCard(
     user: User,
     currentUserRole: String,
     onToggleActive: () -> Unit,
-    onAssignStation: () -> Unit
+    onAssignStation: () -> Unit,
+    onEdit: () -> Unit = {}
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -235,7 +255,7 @@ fun UserCard(
                 color = MaterialTheme.colorScheme.primary
             )
 
-            if (currentUserRole == "ADMINISTRATOR" || currentUserRole == "ADMIN" || currentUserRole == "SUPERVISOR") {
+            if (currentUserRole == "ADMINISTRATOR" || currentUserRole == "ADMIN") {
                 Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -245,15 +265,50 @@ fun UserCard(
                     TextButton(onClick = onAssignStation) {
                         Text("Assign Station")
                     }
-                    if (currentUserRole == "ADMINISTRATOR" || currentUserRole == "ADMIN") {
-                        TextButton(onClick = onToggleActive) {
-                            Text(if (user.isActive) "Deactivate" else "Activate")
-                        }
+                    TextButton(onClick = onEdit) { Text("Edit Details") }
+                    TextButton(onClick = onToggleActive) {
+                        Text(if (user.isActive) "Deactivate" else "Activate")
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun EditPersonnelDialog(user: User, onDismiss: () -> Unit, onSave: (UpdateUserRequest) -> Unit) {
+    var confirmSave by remember(user.id) { mutableStateOf(false) }
+    var employeeNumber by remember(user.id) { mutableStateOf(user.employeeNumber.orEmpty()) }
+    var firstName by remember(user.id) { mutableStateOf(user.firstName.orEmpty()) }
+    var lastName by remember(user.id) { mutableStateOf(user.lastName.orEmpty()) }
+    var phone by remember(user.id) { mutableStateOf(user.phoneNumber.orEmpty()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Personnel Record") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(employeeNumber, { employeeNumber = it }, label = { Text("Employee number") })
+                OutlinedTextField(firstName, { firstName = it }, label = { Text("First name") })
+                OutlinedTextField(lastName, { lastName = it }, label = { Text("Last name") })
+                OutlinedTextField(phone, { phone = it }, label = { Text("Phone") })
+            }
+        },
+        confirmButton = { TextButton(onClick = { confirmSave = true }) { Text("Review changes") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+    if (confirmSave) AlertDialog(
+        onDismissRequest = { confirmSave = false },
+        title = { Text("Save these personnel changes?") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Employee: ${user.fullName ?: user.username}")
+            Text("Employee number: ${user.employeeNumber.orEmpty()} → $employeeNumber")
+            Text("First name: ${user.firstName.orEmpty()} → $firstName")
+            Text("Last name: ${user.lastName.orEmpty()} → $lastName")
+            Text("Phone: ${user.phoneNumber.orEmpty()} → $phone")
+        } },
+        confirmButton = { TextButton(onClick = { confirmSave = false; onSave(UpdateUserRequest(employeeNumber = employeeNumber, firstName = firstName, lastName = lastName, phoneNumber = phone)) }) { Text("Confirm save") } },
+        dismissButton = { TextButton(onClick = { confirmSave = false }) { Text("Back") } }
+    )
 }
 
 @Composable
@@ -264,6 +319,7 @@ fun AssignStationDialog(
     onAssign: (String?) -> Unit
 ) {
     var selectedStationId by remember { mutableStateOf(user.station) }
+    var confirmAssignment by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -314,7 +370,7 @@ fun AssignStationDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onAssign(selectedStationId) },
+                onClick = { confirmAssignment = true },
                 modifier = Modifier.testTag("save_station_assignment_button")
             ) {
                 Text("Save Assignment")
@@ -323,6 +379,13 @@ fun AssignStationDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
+    )
+    if (confirmAssignment) AlertDialog(
+        onDismissRequest = { confirmAssignment = false },
+        title = { Text("Save this station assignment?") },
+        text = { Text("${user.fullName ?: user.username}: ${user.stationName ?: "Unassigned"} → ${stations.firstOrNull { it.id == selectedStationId }?.name ?: "Unassigned"}") },
+        confirmButton = { TextButton(onClick = { confirmAssignment = false; onAssign(selectedStationId) }) { Text("Confirm assignment") } },
+        dismissButton = { TextButton(onClick = { confirmAssignment = false }) { Text("Back") } }
     )
 }
 

@@ -5,10 +5,11 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
 from .models import EscortDuty, EscortStatus
 from .serializers import EscortDutySerializer
 from apps.accounts.models import User, UserRole
-from apps.accounts.permissions import IsSupervisorOrAdmin, IsAdministrator
+from apps.accounts.permissions import IsSupervisorOrAdmin
 from apps.shifts.models import Shift
 from apps.notifications.models import Notification
 from apps.core.sms import send_sms
@@ -31,17 +32,28 @@ class EscortDutyViewSet(viewsets.ModelViewSet):
         return qs
 
     def get_permissions(self):
-        if self.action in ["destroy"]:
-            return [IsAdministrator()]
         if self.action in ["create", "update", "partial_update", "auto_allocate"]:
             return [IsSupervisorOrAdmin()]
         return [IsAuthenticated()]
+
+    def destroy(self, request, *args, **kwargs):
+        raise PermissionDenied("Escort duty history is retained; cancel the duty to preserve its audit trail.")
 
     def perform_create(self, serializer):
         user = self.request.user
         supervisor = serializer.validated_data.get("supervisor") or (user if user.role in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR] else None)
         station = serializer.validated_data.get("station") or (user.station if user.station else None)
         duty = serializer.save(supervisor=supervisor, station=station)
+
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=user,
+            actor_username=user.username,
+            target_model="EscortDuty",
+            target_id=str(duty.id),
+            details={"action": "ESCORT_DUTY_CREATED", "reference": duty.reference,
+                     "guard_id": str(duty.guard_id), "station_id": str(duty.station_id)},
+        )
 
         # Notify assigned guard in-app
         Notification.objects.create(
@@ -56,6 +68,28 @@ class EscortDutyViewSet(viewsets.ModelViewSet):
             send_sms(
                 duty.guard.phone_number,
                 f"SGMIS Escort Duty: Ref {duty.reference}. Mission: {duty.mission_name}. From {duty.origin} to {duty.destination}. Report at {duty.start_time.strftime('%Y-%m-%d %H:%M')}."
+            )
+
+    def perform_update(self, serializer):
+        old = serializer.instance
+        old_guard_id = old.guard_id
+        changed = {key: str(value) for key, value in serializer.validated_data.items()}
+        duty = serializer.save()
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=self.request.user,
+            actor_username=self.request.user.username,
+            target_model="EscortDuty",
+            target_id=str(duty.id),
+            details={"action": "ESCORT_DUTY_UPDATED", "reference": duty.reference,
+                     "old_guard_id": str(old_guard_id), "new_guard_id": str(duty.guard_id),
+                     "changed_fields": changed},
+        )
+        if old_guard_id != duty.guard_id:
+            Notification.objects.create(
+                user=duty.guard, title="Escort Mission Reassigned",
+                message=f"Escort mission {duty.reference} has been assigned to you.",
+                notification_type="DUTY_ASSIGNMENT",
             )
 
     @action(detail=True, methods=["post"], url_path="acknowledge")
@@ -98,6 +132,8 @@ class EscortDutyViewSet(viewsets.ModelViewSet):
         new_status = request.data.get("status")
         if not new_status or new_status not in EscortStatus.values:
             return Response({"detail": f"Invalid status '{new_status}'. Allowed: {', '.join(EscortStatus.values)}"}, status=status.HTTP_400_BAD_REQUEST)
+        if request.user.role == UserRole.ADMINISTRATOR and new_status != EscortStatus.CANCELLED:
+            return Response({"detail": "Administrators may cancel escort duties; operational progress is recorded by guards."}, status=status.HTTP_403_FORBIDDEN)
 
         if new_status == EscortStatus.CANCELLED and request.user.role == UserRole.GUARD:
             return Response({"detail": "Guards cannot cancel escort duties."}, status=status.HTTP_403_FORBIDDEN)

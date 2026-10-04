@@ -96,6 +96,14 @@ data class SgmisUiState(
     val conflictReport: ConflictReport? = null,
     val rosterConflictsLoading: Boolean = false,
     val adminLoading: Boolean = false,
+    val recordAdjustments: List<RecordAdjustmentRequest> = emptyList(),
+    val selectedRecordAdjustment: RecordAdjustmentRequest? = null,
+    val adjustmentsLoading: Boolean = false,
+    val administrativeHistory: List<AdministrativeHistoryEntry> = emptyList(),
+    val administrativeHistoryLoading: Boolean = false,
+    val leaveAdjustmentHistory: List<LeaveAdjustmentRecord> = emptyList(),
+    val openingBalanceSaving: Boolean = false,
+    val dutyReassignmentSaving: Boolean = false,
 
     // Public Holidays & Early Clockout OTP
     val publicHolidays: List<PublicHoliday> = emptyList(),
@@ -165,6 +173,96 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         )
     )
     val uiState: StateFlow<SgmisUiState> = _uiState.asStateFlow()
+
+    private fun adminOnly(): Boolean = _uiState.value.currentUser?.appRole == AppRole.ADMINISTRATOR
+
+    fun fetchRecordAdjustments() {
+        if (_uiState.value.currentUser?.appRole == AppRole.GUARD) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(adjustmentsLoading = true, errorMessage = null) }
+            repository.fetchRecordAdjustments().onSuccess { rows ->
+                _uiState.update { it.copy(recordAdjustments = rows, adjustmentsLoading = false) }
+            }.onFailure { e -> _uiState.update { it.copy(adjustmentsLoading = false, errorMessage = e.message) } }
+        }
+    }
+
+    fun submitRecordAdjustment(request: CreateRecordAdjustmentRequest, onSuccess: () -> Unit = {}) {
+        if (_uiState.value.currentUser?.appRole !in listOf(AppRole.SUPERVISOR, AppRole.ADMINISTRATOR)) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(adjustmentsLoading = true, errorMessage = null) }
+            repository.createRecordAdjustment(request).onSuccess { row ->
+                _uiState.update { it.copy(adjustmentsLoading = false, successMessage = "Adjustment request submitted.", recordAdjustments = listOf(row) + it.recordAdjustments) }
+                fetchRecordAdjustments()
+                onSuccess()
+            }.onFailure { e -> _uiState.update { it.copy(adjustmentsLoading = false, errorMessage = e.message) } }
+        }
+    }
+
+    fun reviewRecordAdjustment(id: String, approve: Boolean, valueOrReason: String = "") {
+        if (!adminOnly()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(adjustmentsLoading = true, errorMessage = null) }
+            val result = if (approve) repository.approveRecordAdjustment(id, valueOrReason.ifBlank { null })
+                else repository.rejectRecordAdjustment(id, valueOrReason)
+            result.onSuccess {
+                _uiState.update { it.copy(adjustmentsLoading = false, selectedRecordAdjustment = null, successMessage = if (approve) "Adjustment approved." else "Adjustment rejected.") }
+                fetchRecordAdjustments()
+                fetchAdministrativeHistory()
+            }.onFailure { e -> _uiState.update { it.copy(adjustmentsLoading = false, errorMessage = e.message) } }
+        }
+    }
+
+    fun selectRecordAdjustment(row: RecordAdjustmentRequest?) { _uiState.update { it.copy(selectedRecordAdjustment = row) } }
+
+    fun fetchAdministrativeHistory() {
+        if (!adminOnly()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(administrativeHistoryLoading = true) }
+            repository.fetchAdministrativeHistory().onSuccess { rows ->
+                _uiState.update { it.copy(administrativeHistory = rows, administrativeHistoryLoading = false) }
+            }.onFailure { e -> _uiState.update { it.copy(administrativeHistoryLoading = false, errorMessage = e.message) } }
+            repository.fetchLeaveAdjustments().onSuccess { rows -> _uiState.update { it.copy(leaveAdjustmentHistory = rows) } }
+        }
+    }
+
+    fun setOpeningBalance(request: SetOpeningBalanceRequest, onSuccess: () -> Unit = {}) {
+        if (!adminOnly()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(openingBalanceSaving = true, errorMessage = null) }
+            repository.setOpeningBalance(request).onSuccess { response ->
+                _uiState.update { it.copy(openingBalanceSaving = false, successMessage = response.message, leaveAdjustmentHistory = response.adjustments + it.leaveAdjustmentHistory) }
+                fetchStationLeaveBalances()
+                fetchAdministrativeHistory()
+                onSuccess()
+            }.onFailure { e -> _uiState.update { it.copy(openingBalanceSaving = false, errorMessage = e.message) } }
+        }
+    }
+
+    fun reassignDuty(request: ReassignDutyRequest, onSuccess: () -> Unit = {}) {
+        if (!adminOnly()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(dutyReassignmentSaving = true, errorMessage = null) }
+            repository.reassignDuty(request).onSuccess { response ->
+                _uiState.update { it.copy(dutyReassignmentSaving = false, successMessage = response.message) }
+                fetchRosterShifts()
+                fetchAdministrativeHistory()
+                onSuccess()
+            }.onFailure { e -> _uiState.update { it.copy(dutyReassignmentSaving = false, errorMessage = e.message) } }
+        }
+    }
+
+    fun reassignSingleShift(shiftId: String, request: ReassignSingleShiftRequest, onSuccess: () -> Unit = {}) {
+        if (!adminOnly()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(dutyReassignmentSaving = true, errorMessage = null) }
+            repository.reassignSingleShift(shiftId, request).onSuccess { response ->
+                _uiState.update { it.copy(dutyReassignmentSaving = false, successMessage = response.message) }
+                fetchRosterShifts()
+                fetchAdministrativeHistory()
+                onSuccess()
+            }.onFailure { e -> _uiState.update { it.copy(dutyReassignmentSaving = false, errorMessage = e.message) } }
+        }
+    }
 
     fun setThemeMode(mode: com.example.ui.theme.ThemeMode) {
         repository.themeMode = mode
@@ -1009,8 +1107,8 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             val res = repository.fetchEscortDuties()
             res.onSuccess { list ->
                 _uiState.update { it.copy(escortDuties = list, escortsLoading = false) }
-            }.onFailure {
-                _uiState.update { it.copy(escortsLoading = false) }
+            }.onFailure { error ->
+                _uiState.update { it.copy(escortsLoading = false, errorMessage = error.message ?: "Unable to load escort duties. Please try again.") }
             }
         }
     }
@@ -1029,6 +1127,19 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                 _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
             }
         }
+    }
+
+    fun editEscortDuty(id: String, request: UpdateEscortDutyRequest, onSuccess: () -> Unit = {}) {
+        if (_uiState.value.currentUser?.appRole !in listOf(AppRole.SUPERVISOR, AppRole.ADMINISTRATOR)) return
+        viewModelScope.launch {
+            repository.updateEscortDuty(id, request).onSuccess { _uiState.update { it.copy(successMessage = "Escort duty updated.") }; fetchEscortDuties(); onSuccess() }
+                .onFailure { e -> _uiState.update { it.copy(errorMessage = e.message) } }
+        }
+    }
+
+    fun cancelEscortDuty(id: String) {
+        if (_uiState.value.currentUser?.appRole != AppRole.ADMINISTRATOR) return
+        updateEscortStatus(id, "CANCELLED")
     }
 
     fun updateEscortStatus(id: String, status: String) {
@@ -1052,8 +1163,8 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             val res = repository.fetchExamDuties()
             res.onSuccess { list ->
                 _uiState.update { it.copy(examDuties = list, examsLoading = false) }
-            }.onFailure {
-                _uiState.update { it.copy(examsLoading = false) }
+            }.onFailure { error ->
+                _uiState.update { it.copy(examsLoading = false, errorMessage = error.message ?: "Unable to load exam duties. Please try again.") }
             }
         }
     }
@@ -1072,6 +1183,19 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                 _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
             }
         }
+    }
+
+    fun editExamDuty(id: String, request: UpdateExamDutyRequest, onSuccess: () -> Unit = {}) {
+        if (_uiState.value.currentUser?.appRole !in listOf(AppRole.SUPERVISOR, AppRole.ADMINISTRATOR)) return
+        viewModelScope.launch {
+            repository.updateExamDuty(id, request).onSuccess { _uiState.update { it.copy(successMessage = "Exam duty updated.") }; fetchExamDuties(); onSuccess() }
+                .onFailure { e -> _uiState.update { it.copy(errorMessage = e.message) } }
+        }
+    }
+
+    fun cancelExamDuty(id: String) {
+        if (_uiState.value.currentUser?.appRole != AppRole.ADMINISTRATOR) return
+        updateExamStatus(id, "CANCELLED")
     }
 
     fun updateExamStatus(id: String, status: String) {
@@ -1206,6 +1330,18 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
+    fun updateManagedUser(userId: String, request: UpdateUserRequest, onSuccess: () -> Unit = {}) {
+        if (!adminOnly()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            repository.updateManagedUser(userId, request).onSuccess { user ->
+                _uiState.update { state -> state.copy(isLoading = false, successMessage = "Personnel record updated.", users = state.users.map { if (it.id == user.id) user else it }) }
+                fetchUsers()
+                onSuccess()
+            }.onFailure { e -> _uiState.update { it.copy(isLoading = false, errorMessage = e.message) } }
+        }
+    }
+
     // --- Stations Management ---
     fun fetchStations() {
         viewModelScope.launch {
@@ -1234,6 +1370,16 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
+    fun updateStation(id: String, request: UpdateStationRequest, onSuccess: () -> Unit = {}) {
+        if (!adminOnly()) return
+        viewModelScope.launch {
+            repository.updateStation(id, request).onSuccess { station ->
+                _uiState.update { s -> s.copy(stations = s.stations.map { if (it.id == id) station else it }, successMessage = "Station updated.") }
+                fetchStations(); onSuccess()
+            }.onFailure { e -> _uiState.update { it.copy(errorMessage = e.message) } }
+        }
+    }
+
     // --- Guard Pairs Management ---
     fun fetchGuardPairs(stationId: String? = null) {
         viewModelScope.launch {
@@ -1259,6 +1405,16 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             }.onFailure { err ->
                 _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
             }
+        }
+    }
+
+    fun updateGuardPair(id: String, request: UpdateGuardPairRequest, onSuccess: () -> Unit = {}) {
+        if (!adminOnly()) return
+        viewModelScope.launch {
+            repository.updateGuardPair(id, request).onSuccess {
+                _uiState.update { it.copy(successMessage = "Guard pair updated.") }
+                fetchGuardPairs(); onSuccess()
+            }.onFailure { e -> _uiState.update { it.copy(errorMessage = e.message) } }
         }
     }
 

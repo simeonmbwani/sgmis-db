@@ -28,6 +28,24 @@ interface ApiService {
     @GET("core/telemetry/")
     suspend fun getTelemetry(): Response<TelemetryOverview>
 
+    @GET("core/adjustments/")
+    suspend fun getRecordAdjustments(@Query("status") status: String? = null): Response<List<RecordAdjustmentRequest>>
+
+    @GET("core/adjustments/{id}/")
+    suspend fun getRecordAdjustment(@Path("id") id: String): Response<RecordAdjustmentRequest>
+
+    @POST("core/adjustments/")
+    suspend fun createRecordAdjustment(@Body request: CreateRecordAdjustmentRequest): Response<RecordAdjustmentRequest>
+
+    @POST("core/adjustments/{id}/approve/")
+    suspend fun approveRecordAdjustment(@Path("id") id: String, @Body request: ApproveRecordAdjustmentRequest): Response<RecordAdjustmentResponse>
+
+    @POST("core/adjustments/{id}/reject/")
+    suspend fun rejectRecordAdjustment(@Path("id") id: String, @Body request: RejectRecordAdjustmentRequest): Response<RecordAdjustmentResponse>
+
+    @GET("core/admin-history/")
+    suspend fun getAdministrativeHistory(): Response<List<AdministrativeHistoryEntry>>
+
     // --- User Management (Supervisor / Administrator) ---
     @GET("accounts/users/")
     suspend fun getUsers(
@@ -54,11 +72,17 @@ interface ApiService {
     @POST("stations/stations/")
     suspend fun createStation(@Body request: CreateStationRequest): Response<Station>
 
+    @PATCH("stations/stations/{id}/")
+    suspend fun updateStation(@Path("id") id: String, @Body request: UpdateStationRequest): Response<Station>
+
     @GET("stations/pairs/")
     suspend fun getGuardPairs(@Query("station") station: String? = null): Response<List<GuardPair>>
 
     @POST("stations/pairs/")
     suspend fun createGuardPair(@Body request: CreateGuardPairRequest): Response<GuardPair>
+
+    @PATCH("stations/pairs/{id}/")
+    suspend fun updateGuardPair(@Path("id") id: String, @Body request: UpdateGuardPairRequest): Response<GuardPair>
 
     // --- Shifts & Today's Shift ---
     @GET("shifts/shifts/today/")
@@ -101,6 +125,12 @@ interface ApiService {
 
     @POST("shifts/shifts/detect_conflicts/")
     suspend fun detectConflicts(@Body request: DetectConflictsRequest): Response<ConflictReport>
+
+    @POST("shifts/shifts/reassign_duty/")
+    suspend fun reassignDuty(@Body request: ReassignDutyRequest): Response<ReassignDutyResponse>
+
+    @POST("shifts/shifts/{id}/reassign/")
+    suspend fun reassignSingleShift(@Path("id") id: String, @Body request: ReassignSingleShiftRequest): Response<ReassignSingleShiftResponse>
 
     @POST("shifts/shifts/schedule_escort/")
     suspend fun scheduleEscort(@Body request: ScheduleExamEscortRequest): Response<ScheduleExamEscortResponse>
@@ -241,6 +271,12 @@ interface ApiService {
     @GET("leave/balances/")
     suspend fun getAllLeaveBalances(@Query("station") stationId: String? = null): Response<List<LeaveBalance>>
 
+    @POST("leave/balances/set_opening_balance/")
+    suspend fun setOpeningLeaveBalance(@Body request: SetOpeningBalanceRequest): Response<SetOpeningBalanceResponse>
+
+    @GET("leave/adjustments/")
+    suspend fun getLeaveAdjustments(): Response<List<LeaveAdjustmentRecord>>
+
     @GET("leave/accrual-records/")
     suspend fun getLeaveAccrualRecords(): Response<List<LeaveAccrualRecord>>
 
@@ -260,8 +296,14 @@ interface ApiService {
     @PATCH("escorts/duties/{id}/")
     suspend fun updateEscortDuty(
         @Path("id") id: String,
-        @Body request: UpdateDutyStatusRequest
+        @Body request: UpdateEscortDutyRequest
     ): Response<EscortDuty>
+
+    @DELETE("escorts/duties/{id}/")
+    suspend fun deleteEscortDuty(@Path("id") id: String): Response<Unit>
+
+    @POST("escorts/duties/{id}/update_status/")
+    suspend fun setEscortDutyStatus(@Path("id") id: String, @Body request: UpdateDutyStatusRequest): Response<EscortDuty>
 
     // --- Exams ---
     @GET("exams/duties/")
@@ -276,8 +318,14 @@ interface ApiService {
     @PATCH("exams/duties/{id}/")
     suspend fun updateExamDuty(
         @Path("id") id: String,
-        @Body request: UpdateDutyStatusRequest
+        @Body request: UpdateExamDutyRequest
     ): Response<ExamDuty>
+
+    @DELETE("exams/duties/{id}/")
+    suspend fun deleteExamDuty(@Path("id") id: String): Response<Unit>
+
+    @POST("exams/duties/{id}/update_status/")
+    suspend fun setExamDutyStatus(@Path("id") id: String, @Body request: UpdateDutyStatusRequest): Response<ExamDuty>
 
     // --- Notifications ---
     @GET("notifications/alerts/")
@@ -355,4 +403,3 @@ interface ApiService {
     @POST("notifications/messages/{id}/mark_read/")
     suspend fun markMessageRead(@Path("id") id: String): Response<DirectMessage>
 }
-

@@ -408,7 +408,7 @@ class UserViewSet(viewsets.ModelViewSet):
         return qs
 
     def get_permissions(self):
-        if self.action in ["create", "destroy", "deactivate"]:
+        if self.action in ["create", "update", "partial_update", "destroy", "deactivate"]:
             return [IsAdministrator()]
         return [IsSupervisorOrAdmin()]
 

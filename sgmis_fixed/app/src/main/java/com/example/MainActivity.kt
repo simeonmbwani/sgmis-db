@@ -178,6 +178,12 @@ fun SgmisApp(viewModel: SgmisViewModel) {
             composable("record_adjustments") {
                 RecordAdjustmentsScreen(viewModel = viewModel) { navController.popBackStack() }
             }
+            composable(NavRoutes.ADMIN_HISTORY) {
+                AdministrativeHistoryScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
+            composable(NavRoutes.ADMIN_MASTER_TOOLS) {
+                AdminMasterToolsScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
             composable("reports") {
                 ReportsScreen(viewModel = viewModel) { navController.popBackStack() }
             }
@@ -216,4 +222,3 @@ fun SgmisApp(viewModel: SgmisViewModel) {
         }
     }
 }
-

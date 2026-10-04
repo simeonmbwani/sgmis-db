@@ -25,6 +25,7 @@ from apps.core.models import (
     SupervisorOverrideAudit,
 )
 from apps.notifications.models import Notification
+from apps.patrols.models import PatrolLog
 
 
 class ControlledRecordsAndAssignedDutiesTests(TestCase):
@@ -94,6 +95,21 @@ class ControlledRecordsAndAssignedDutiesTests(TestCase):
             guard_b=self.guard2,
             station=self.station1,
         )
+
+    def test_administrator_can_monitor_patrols_but_cannot_execute_them(self):
+        patrol = PatrolLog.objects.create(guard=self.guard, station=self.station1)
+        self.client.force_authenticate(user=self.admin)
+
+        view_response = self.client.get("/patrols/logs/")
+        self.assertEqual(view_response.status_code, status.HTTP_200_OK)
+        patrol_rows = view_response.data.get("results", view_response.data) if isinstance(view_response.data, dict) else view_response.data
+        self.assertIn(str(patrol.id), [str(row["id"]) for row in patrol_rows])
+
+        create_response = self.client.post("/patrols/logs/", {
+            "guard": str(self.guard.id),
+            "station": str(self.station1.id),
+        }, format="json")
+        self.assertEqual(create_response.status_code, status.HTTP_403_FORBIDDEN)
 
     # 1. Superuser sets verified current employee number, name, station, shift, pair, roster position and leave balance on a guard record.
     def test_01_superuser_sets_verified_current_records(self):
@@ -728,12 +744,29 @@ class ControlledRecordsAndAssignedDutiesTests(TestCase):
         # Edit
         res_edit = self.client.patch(
             f"/escorts/duties/{duty.id}/",
-            {"destination": "Secured Site Alternative"},
+            {
+                "destination": "Secured Site Alternative",
+                "purpose": "Secure transport",
+                "instructions": "Maintain radio contact",
+                "contact_numbers": "+260777000111",
+                "notes": "Approved route updated",
+            },
             format="json",
         )
         self.assertEqual(res_edit.status_code, status.HTTP_200_OK)
         duty.refresh_from_db()
         self.assertEqual(duty.destination, "Secured Site Alternative")
+        self.assertEqual(duty.purpose, "Secure transport")
+        self.assertEqual(duty.instructions, "Maintain radio contact")
+        self.assertTrue(SecurityAuditEvent.objects.filter(target_model="EscortDuty", target_id=str(duty.id)).exists())
+
+        self.client.force_authenticate(user=self.admin)
+        forbidden_progress = self.client.post(
+            f"/escorts/duties/{duty.id}/update_status/",
+            {"status": "EN_ROUTE"},
+            format="json",
+        )
+        self.assertEqual(forbidden_progress.status_code, status.HTTP_403_FORBIDDEN)
 
         # Cancel
         res_cancel = self.client.post(
@@ -828,12 +861,28 @@ class ControlledRecordsAndAssignedDutiesTests(TestCase):
         # Edit
         res_edit = self.client.patch(
             f"/exams/duties/{exam.id}/",
-            {"hall_post": "Main Hall Post 1"},
+            {
+                "hall_post": "Main Hall Post 1",
+                "supervisor_contact": "+260777000222",
+                "instructions": "Screen each entrance",
+                "reporting_time": "06:45:00",
+                "notes": "Revised reporting instructions",
+            },
             format="json",
         )
         self.assertEqual(res_edit.status_code, status.HTTP_200_OK)
         exam.refresh_from_db()
         self.assertEqual(exam.hall_post, "Main Hall Post 1")
+        self.assertEqual(exam.supervisor_contact, "+260777000222")
+        self.assertEqual(exam.instructions, "Screen each entrance")
+        self.assertTrue(SecurityAuditEvent.objects.filter(target_model="ExamDuty", target_id=str(exam.id)).exists())
+
+        forbidden_progress = self.client.post(
+            f"/exams/duties/{exam.id}/update_status/",
+            {"status": "IN_PROGRESS"},
+            format="json",
+        )
+        self.assertEqual(forbidden_progress.status_code, status.HTTP_403_FORBIDDEN)
 
         # Cancel
         res_cancel = self.client.post(
@@ -844,3 +893,62 @@ class ControlledRecordsAndAssignedDutiesTests(TestCase):
         self.assertEqual(res_cancel.status_code, status.HTTP_200_OK)
         exam.refresh_from_db()
         self.assertEqual(exam.status, ExamStatus.CANCELLED)
+
+    def test_25_administrative_history_is_admin_only_and_uses_existing_records(self):
+        adjustment = RecordAdjustmentRequest.objects.create(
+            guard=self.guard,
+            field_name="employee_number",
+            old_value="G-1001",
+            requested_value="G-1009",
+            approved_value="G-1009",
+            effective_date=date(2026, 10, 1),
+            reason="Verified from signed personnel ledger",
+            status=AdjustmentStatus.APPROVED,
+            requested_by=self.admin,
+            reviewed_by=self.admin,
+            reviewed_at=timezone.now(),
+        )
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get("/core/admin-history/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(any(row["id"] == str(adjustment.id) for row in response.data))
+
+        self.client.force_authenticate(user=self.supervisor)
+        denied = self.client.get("/core/admin-history/")
+        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_26_single_shift_reassignment_updates_only_selected_shift_and_audits(self):
+        target_date = date(2026, 10, 20)
+        selected_shift = Shift.objects.create(
+            station=self.station1, guard=self.guard, shift_type=ShiftType.DAY,
+            date=target_date, start_time=time(7, 0), end_time=time(18, 0),
+        )
+        other_shift = Shift.objects.create(
+            station=self.station1, guard=self.guard, shift_type=ShiftType.NIGHT,
+            date=target_date + timedelta(days=1), start_time=time(18, 0), end_time=time(7, 0),
+        )
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            f"/shifts/shifts/{selected_shift.id}/reassign/",
+            {"guard_id": str(self.guard2.id), "station_id": str(self.station2.id), "reason": "Approved single-post replacement"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        selected_shift.refresh_from_db()
+        other_shift.refresh_from_db()
+        self.assertEqual(selected_shift.guard, self.guard2)
+        self.assertEqual(selected_shift.station, self.station2)
+        self.assertEqual(other_shift.guard, self.guard)
+        self.assertEqual(other_shift.station, self.station1)
+        self.assertTrue(response.data["historical_preserved"])
+        self.assertFalse(response.data["roster_regenerated"])
+        self.assertTrue(SecurityAuditEvent.objects.filter(target_id=str(selected_shift.id), details__action="SINGLE_SHIFT_REASSIGNED").exists())
+
+    def test_27_supervisor_cannot_create_national_guard_pair(self):
+        self.client.force_authenticate(user=self.supervisor)
+        response = self.client.post(
+            "/stations/pairs/",
+            {"station": str(self.station1.id), "guard_a": str(self.guard.id), "guard_b": str(self.guard2.id), "rotation_order": 2},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

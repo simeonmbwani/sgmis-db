@@ -741,23 +741,31 @@ class RoleAndDutyStateTest {
             NavRoutes.REPORTS,
             NavRoutes.OCCURRENCE_BOOK,
             NavRoutes.INCIDENTS,
-            NavRoutes.PATROL,
             NavRoutes.LEAVE,
             NavRoutes.VISITOR_BOOK,
-            NavRoutes.SOS,
             NavRoutes.NOTIFICATIONS,
             NavRoutes.SETTINGS,
-            NavRoutes.PROFILE
+            NavRoutes.PROFILE,
+            NavRoutes.RECORD_ADJUSTMENTS,
+            NavRoutes.ADMIN_HISTORY,
+            NavRoutes.ADMIN_MASTER_TOOLS
         )
         for (route in allAdminRoutes) {
             assertTrue("Administrator must have access to $route", RoleRouter.isRouteAllowed(route, AppRole.ADMINISTRATOR))
         }
+        for (guardExecutionRoute in listOf(NavRoutes.TODAY_SHIFT, NavRoutes.HANDOVER, NavRoutes.SOS, NavRoutes.GUARD_DUTY_PLAN)) {
+            assertFalse("Administrator must not access guard execution route $guardExecutionRoute", RoleRouter.isRouteAllowed(guardExecutionRoute, AppRole.ADMINISTRATOR))
+        }
+        assertTrue("Administrator may monitor patrol telemetry", RoleRouter.isRouteAllowed(NavRoutes.PATROL, AppRole.ADMINISTRATOR))
 
         // Supervisor must be blocked from admin dashboard and station provisioning
         assertFalse("Supervisor must NOT access admin dashboard", RoleRouter.isRouteAllowed(NavRoutes.ADMIN_DASHBOARD, AppRole.SUPERVISOR))
         assertFalse("Supervisor must NOT access station management", RoleRouter.isRouteAllowed(NavRoutes.STATION_MANAGEMENT, AppRole.SUPERVISOR))
         assertFalse("Supervisor must NOT access guard patrol execution", RoleRouter.isRouteAllowed(NavRoutes.PATROL, AppRole.SUPERVISOR))
         assertFalse("Supervisor must NOT access guard handover execution", RoleRouter.isRouteAllowed(NavRoutes.HANDOVER, AppRole.SUPERVISOR))
+        assertTrue("Supervisor may submit and track adjustment requests", RoleRouter.isRouteAllowed(NavRoutes.RECORD_ADJUSTMENTS, AppRole.SUPERVISOR))
+        assertFalse("Supervisor must NOT access national audit history", RoleRouter.isRouteAllowed(NavRoutes.ADMIN_HISTORY, AppRole.SUPERVISOR))
+        assertFalse("Supervisor must NOT access administrator master tools", RoleRouter.isRouteAllowed(NavRoutes.ADMIN_MASTER_TOOLS, AppRole.SUPERVISOR))
 
         // Guard must be blocked from all supervisory and administrative management consoles
         assertFalse("Guard must NOT access admin dashboard", RoleRouter.isRouteAllowed(NavRoutes.ADMIN_DASHBOARD, AppRole.GUARD))
@@ -766,6 +774,7 @@ class RoleAndDutyStateTest {
         assertFalse("Guard must NOT access roster management", RoleRouter.isRouteAllowed(NavRoutes.ROSTER_MANAGEMENT, AppRole.GUARD))
         assertFalse("Guard must NOT access attendance management", RoleRouter.isRouteAllowed(NavRoutes.ATTENDANCE_MANAGEMENT, AppRole.GUARD))
         assertFalse("Guard must NOT access reports", RoleRouter.isRouteAllowed(NavRoutes.REPORTS, AppRole.GUARD))
+        assertFalse("Guard must NOT access record adjustments", RoleRouter.isRouteAllowed(NavRoutes.RECORD_ADJUSTMENTS, AppRole.GUARD))
     }
 
     @Test
@@ -964,4 +973,3 @@ class RoleAndDutyStateTest {
         assertEquals(1, pendingLeave)
     }
 }
-

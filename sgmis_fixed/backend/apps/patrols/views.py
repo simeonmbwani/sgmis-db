@@ -8,7 +8,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from .models import Checkpoint, PatrolLog, CheckpointScan, PatrolStatus
 from .serializers import CheckpointSerializer, PatrolLogSerializer, CheckpointScanSerializer
 from apps.accounts.models import UserRole
-from apps.accounts.permissions import IsSupervisorOrAdmin
+from apps.accounts.permissions import IsSupervisorOrAdmin, IsGuard
 from apps.stations.utils import is_within_geofence
 from apps.shifts.models import Shift
 
@@ -34,6 +34,20 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
     serializer_class = PatrolLogSerializer
     permission_classes = [IsAuthenticated]
 
+    def get_permissions(self):
+        if self.action in ["create", "scan_checkpoint", "finish_patrol"]:
+            return [IsGuard()]
+        return [permission() for permission in self.permission_classes]
+
+    def update(self, request, *args, **kwargs):
+        raise PermissionDenied("Patrol history is read-only after creation.")
+
+    def partial_update(self, request, *args, **kwargs):
+        raise PermissionDenied("Patrol history is read-only after creation.")
+
+    def destroy(self, request, *args, **kwargs):
+        raise PermissionDenied("Patrol history is retained for operational audit.")
+
     def get_queryset(self):
         user = self.request.user
         qs = super().get_queryset()
@@ -57,8 +71,8 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
         if target_guard and str(target_guard) != str(user.id):
             raise PermissionDenied("Proxy actions are strictly prohibited. You cannot initiate a patrol for another guard.")
 
-        if user.role == UserRole.SUPERVISOR:
-            raise PermissionDenied("Supervisors have view-only access to patrols. Only on-duty guards can initiate a patrol.")
+        if user.role != UserRole.GUARD:
+            raise PermissionDenied("Only guards can initiate patrols.")
 
         if user.role == UserRole.GUARD:
             station = user.station
@@ -90,6 +104,8 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
         Button-only / unverified check-ins are strictly rejected.
         """
         patrol = self.get_object()
+        if request.user.role != UserRole.GUARD:
+            raise PermissionDenied("Only the assigned guard can record patrol checkpoint scans.")
         if patrol.status == PatrolStatus.COMPLETED:
             return Response(
                 {"detail": "Cannot scan checkpoint: Patrol is already marked as completed."},
