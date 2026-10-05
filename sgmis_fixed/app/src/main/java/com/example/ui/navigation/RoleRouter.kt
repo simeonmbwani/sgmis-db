@@ -96,11 +96,10 @@ object RoleRouter {
             )
             AppRole.SUPERVISOR -> {
                 // Supervisors focus on supervisory command, roster management, attendance/override,
-                // inspection, verification, and station oversight.
-                // Guard-only operational execution routes (patrol submission, shift handover submission,
+                // inspection, verification, and station oversight (including patrol oversight & assignment).
+                // Guard-only operational execution routes (shift handover submission,
                 // guard today shift, guard panic SOS) and admin-only routes are disallowed.
                 route !in listOf(
-                    NavRoutes.PATROL,
                     NavRoutes.HANDOVER,
                     NavRoutes.TODAY_SHIFT,
                     NavRoutes.EMERGENCY_SOS,

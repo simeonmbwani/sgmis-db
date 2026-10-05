@@ -197,18 +197,18 @@ class RoleAndDutyStateTest {
 
     @Test
     fun testRoleRouter_supervisorRouteAccessControl() {
-        // Supervisors can manage attendance, roster, users, view OB, etc.
+        // Supervisors can manage attendance, roster, users, view OB, patrol oversight, etc.
         assertTrue(RoleRouter.isRouteAllowed(NavRoutes.ATTENDANCE_MANAGEMENT, AppRole.SUPERVISOR))
         assertTrue(RoleRouter.isRouteAllowed(NavRoutes.ROSTER_MANAGEMENT, AppRole.SUPERVISOR))
         assertTrue(RoleRouter.isRouteAllowed(NavRoutes.USER_MANAGEMENT, AppRole.SUPERVISOR))
         assertTrue(RoleRouter.isRouteAllowed(NavRoutes.OCCURRENCE_BOOK, AppRole.SUPERVISOR))
+        assertTrue(RoleRouter.isRouteAllowed(NavRoutes.PATROL, AppRole.SUPERVISOR))
 
         // Disallowed admin-only routes
         assertFalse(RoleRouter.isRouteAllowed(NavRoutes.STATION_MANAGEMENT, AppRole.SUPERVISOR))
         assertFalse(RoleRouter.isRouteAllowed(NavRoutes.ADMIN_DASHBOARD, AppRole.SUPERVISOR))
 
         // Disallowed guard-only operational execution routes
-        assertFalse(RoleRouter.isRouteAllowed(NavRoutes.PATROL, AppRole.SUPERVISOR))
         assertFalse(RoleRouter.isRouteAllowed(NavRoutes.HANDOVER, AppRole.SUPERVISOR))
         assertFalse(RoleRouter.isRouteAllowed(NavRoutes.TODAY_SHIFT, AppRole.SUPERVISOR))
         assertFalse(RoleRouter.isRouteAllowed(NavRoutes.EMERGENCY_SOS, AppRole.SUPERVISOR))
@@ -458,6 +458,7 @@ class RoleAndDutyStateTest {
             NavRoutes.USER_MANAGEMENT,
             NavRoutes.OCCURRENCE_BOOK,
             NavRoutes.INCIDENTS,
+            NavRoutes.PATROL,
             NavRoutes.LEAVE,
             NavRoutes.VISITORS,
             NavRoutes.REPORTS,
@@ -471,7 +472,6 @@ class RoleAndDutyStateTest {
         }
 
         val prohibitedSupervisorRoutes = listOf(
-            NavRoutes.PATROL,
             NavRoutes.HANDOVER,
             NavRoutes.TODAY_SHIFT,
             NavRoutes.EMERGENCY_SOS,
@@ -556,6 +556,33 @@ class RoleAndDutyStateTest {
         assertTrue(RoleRouter.canPerformLiveOperation(AppRole.SUPERVISOR, GuardDutyState.OFF_DUTY))
         assertTrue(RoleRouter.canPerformLiveOperation(AppRole.SUPERVISOR, GuardDutyState.ON_DUTY))
         assertTrue(RoleRouter.canPerformLiveOperation(AppRole.SUPERVISOR, GuardDutyState.ELIGIBLE_FOR_DUTY))
+    }
+
+    @Test
+    fun testSupervisorPatrolOversightAccessAndStationIsolation() {
+        // 1. Supervisor access to patrol oversight route
+        assertTrue("Supervisor must be permitted access to patrol oversight", RoleRouter.isRouteAllowed(NavRoutes.PATROL, AppRole.SUPERVISOR))
+        assertTrue("Supervisor must be able to navigate to patrol oversight without duty lock", RoleRouter.isRouteAccessible(NavRoutes.PATROL, AppRole.SUPERVISOR, GuardDutyState.OFF_DUTY))
+
+        // 2. Guard patrol execution route and duty-lock preservation
+        assertTrue("Guard must be allowed patrol route", RoleRouter.isRouteAllowed(NavRoutes.PATROL, AppRole.GUARD))
+        assertFalse("Guard must NOT access patrol route when OFF_DUTY", RoleRouter.isRouteAccessible(NavRoutes.PATROL, AppRole.GUARD, GuardDutyState.OFF_DUTY))
+        assertTrue("Guard can access patrol route when ON_DUTY", RoleRouter.isRouteAccessible(NavRoutes.PATROL, AppRole.GUARD, GuardDutyState.ON_DUTY))
+
+        // 3. Administrator non-regression
+        assertTrue("Administrator may monitor patrol telemetry", RoleRouter.isRouteAllowed(NavRoutes.PATROL, AppRole.ADMINISTRATOR))
+        assertFalse("Supervisor must NOT access administrator dashboard", RoleRouter.isRouteAllowed(NavRoutes.ADMIN_DASHBOARD, AppRole.SUPERVISOR))
+        assertFalse("Supervisor must NOT access station management", RoleRouter.isRouteAllowed(NavRoutes.STATION_MANAGEMENT, AppRole.SUPERVISOR))
+
+        // 4. Station restriction preservation: supervisor ui state
+        val stationUser = User(id = "sup-1", username = "sup", role = "SUPERVISOR", station = "station-a", stationName = "Station A")
+        val state = com.example.ui.viewmodel.SgmisUiState(currentUser = stationUser)
+        assertEquals("station-a", state.currentStationId)
+        assertTrue(state.hasAssignedStation)
+
+        val unassignedUser = User(id = "sup-2", username = "sup2", role = "SUPERVISOR", station = null, stationName = null)
+        val unassignedState = com.example.ui.viewmodel.SgmisUiState(currentUser = unassignedUser)
+        assertFalse(unassignedState.hasAssignedStation)
     }
 
     @Test
@@ -761,7 +788,7 @@ class RoleAndDutyStateTest {
         // Supervisor must be blocked from admin dashboard and station provisioning
         assertFalse("Supervisor must NOT access admin dashboard", RoleRouter.isRouteAllowed(NavRoutes.ADMIN_DASHBOARD, AppRole.SUPERVISOR))
         assertFalse("Supervisor must NOT access station management", RoleRouter.isRouteAllowed(NavRoutes.STATION_MANAGEMENT, AppRole.SUPERVISOR))
-        assertFalse("Supervisor must NOT access guard patrol execution", RoleRouter.isRouteAllowed(NavRoutes.PATROL, AppRole.SUPERVISOR))
+        assertTrue("Supervisor must access patrol oversight and assignment", RoleRouter.isRouteAllowed(NavRoutes.PATROL, AppRole.SUPERVISOR))
         assertFalse("Supervisor must NOT access guard handover execution", RoleRouter.isRouteAllowed(NavRoutes.HANDOVER, AppRole.SUPERVISOR))
         assertTrue("Supervisor may submit and track adjustment requests", RoleRouter.isRouteAllowed(NavRoutes.RECORD_ADJUSTMENTS, AppRole.SUPERVISOR))
         assertFalse("Supervisor must NOT access national audit history", RoleRouter.isRouteAllowed(NavRoutes.ADMIN_HISTORY, AppRole.SUPERVISOR))

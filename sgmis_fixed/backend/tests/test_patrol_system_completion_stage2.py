@@ -659,3 +659,46 @@ class PatrolSystemCompletionStage2Tests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
         patrol.refresh_from_db()
         self.assertFalse(patrol.is_approved)
+
+    # =========================================================================
+    # 25. Supervisor patrol oversight access and station isolation
+    # =========================================================================
+    def test_25_supervisor_patrol_oversight_station_isolation(self):
+        patrol_a = PatrolLog.objects.create(
+            guard=self.guard_a,
+            station=self.station_a,
+            assigned_by=self.supervisor_a,
+            name="Station A Patrol",
+            status=PatrolStatus.IN_PROGRESS,
+        )
+        patrol_b = PatrolLog.objects.create(
+            guard=self.guard_b,
+            station=self.station_b,
+            assigned_by=self.supervisor_a,
+            name="Station B Patrol",
+            status=PatrolStatus.IN_PROGRESS,
+        )
+
+        # Supervisor A accesses patrol oversight list
+        self.client.force_authenticate(user=self.supervisor_a)
+        resp = self.client.get("/api/patrols/logs/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        results = resp.data.get("results", resp.data) if isinstance(resp.data, dict) else resp.data
+        returned_ids = [str(p["id"]) for p in results]
+        self.assertIn(str(patrol_a.id), returned_ids)
+        self.assertNotIn(str(patrol_b.id), returned_ids)
+
+        # Supervisor A can view own station patrol details
+        resp_a = self.client.get(f"/api/patrols/logs/{patrol_a.id}/")
+        self.assertEqual(resp_a.status_code, status.HTTP_200_OK)
+
+        # Supervisor A CANNOT view foreign station patrol details
+        resp_b = self.client.get(f"/api/patrols/logs/{patrol_b.id}/")
+        self.assertEqual(resp_b.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Checkpoints for patrol oversight also isolate by station
+        resp_cp = self.client.get("/api/patrols/checkpoints/")
+        self.assertEqual(resp_cp.status_code, status.HTTP_200_OK)
+        cp_results = resp_cp.data.get("results", resp_cp.data) if isinstance(resp_cp.data, dict) else resp_cp.data
+        cp_stations = {cp["station"] for cp in cp_results}
+        self.assertTrue(all(s == self.station_a.id for s in cp_stations))

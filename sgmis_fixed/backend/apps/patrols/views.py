@@ -24,9 +24,15 @@ class CheckpointViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        user = self.request.user
         station_id = self.request.query_params.get("station")
         if station_id:
             qs = qs.filter(station_id=station_id)
+        elif user.is_authenticated and user.role == UserRole.SUPERVISOR:
+            if user.station:
+                qs = qs.filter(station=user.station)
+            else:
+                qs = qs.none()
         return qs
 
 class PatrolLogViewSet(viewsets.ModelViewSet):
@@ -73,6 +79,11 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
         filter_kwargs = {self.lookup_field: self.kwargs[lookup_url_kwarg]}
         obj = get_object_or_404(queryset, **filter_kwargs)
         self.check_object_permissions(self.request, obj)
+        user = self.request.user
+        if user and user.is_authenticated:
+            if user.role == UserRole.SUPERVISOR:
+                if not user.station or obj.station_id != user.station_id:
+                    raise PermissionDenied("Station isolation: Access denied to patrol from another station.")
         return obj
 
     def perform_create(self, serializer):

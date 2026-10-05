@@ -48,9 +48,9 @@ fun PatrolScreen(
     var rejectReasonText by remember { mutableStateOf("") }
 
     val currentUser = uiState.currentUser
-    val isSupervisor = currentUser?.role == "SUPERVISOR"
-    val isAdmin = currentUser?.appRole == com.example.data.model.AppRole.ADMINISTRATOR
-    val isGuard = currentUser?.role == "GUARD" || currentUser?.role == null
+    val isSupervisor = currentUser?.isSupervisor == true || uiState.appRole == com.example.data.model.AppRole.SUPERVISOR || currentUser?.role == "SUPERVISOR" || currentUser?.role == "STATION_SUPERVISOR"
+    val isAdmin = currentUser?.isAdmin == true || uiState.appRole == com.example.data.model.AppRole.ADMINISTRATOR
+    val isGuard = !isSupervisor && !isAdmin
 
     var elapsedSeconds by remember { mutableIntStateOf(0) }
     var scannedCheckpointIds by remember { mutableStateOf(setOf<String>()) }
