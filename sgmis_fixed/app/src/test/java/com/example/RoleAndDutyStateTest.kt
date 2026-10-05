@@ -1055,4 +1055,46 @@ class RoleAndDutyStateTest {
         assertNotNull(coverage.pair)
         assertEquals(1, coverage.availableReliefGuards.size)
     }
+
+    @Test
+    fun testAuthoritativeDutyStateAndClockFlags() {
+        val shiftEligible = Shift(
+            id = "s-el-1",
+            date = "2026-10-05",
+            shiftType = "DAY",
+            station = "st-1",
+            stationName = "Station Alpha",
+            startTime = "07:00",
+            endTime = "18:00",
+            guard = "g-1",
+            guardName = "Test Guard",
+            rawDutyState = "ELIGIBLE_FOR_DUTY",
+            clockInEnabled = true,
+            clockOutEnabled = false
+        )
+        assertEquals(GuardDutyState.ELIGIBLE_FOR_DUTY, shiftEligible.dutyState)
+        assertTrue(shiftEligible.isEligibleForDuty)
+        assertTrue(shiftEligible.clockInEnabled)
+        assertFalse(shiftEligible.clockOutEnabled)
+
+        val shiftLeave = Shift(
+            id = "s-lv-1",
+            date = "2026-10-05",
+            shiftType = "DAY",
+            station = "st-1",
+            stationName = "Station Alpha",
+            startTime = "07:00",
+            endTime = "18:00",
+            guard = "g-1",
+            guardName = "Test Guard",
+            rawDutyState = "ON_LEAVE",
+            leaveType = "ANNUAL",
+            clockInEnabled = false,
+            clockOutEnabled = false
+        )
+        assertEquals(GuardDutyState.ON_LEAVE, shiftLeave.dutyState)
+        assertTrue(shiftLeave.isOnLeave)
+        assertTrue(shiftLeave.isOffDuty)
+        assertFalse(shiftLeave.isEligibleForDuty)
+    }
 }

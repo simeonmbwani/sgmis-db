@@ -1285,10 +1285,12 @@ fun DateOperationalMatrixCard(
     shiftsOnDate: List<Shift>,
     guardPairs: List<GuardPair> = emptyList()
 ) {
-    val dayShifts = shiftsOnDate.filter { it.shiftType == "DAY" && it.assignmentType != "TIME_OFF" }
-    val nightShifts = shiftsOnDate.filter { it.shiftType == "NIGHT" && it.assignmentType != "TIME_OFF" }
-    val timeOffShifts = shiftsOnDate.filter { it.shiftType == "OFF" || it.shiftType == "REST" || it.assignmentType == "TIME_OFF" }
-    val specialShifts = shiftsOnDate.filter { it.assignmentType in listOf("EXAM_ESCORT", "ESCORT") }
+    val isLeaveShift = { s: Shift -> s.isOnLeave || s.rawDutyState == "ON_LEAVE" || s.leaveType != null }
+    val dayShifts = shiftsOnDate.filter { it.shiftType == "DAY" && it.assignmentType != "TIME_OFF" && !isLeaveShift(it) }
+    val nightShifts = shiftsOnDate.filter { it.shiftType == "NIGHT" && it.assignmentType != "TIME_OFF" && !isLeaveShift(it) }
+    val timeOffShifts = shiftsOnDate.filter { (it.shiftType == "OFF" || it.shiftType == "REST" || it.assignmentType == "TIME_OFF") && !isLeaveShift(it) }
+    val leaveShifts = shiftsOnDate.filter { isLeaveShift(it) }
+    val specialShifts = shiftsOnDate.filter { it.assignmentType in listOf("EXAM_ESCORT", "ESCORT") && !isLeaveShift(it) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1360,6 +1362,17 @@ fun DateOperationalMatrixCard(
                 icon = Icons.Default.Bedtime,
                 shifts = timeOffShifts
             )
+
+            // Approved Leave Section
+            if (leaveShifts.isNotEmpty()) {
+                OperationalShiftBlock(
+                    title = "ON APPROVED LEAVE (UNAVAILABLE)",
+                    badgeText = "ON LEAVE",
+                    badgeColor = MaterialTheme.colorScheme.tertiary,
+                    icon = Icons.Default.EventBusy,
+                    shifts = leaveShifts
+                )
+            }
 
             if (specialShifts.isNotEmpty()) {
                 OperationalShiftBlock(

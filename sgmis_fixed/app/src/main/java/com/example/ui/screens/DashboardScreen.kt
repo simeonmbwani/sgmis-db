@@ -305,7 +305,7 @@ fun DashboardScreen(
                                 )
 
                                 Text(
-                                    text = "Post: ${uiState.currentStationName} • Partner: ${uiState.assignedPartnerName}",
+                                    text = "Post: ${uiState.currentStationName}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -355,7 +355,7 @@ fun DashboardScreen(
                                         }
                                     }
                                     Text("Messages", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                                    Text("Partner & Supervisor comms", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("Supervisor comms", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
 
@@ -743,7 +743,7 @@ fun DashboardScreen(
                                         }
                                     }
                                     Text("Messages", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                                    Text("Partner & Supervisor comms", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("Supervisor comms", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
 
@@ -841,7 +841,7 @@ fun DashboardScreen(
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = "Station: ${nextDutyShift.stationName} • Partner: ${nextDutyShift.partnerName ?: "Solo"}",
+                                        text = "Station: ${nextDutyShift.stationName}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -1139,7 +1139,7 @@ fun DashboardScreen(
                                 )
 
                                 Text(
-                                    text = "Hours: ${shift?.startTime ?: "07:00"}–${shift?.endTime ?: "18:00"} • Partner: ${uiState.assignedPartnerName}",
+                                    text = "Hours: ${shift?.startTime ?: "07:00"}–${shift?.endTime ?: "18:00"}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1553,9 +1553,7 @@ fun DirectMessagesDialog(
     val currentUserId = uiState.currentUser?.id
     val shift = uiState.todayShift
 
-    // Available messaging targets: Partner and Station Supervisor
-    val partnerId = shift?.partner
-    val partnerName = uiState.assignedPartnerName
+    // Available messaging targets: Station Supervisor and Administrator
     val supervisor = remember(uiState.users, uiState.currentStationId) {
         uiState.users.find { it.role == "SUPERVISOR" && it.station == uiState.currentStationId }
             ?: uiState.users.find { it.role == "SUPERVISOR" }
@@ -1563,9 +1561,15 @@ fun DirectMessagesDialog(
     val supervisorId = supervisor?.id
     val supervisorName = supervisor?.fullName ?: supervisor?.username ?: "Station Supervisor"
 
-    // Default recipient is partner if assigned, otherwise supervisor
-    var selectedRecipientId by remember(partnerId, supervisorId) {
-        mutableStateOf(partnerId ?: supervisorId ?: "")
+    val admin = remember(uiState.users) {
+        uiState.users.find { it.role == "ADMINISTRATOR" || it.role == "ADMIN" }
+    }
+    val adminId = admin?.id
+    val adminName = admin?.fullName ?: admin?.username ?: "Administrator"
+
+    // Default recipient is supervisor, otherwise admin
+    var selectedRecipientId by remember(supervisorId, adminId) {
+        mutableStateOf(supervisorId ?: adminId ?: "")
     }
 
     LaunchedEffect(Unit) {
@@ -1622,18 +1626,18 @@ fun DirectMessagesDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (!partnerId.isNullOrBlank()) {
-                        FilterChip(
-                            selected = selectedRecipientId == partnerId,
-                            onClick = { selectedRecipientId = partnerId },
-                            label = { Text("Partner ($partnerName)", style = MaterialTheme.typography.labelSmall) }
-                        )
-                    }
                     if (!supervisorId.isNullOrBlank()) {
                         FilterChip(
                             selected = selectedRecipientId == supervisorId,
                             onClick = { selectedRecipientId = supervisorId },
                             label = { Text(supervisorName, style = MaterialTheme.typography.labelSmall) }
+                        )
+                    }
+                    if (!adminId.isNullOrBlank()) {
+                        FilterChip(
+                            selected = selectedRecipientId == adminId,
+                            onClick = { selectedRecipientId = adminId },
+                            label = { Text(adminName, style = MaterialTheme.typography.labelSmall) }
                         )
                     }
                 }
@@ -2658,7 +2662,37 @@ private fun SupervisorCurrentShiftCard(
                                     )
                                 }
 
+                                val isLeave = shift.isOnLeave || shift.rawDutyState == "ON_LEAVE" || shift.leaveType != null
+                                val isBeforeStart = try {
+                                    val harareTz = TimeZone.getTimeZone("Africa/Harare")
+                                    val cal = Calendar.getInstance(harareTz)
+                                    val curMinutes = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+                                    val parts = shift.startTime.split(":")
+                                    val startMinutes = parts[0].toInt() * 60 + parts[1].toInt()
+                                    if (shift.shiftType.uppercase() == "NIGHT") {
+                                        curMinutes < startMinutes && curMinutes >= (7 * 60)
+                                    } else {
+                                        curMinutes < startMinutes
+                                    }
+                                } catch (e: Exception) {
+                                    false
+                                }
+
                                 when {
+                                    isLeave -> {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.tertiary,
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "○ On Leave",
+                                                color = MaterialTheme.colorScheme.onTertiary,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
                                     att?.clockOut != null -> {
                                         Surface(
                                             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -2683,6 +2717,20 @@ private fun SupervisorCurrentShiftCard(
                                                 color = Color.White,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                    isBeforeStart -> {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = if (shift.shiftType.uppercase() == "NIGHT") "○ Scheduled (Night)" else "○ Scheduled",
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.SemiBold,
                                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                             )
                                         }

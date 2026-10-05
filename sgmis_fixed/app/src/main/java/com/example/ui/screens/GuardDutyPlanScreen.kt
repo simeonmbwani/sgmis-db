@@ -330,7 +330,7 @@ fun GuardDutyPlanScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "Station: ${nextDuty.stationName} • Partner: ${nextDuty.partnerName ?: "Solo"}",
+                                    text = "Station: ${nextDuty.stationName}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -494,13 +494,6 @@ fun BlueprintRosterShiftItem(shift: Shift, currentUserId: String?) {
                         fontWeight = if (isTimeOff) FontWeight.Normal else FontWeight.Medium,
                         color = if (isTimeOff) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                     )
-                    if (!isTimeOff) {
-                        Text(
-                            text = "Partner: ${shift.partnerName ?: "Solo Assignment"}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
 
                 if (!isTimeOff) {
@@ -702,7 +695,7 @@ fun AuthoritativeRosterTable(
                                 )
 
                                 Text(
-                                    text = if (isTimeOff) "-" else (shift.partnerName ?: "Solo"),
+                                    text = "-",
                                     style = MaterialTheme.typography.bodySmall,
                                     modifier = Modifier.width(110.dp)
                                 )

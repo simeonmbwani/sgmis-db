@@ -247,6 +247,32 @@ class Shift(models.Model):
     def __str__(self):
         return f"{self.date} {self.shift_type} ({self.start_time}-{self.end_time}) - {self.guard.get_full_name() or self.guard.username} @ {self.station.name}"
 
+    def clean(self):
+        super().clean()
+        if self.pair and self.assignment_type == AssignmentType.NORMAL and self.shift_type in [ShiftType.DAY, ShiftType.NIGHT]:
+            # Enforce pair invariant: No duplicate shift_type under same pair on same date
+            dup = Shift.objects.filter(
+                pair=self.pair,
+                date=self.date,
+                shift_type=self.shift_type,
+                assignment_type=AssignmentType.NORMAL,
+            ).exclude(id=self.id)
+            if dup.exists():
+                raise ValidationError(
+                    f"Pair already has an active {self.shift_type} shift on {self.date}."
+                )
+
+            # Maximum 2 distinct active guards scheduled per pair per date (1 DAY, 1 NIGHT)
+            active_pair_shifts = Shift.objects.filter(
+                pair=self.pair,
+                date=self.date,
+                assignment_type=AssignmentType.NORMAL,
+            ).exclude(id=self.id).exclude(shift_type=ShiftType.OFF)
+            if active_pair_shifts.count() >= 2:
+                raise ValidationError(
+                    f"Maximum 2 guards (1 DAY, 1 NIGHT) can be scheduled for a pair on {self.date}."
+                )
+
     def get_partner(self):
         """
         Determines the assigned partner guard for this shift.

@@ -1266,3 +1266,272 @@ def reject_holiday_compensation(duty_record, user, reason=""):
 
         return locked_record
 
+
+def resolve_guard_duty(guard, date=None, current_time=None):
+    """
+    Authoritative single source of truth for resolving a guard's duty status.
+    Evaluation order:
+    1. Guard active status: if not active -> INACTIVE, is_off_duty=True
+    2. Active approved leave: if start_date <= date <= end_date -> ON_LEAVE
+    3. Active exam duty: if assigned on date -> EXAM
+    4. Active escort duty: if scheduled on date -> ESCORT
+    5. Scheduled shift on date (or ongoing overnight shift from date-1):
+       - Prioritizes DAY/NIGHT duty shifts over OFF.
+       - If shift is OFF/TIME_OFF -> OFF_DUTY / TIME_OFF
+       - If attendance clocked out -> OFF_DUTY
+       - If attendance clocked in:
+         - if early clockout OTP active -> EARLY_EXIT_PENDING
+         - else -> ON_DUTY
+       - If not clocked in:
+         - if now < reporting_open: ELIGIBLE_FOR_DUTY (clock_in_enabled=False)
+         - if reporting_open <= now <= sched_end: ELIGIBLE_FOR_DUTY (clock_in_enabled=True)
+         - if now > sched_end: OFF_DUTY (clock_in_enabled=False)
+    6. If no duty shift -> OFF_DUTY
+    """
+    from apps.accounts.models import User
+    from apps.leave.models import LeaveApplication, LeaveStatus
+    from apps.exams.models import ExamDuty, ExamStatus
+    from apps.escorts.models import EscortDuty, EscortStatus
+    from django.core.cache import cache
+
+    if isinstance(guard, (str, uuid.UUID)):
+        guard = User.objects.filter(id=guard).first()
+
+    now_tz = timezone.localtime(timezone.now())
+    if date is None:
+        target_date = now_tz.date()
+    elif isinstance(date, str):
+        try:
+            target_date = dt_cls.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            target_date = now_tz.date()
+    else:
+        target_date = date
+
+    if current_time is None:
+        eval_dt = now_tz
+    elif isinstance(current_time, dt_cls):
+        eval_dt = timezone.localtime(current_time) if timezone.is_aware(current_time) else timezone.make_aware(current_time, timezone.get_current_timezone())
+    elif isinstance(current_time, time):
+        eval_dt = timezone.make_aware(dt_cls.combine(target_date, current_time), timezone.get_current_timezone())
+    else:
+        eval_dt = now_tz
+
+    base_result = {
+        "guard_id": str(guard.id) if guard else None,
+        "guard_name": (guard.get_full_name() or guard.username) if guard else "Unknown",
+        "date": target_date.isoformat(),
+        "duty_state": "OFF_DUTY",
+        "leave_type": None,
+        "attendance_status": "OFF_DUTY",
+        "is_on_duty": False,
+        "is_off_duty": True,
+        "is_eligible_for_duty": False,
+        "is_on_leave": False,
+        "clock_in_enabled": False,
+        "clock_out_enabled": False,
+        "shift": None,
+        "leave_app": None,
+        "exam_duty": None,
+        "escort_duty": None,
+        "attendance": None,
+        "station": getattr(guard, "station", None),
+    }
+
+    if not guard or not guard.is_active:
+        base_result["duty_state"] = "INACTIVE"
+        return base_result
+
+    # 1. Approved Leave Check (strictly checking start_date <= date <= end_date)
+    leave_app = LeaveApplication.objects.filter(
+        guard=guard,
+        status=LeaveStatus.APPROVED,
+        start_date__lte=target_date,
+        end_date__gte=target_date,
+    ).first()
+
+    if leave_app:
+        base_result.update({
+            "duty_state": "ON_LEAVE",
+            "leave_type": leave_app.leave_type,
+            "attendance_status": "ON_LEAVE",
+            "is_on_duty": False,
+            "is_off_duty": True,
+            "is_eligible_for_duty": False,
+            "is_on_leave": True,
+            "clock_in_enabled": False,
+            "clock_out_enabled": False,
+            "leave_app": leave_app,
+        })
+        return base_result
+
+    # 2. Examination Duty Check
+    exam_duty = ExamDuty.objects.filter(
+        guard=guard,
+        date=target_date,
+        status__in=[ExamStatus.ASSIGNED, ExamStatus.ACKNOWLEDGED, ExamStatus.IN_PROGRESS],
+    ).first()
+
+    if exam_duty:
+        base_result.update({
+            "duty_state": "EXAM",
+            "attendance_status": "ON_DUTY" if exam_duty.status == ExamStatus.IN_PROGRESS else "NOT_CLOCKED_IN",
+            "is_on_duty": True,
+            "is_off_duty": False,
+            "is_eligible_for_duty": False,
+            "is_on_leave": False,
+            "clock_in_enabled": True,
+            "clock_out_enabled": True,
+            "exam_duty": exam_duty,
+        })
+        return base_result
+
+    # 3. Escort Duty Check
+    escort_duty = EscortDuty.objects.filter(
+        guard=guard,
+        start_time__date__lte=target_date,
+        end_time__date__gte=target_date,
+        status__in=[EscortStatus.SCHEDULED, EscortStatus.ASSIGNED, EscortStatus.ACKNOWLEDGED, EscortStatus.EN_ROUTE],
+    ).first()
+
+    if escort_duty:
+        base_result.update({
+            "duty_state": "ESCORT",
+            "attendance_status": "ON_DUTY" if escort_duty.status == EscortStatus.EN_ROUTE else "NOT_CLOCKED_IN",
+            "is_on_duty": True,
+            "is_off_duty": False,
+            "is_eligible_for_duty": False,
+            "is_on_leave": False,
+            "clock_in_enabled": True,
+            "clock_out_enabled": True,
+            "escort_duty": escort_duty,
+        })
+        return base_result
+
+    # 4. Scheduled Shift Check
+    # Check for overnight shift from yesterday if early morning (< 07:00)
+    shift = None
+    if target_date == now_tz.date() and eval_dt.time() < time(7, 0):
+        yesterday = target_date - timedelta(days=1)
+        overnight = Shift.objects.filter(
+            guard=guard,
+            date=yesterday,
+            shift_type=ShiftType.NIGHT,
+        ).select_related("station", "pair").first()
+        if overnight:
+            att_overnight = Attendance.objects.filter(shift=overnight, guard=guard).first()
+            if att_overnight and att_overnight.clock_in and not att_overnight.clock_out:
+                shift = overnight
+
+    if not shift:
+        shifts_today = list(
+            Shift.objects.filter(guard=guard, date=target_date).select_related("station", "pair")
+        )
+        # Prioritize active working duty shifts (DAY / NIGHT) over OFF / TIME_OFF
+        shift = next((s for s in shifts_today if s.shift_type in [ShiftType.DAY, ShiftType.NIGHT] and s.assignment_type != AssignmentType.TIME_OFF), None)
+        if not shift:
+            shift = next((s for s in shifts_today if s.shift_type != ShiftType.OFF and s.assignment_type != AssignmentType.TIME_OFF), None)
+        if not shift and shifts_today:
+            shift = shifts_today[0]
+
+    if not shift:
+        return base_result
+
+    base_result["shift"] = shift
+    base_result["station"] = shift.station
+
+    if shift.shift_type == ShiftType.OFF or shift.assignment_type == AssignmentType.TIME_OFF:
+        base_result.update({
+            "duty_state": "TIME_OFF",
+            "attendance_status": "OFF_DUTY",
+            "is_on_duty": False,
+            "is_off_duty": True,
+            "is_eligible_for_duty": False,
+            "clock_in_enabled": False,
+            "clock_out_enabled": False,
+        })
+        return base_result
+
+    # Working shift attendance evaluation
+    att = Attendance.objects.filter(shift=shift, guard=guard).first()
+    base_result["attendance"] = att
+
+    if att and att.clock_out:
+        base_result.update({
+            "duty_state": "OFF_DUTY",
+            "attendance_status": "CLOCKED_OUT",
+            "is_on_duty": False,
+            "is_off_duty": True,
+            "is_eligible_for_duty": False,
+            "clock_in_enabled": False,
+            "clock_out_enabled": False,
+        })
+        return base_result
+
+    if att and att.clock_in:
+        early_exit_key = f"early_clockout_otp_{shift.id}"
+        is_early_pending = bool(cache.get(early_exit_key))
+        duty_st = "EARLY_EXIT_PENDING" if is_early_pending else "ON_DUTY"
+        base_result.update({
+            "duty_state": duty_st,
+            "attendance_status": "CLOCKED_IN",
+            "is_on_duty": True,
+            "is_off_duty": False,
+            "is_eligible_for_duty": False,
+            "clock_in_enabled": False,
+            "clock_out_enabled": True,
+        })
+        return base_result
+
+    # Unclocked working shift: evaluate schedule time window
+    base_result["attendance_status"] = "NOT_CLOCKED_IN"
+
+    sched_start_dt = timezone.make_aware(
+        dt_cls.combine(shift.date, shift.start_time), timezone.get_current_timezone()
+    )
+    if shift.end_time <= shift.start_time:
+        sched_end_dt = timezone.make_aware(
+            dt_cls.combine(shift.date + timedelta(days=1), shift.end_time),
+            timezone.get_current_timezone(),
+        )
+    else:
+        sched_end_dt = timezone.make_aware(
+            dt_cls.combine(shift.date, shift.end_time), timezone.get_current_timezone()
+        )
+
+    reporting_open_dt = sched_start_dt - timedelta(minutes=30)
+
+    if eval_dt < reporting_open_dt:
+        # Before reporting window opens: Scheduled, recognized as eligible, but clock-in not yet open
+        base_result.update({
+            "duty_state": "ELIGIBLE_FOR_DUTY",
+            "is_on_duty": False,
+            "is_off_duty": False,
+            "is_eligible_for_duty": True,
+            "clock_in_enabled": False,
+            "clock_out_enabled": False,
+        })
+    elif reporting_open_dt <= eval_dt <= sched_end_dt:
+        # Inside active duty / reporting window: Clock-in unlocked
+        base_result.update({
+            "duty_state": "ELIGIBLE_FOR_DUTY",
+            "is_on_duty": False,
+            "is_off_duty": False,
+            "is_eligible_for_duty": True,
+            "clock_in_enabled": True,
+            "clock_out_enabled": False,
+        })
+    else:
+        # Shift window ended without clocking in
+        base_result.update({
+            "duty_state": "OFF_DUTY",
+            "is_on_duty": False,
+            "is_off_duty": True,
+            "is_eligible_for_duty": False,
+            "clock_in_enabled": False,
+            "clock_out_enabled": False,
+        })
+
+    return base_result
+
+

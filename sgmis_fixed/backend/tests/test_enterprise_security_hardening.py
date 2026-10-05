@@ -58,9 +58,9 @@ class EnterpriseSecurityHardeningTests(TestCase):
             employee_number="SEC-102",
         )
 
-    def test_brute_force_lockout_after_five_failed_attempts(self):
-        """5 failed login attempts trigger a 15-minute lockout (HTTP 429)."""
-        for i in range(4):
+    def test_brute_force_lockout_after_three_failed_attempts(self):
+        """3 failed login attempts trigger a 15-minute lockout (HTTP 429)."""
+        for i in range(2):
             resp = self.client.post("/auth/login/", {
                 "identifier": "guard_alice",
                 "password": "wrongpassword!",
@@ -68,15 +68,15 @@ class EnterpriseSecurityHardeningTests(TestCase):
             self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
             self.assertFalse(resp.data.get("is_locked", False))
 
-        # 5th attempt triggers lockout
-        fifth_resp = self.client.post("/auth/login/", {
+        # 3rd attempt triggers lockout
+        third_resp = self.client.post("/auth/login/", {
             "identifier": "guard_alice",
             "password": "wrongpassword!",
         })
-        self.assertEqual(fifth_resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
-        self.assertTrue(fifth_resp.data.get("is_locked", False))
+        self.assertEqual(third_resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertTrue(third_resp.data.get("is_locked", False))
 
-        # 6th attempt (even with right password) is blocked by lockout
+        # 4th attempt (even with right password) is blocked by lockout
         blocked_resp = self.client.post("/auth/login/", {
             "identifier": "guard_alice",
             "password": "alicepassword123",

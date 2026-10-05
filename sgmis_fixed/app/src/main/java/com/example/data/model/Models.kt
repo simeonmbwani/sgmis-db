@@ -138,6 +138,8 @@ data class Shift(
     @Json(name = "attendance_status") val attendanceStatus: String = "NOT_CLOCKED_IN",
     @Json(name = "duty_state") val rawDutyState: String? = null,
     @Json(name = "leave_type") val leaveType: String? = null,
+    @Json(name = "clock_in_enabled") val clockInEnabled: Boolean = false,
+    @Json(name = "clock_out_enabled") val clockOutEnabled: Boolean = false,
     @Json(name = "late_report_required") val lateReportRequired: Boolean = false,
     @Json(name = "is_serious_late") val isSeriousLate: Boolean = false,
     @Json(name = "is_late") val isLate: Boolean = false

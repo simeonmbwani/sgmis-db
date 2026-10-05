@@ -28,6 +28,8 @@ class ShiftSerializer(serializers.ModelSerializer):
     late_report_required = serializers.SerializerMethodField()
     is_serious_late = serializers.SerializerMethodField()
     is_late = serializers.SerializerMethodField()
+    clock_in_enabled = serializers.SerializerMethodField()
+    clock_out_enabled = serializers.SerializerMethodField()
 
     class Meta:
         model = Shift
@@ -57,6 +59,8 @@ class ShiftSerializer(serializers.ModelSerializer):
             "late_report_required",
             "is_serious_late",
             "is_late",
+            "clock_in_enabled",
+            "clock_out_enabled",
             "created_at",
         ]
         read_only_fields = ["id", "created_at"]
@@ -141,9 +145,6 @@ class ShiftSerializer(serializers.ModelSerializer):
         else:
             sched_end_dt = timezone.make_aware(datetime.combine(obj.date, obj.end_time), timezone.get_current_timezone())
 
-        reporting_open = sched_start_dt - timedelta(minutes=30)
-        if now < reporting_open:
-            return "OFF_DUTY"
         if now > sched_end_dt:
             return "OFF_DUTY"
 
@@ -196,6 +197,35 @@ class ShiftSerializer(serializers.ModelSerializer):
             return False
         sched_start_dt = timezone.make_aware(datetime.combine(obj.date, obj.start_time), timezone.get_current_timezone())
         return now > (sched_start_dt + timedelta(minutes=15))
+
+    def get_clock_in_enabled(self, obj):
+        if obj.assignment_type == AssignmentType.TIME_OFF or obj.shift_type == ShiftType.OFF:
+            return False
+        att = getattr(obj, "_attendance_record", None)
+        if att is None:
+            att = Attendance.objects.filter(shift=obj, guard=obj.guard).first()
+        if att and att.clock_in:
+            return False
+        from django.utils import timezone
+        from datetime import datetime, timedelta
+        now = timezone.localtime(timezone.now())
+        if obj.date != now.date():
+            return False
+        sched_start_dt = timezone.make_aware(datetime.combine(obj.date, obj.start_time), timezone.get_current_timezone())
+        if obj.end_time <= obj.start_time:
+            sched_end_dt = timezone.make_aware(datetime.combine(obj.date + timedelta(days=1), obj.end_time), timezone.get_current_timezone())
+        else:
+            sched_end_dt = timezone.make_aware(datetime.combine(obj.date, obj.end_time), timezone.get_current_timezone())
+        reporting_open = sched_start_dt - timedelta(minutes=30)
+        return reporting_open <= now <= sched_end_dt
+
+    def get_clock_out_enabled(self, obj):
+        if obj.assignment_type == AssignmentType.TIME_OFF or obj.shift_type == ShiftType.OFF:
+            return False
+        att = getattr(obj, "_attendance_record", None)
+        if att is None:
+            att = Attendance.objects.filter(shift=obj, guard=obj.guard).first()
+        return bool(att and att.clock_in and not att.clock_out)
 
 class ShiftHandoverSerializer(serializers.ModelSerializer):
     station_name = serializers.CharField(source="station.name", read_only=True)

@@ -62,7 +62,7 @@ class LoginView(APIView):
                 details={"reason": "Attempt on locked account", "remaining_minutes": remaining_minutes}
             )
             return Response({
-                "detail": f"Account locked due to 5 failed login attempts. Please retry after {remaining_minutes} minute(s).",
+                "detail": f"Account locked due to 3 failed login attempts. Please retry after {remaining_minutes} minute(s).",
                 "is_locked": True,
                 "lockout_remaining_minutes": remaining_minutes,
                 "locked_until": attempt_record.locked_until.isoformat(),
@@ -86,24 +86,24 @@ class LoginView(APIView):
 
             if attempt_record:
                 attempt_record.failed_attempts += 1
-                if attempt_record.failed_attempts >= 5:
+                if attempt_record.failed_attempts >= 3:
                     attempt_record.locked_until = now + timedelta(minutes=15)
                     attempt_record.save()
                     log_security_event(
                         event_type=SecurityAuditEvent.EventType.LOGIN_FAILURE,
                         actor_username=identifier,
                         ip_address=client_ip,
-                        details={"reason": "Account locked after 5 failed attempts"}
+                        details={"reason": "Account locked after 3 failed attempts"}
                     )
                     return Response({
-                        "detail": "Maximum 5 failed login attempts exceeded. Account is locked for 15 minutes.",
+                        "detail": "Maximum 3 failed login attempts exceeded. Account is locked for 15 minutes.",
                         "is_locked": True,
                         "lockout_remaining_minutes": 15,
                         "locked_until": attempt_record.locked_until.isoformat(),
                     }, status=status.HTTP_429_TOO_MANY_REQUESTS)
                 else:
                     attempt_record.save()
-                    remaining_attempts = 5 - attempt_record.failed_attempts
+                    remaining_attempts = 3 - attempt_record.failed_attempts
                     log_security_event(
                         event_type=SecurityAuditEvent.EventType.LOGIN_FAILURE,
                         actor_username=identifier,
@@ -242,7 +242,7 @@ class PasswordResetRequestView(APIView):
         Notification.objects.create(
             user=user,
             title="Password Reset OTP Generated",
-            message=f"Your security recovery OTP code is: {otp_val}. Valid for 10 minutes.",
+            message="A security recovery code has been dispatched to your registered mobile number via SMS.",
             notification_type="SECURITY_ALERT",
         )
 
@@ -339,6 +339,10 @@ class PasswordResetConfirmView(APIView):
         LoginAttempt.objects.filter(identifier=user.username).update(failed_attempts=0, locked_until=None)
         if user.employee_number:
             LoginAttempt.objects.filter(identifier=user.employee_number).update(failed_attempts=0, locked_until=None)
+        if user.email:
+            LoginAttempt.objects.filter(identifier=user.email).update(failed_attempts=0, locked_until=None)
+        if ident:
+            LoginAttempt.objects.filter(identifier=ident).update(failed_attempts=0, locked_until=None)
         if client_ip:
             LoginAttempt.objects.filter(ip_address=client_ip).update(failed_attempts=0, locked_until=None)
 

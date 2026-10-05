@@ -489,71 +489,15 @@ fun TodayShiftScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Text(
-                                    text = shift.guardName,
+                                    text = if (isGuard) (uiState.currentUser?.fullName ?: uiState.currentUser?.username ?: shift.guardName) else shift.guardName,
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
-                                if (!shift.employeeNumber.isNullOrBlank()) {
+                                val empNum = if (isGuard) (uiState.currentUser?.employeeNumber ?: shift.employeeNumber) else shift.employeeNumber
+                                if (!empNum.isNullOrBlank()) {
                                     Text(
-                                        text = "Employee ID: ${shift.employeeNumber}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontFamily = FontFamily.Monospace,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Assigned Guard Partner Card
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("partner_card"),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface
-                        ),
-                        shape = RoundedCornerShape(16.dp),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(20.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .background(
-                                        color = MaterialTheme.colorScheme.primaryContainer,
-                                        shape = RoundedCornerShape(12.dp)
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Groups,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Assigned Guard Partner",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = shift.partnerName ?: "Single Officer Post",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                if (shift.partnerEmployeeNumber != null) {
-                                    Text(
-                                        text = "Employee ID: ${shift.partnerEmployeeNumber}",
+                                        text = "Employee ID: $empNum",
                                         style = MaterialTheme.typography.bodySmall,
                                         fontFamily = FontFamily.Monospace,
                                         color = MaterialTheme.colorScheme.primary
