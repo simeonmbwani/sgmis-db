@@ -102,19 +102,6 @@ fun LeaveScreen(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
             )
-        },
-        floatingActionButton = {
-            val isPersonalLeaveActive = (!isSupervisor && !isAdmin) || (isSupervisor && selectedTabIndex == 1) || (isAdmin && selectedTabIndex == 2)
-            if (isPersonalLeaveActive) {
-                ExtendedFloatingActionButton(
-                    onClick = { showApplyDialog = true },
-                    icon = { Icon(Icons.Default.Add, null) },
-                    text = { Text("Apply for Leave") },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.testTag("apply_leave_fab")
-                )
-            }
         }
     ) { paddingValues ->
         Column(
@@ -321,117 +308,128 @@ fun PersonalLeaveView(
     onReject: (LeaveApplication) -> Unit,
     onApplyLeave: () -> Unit = {}
 ) {
-    Column(
+    LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(bottom = 32.dp)
     ) {
         // Company Administration routing notice
-        Surface(
-            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically
+        item {
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp)
             ) {
-                Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Official Notice: Casual Leave (1.0/mo) and Vacation (2.5/mo) accrue after completed working months. Public holiday duties earn 2 compensatory days.",
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Official Notice: Casual Leave (1.0/mo) and Vacation (2.5/mo) accrue after completed working months. Public holiday duties earn 2 compensatory days.",
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
         }
 
         // Authoritative Leave & Compensation Summary Table
-        Card(
-            modifier = Modifier.fillMaxWidth().testTag("leave_balance_card"),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            shape = RoundedCornerShape(16.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "Official Leave & Compensation Summary (${summary?.year ?: balance?.year ?: 2026})",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-
-                // Table Header
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Category", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.8f))
-                    Text("Accrued/Earned", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.3f))
-                    Text("Used", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.9f))
-                    Text("Remaining", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.0f))
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                // Authoritative rows: Vacation, Casual, Public Holiday Compensation
-                val rows = if (!summary?.categories.isNullOrEmpty()) {
-                    summary!!.categories
-                } else {
-                    listOf(
-                        LeaveCategoryRow("Vacation Leave", "Accrued", balance?.vacationDays ?: 0.0, balance?.usedVacation ?: 0.0, balance?.remainingVacation ?: 0.0),
-                        LeaveCategoryRow("Casual Leave", "Accrued", balance?.casualDays ?: 0.0, balance?.usedCasual ?: 0.0, balance?.remainingCasual ?: 0.0),
-                        LeaveCategoryRow("Public Holiday Compensation", "Earned", balance?.compensationEarned ?: 0.0, balance?.compensationUsed ?: 0.0, balance?.remainingCompensation ?: 0.0)
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth().testTag("leave_balance_card"),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Official Leave & Compensation Summary (${summary?.year ?: balance?.year ?: 2026})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
-                }
 
-                rows.forEach { row ->
+                    // Table Header
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(row.category, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1.8f))
-                        Text("%.1f".format(row.accruedOrEarned), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1.3f))
-                        Text("%.1f".format(row.used), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(0.9f))
-                        Text("%.1f".format(row.remaining), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1.0f))
+                        Text("Category", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.8f))
+                        Text("Accrued/Earned", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.3f))
+                        Text("Used", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(0.9f))
+                        Text("Remaining", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1.0f))
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                    // Authoritative rows: Vacation, Casual, Public Holiday Compensation
+                    val rows = if (!summary?.categories.isNullOrEmpty()) {
+                        summary!!.categories
+                    } else {
+                        listOf(
+                            LeaveCategoryRow("Vacation Leave", "Accrued", balance?.vacationDays ?: 0.0, balance?.usedVacation ?: 0.0, balance?.remainingVacation ?: 0.0),
+                            LeaveCategoryRow("Casual Leave", "Accrued", balance?.casualDays ?: 0.0, balance?.usedCasual ?: 0.0, balance?.remainingCasual ?: 0.0),
+                            LeaveCategoryRow("Public Holiday Compensation", "Earned", balance?.compensationEarned ?: 0.0, balance?.compensationUsed ?: 0.0, balance?.remainingCompensation ?: 0.0)
+                        )
+                    }
+
+                    rows.forEach { row ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(row.category, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1.8f))
+                            Text("%.1f".format(row.accruedOrEarned), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1.3f))
+                            Text("%.1f".format(row.used), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(0.9f))
+                            Text("%.1f".format(row.remaining), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1.0f))
+                        }
                     }
                 }
             }
         }
 
-        // Inline Apply for Leave Action Button
-        Button(
-            onClick = onApplyLeave,
-            modifier = Modifier.fillMaxWidth().testTag("apply_leave_inline_button"),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Apply for Leave", fontWeight = FontWeight.SemiBold)
+        // Inline Apply for Leave Action Button (Single clear action)
+        item {
+            Button(
+                onClick = onApplyLeave,
+                modifier = Modifier.fillMaxWidth().testTag("apply_leave_inline_button"),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Apply for Leave", fontWeight = FontWeight.SemiBold)
+            }
         }
 
-        Text("Applications History", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        // Applications History Section Header
+        item {
+            Text("Applications History", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        }
 
         if (applications.isEmpty()) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text("No leave applications filed.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No leave applications filed.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(bottom = 120.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(applications) { app ->
-                    LeaveAppCard(
-                        app = app,
-                        canReview = canReview,
-                        onApprove = { onApprove(app) },
-                        onReject = { onReject(app) }
-                    )
-                }
+            items(applications) { app ->
+                LeaveAppCard(
+                    app = app,
+                    canReview = canReview,
+                    onApprove = { onApprove(app) },
+                    onReject = { onReject(app) }
+                )
             }
         }
     }

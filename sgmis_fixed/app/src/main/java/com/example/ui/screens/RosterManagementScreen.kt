@@ -85,20 +85,35 @@ fun RosterManagementScreen(
     }
 
     // Build calendar matrix rows
-    val calendarRows = remember(targetOperationalShifts, uiState.leaveApplications) {
+    val calendarRows = remember(targetOperationalShifts, uiState.leaveApplications, selectedApprovalStation) {
         val dates = targetOperationalShifts.map { it.date }.distinct().sorted()
         val inFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = harareTz }
         val dayFormat = SimpleDateFormat("EEE", Locale.US).apply { timeZone = harareTz }
+        val stationGuardIds = targetOperationalShifts.map { it.guard }.toSet()
         dates.map { dateStr ->
             val dateObj = try { inFormat.parse(dateStr) } catch (e: Exception) { null }
             val dayOfWeek = if (dateObj != null) dayFormat.format(dateObj) else "-"
-            val dayShifts = targetOperationalShifts.filter { it.date == dateStr && it.shiftType == "DAY" && it.assignmentType != "TIME_OFF" }
-            val nightShifts = targetOperationalShifts.filter { it.date == dateStr && it.shiftType == "NIGHT" && it.assignmentType != "TIME_OFF" }
-            val toShifts = targetOperationalShifts.filter { it.date == dateStr && (it.shiftType in listOf("REST", "OFF") || it.assignmentType == "TIME_OFF") }
 
             val activeLeaves = uiState.leaveApplications.filter {
-                it.status == "APPROVED" && it.startDate <= dateStr && it.endDate >= dateStr
+                it.status == "APPROVED" && it.startDate <= dateStr && it.endDate >= dateStr &&
+                (selectedApprovalStation == null || it.guard in stationGuardIds)
             }
+            val leaveGuardIds = activeLeaves.map { it.guard }.toSet()
+
+            val isShiftOnLeave = { s: Shift ->
+                s.isOnLeave || s.rawDutyState == "ON_LEAVE" || s.leaveType != null || s.guard in leaveGuardIds
+            }
+
+            val dayShifts = targetOperationalShifts.filter {
+                it.date == dateStr && it.shiftType == "DAY" && it.assignmentType != "TIME_OFF" && !isShiftOnLeave(it)
+            }
+            val nightShifts = targetOperationalShifts.filter {
+                it.date == dateStr && it.shiftType == "NIGHT" && it.assignmentType != "TIME_OFF" && !isShiftOnLeave(it)
+            }
+            val toShifts = targetOperationalShifts.filter {
+                it.date == dateStr && (it.shiftType in listOf("REST", "OFF") || it.assignmentType == "TIME_OFF") && !isShiftOnLeave(it)
+            }
+
             val vac = activeLeaves.filter { it.leaveType == "VACATION" }.map { it.guardName }
             val occ = activeLeaves.filter { it.leaveType == "CASUAL" }.map { it.guardName }
             val sick = activeLeaves.filter { it.leaveType in listOf("SICK", "EMERGENCY") }.map { it.guardName }
@@ -269,7 +284,8 @@ fun RosterManagementScreen(
                             DateOperationalMatrixCard(
                                 dateStr = dateStr,
                                 shiftsOnDate = shiftsOnDate,
-                                guardPairs = uiState.guardPairs
+                                guardPairs = uiState.guardPairs,
+                                leaveApplications = uiState.leaveApplications
                             )
                         }
                     }
@@ -1283,9 +1299,17 @@ fun ResumeNormalRosterDialog(
 fun DateOperationalMatrixCard(
     dateStr: String,
     shiftsOnDate: List<Shift>,
-    guardPairs: List<GuardPair> = emptyList()
+    guardPairs: List<GuardPair> = emptyList(),
+    leaveApplications: List<LeaveApplication> = emptyList()
 ) {
-    val isLeaveShift = { s: Shift -> s.isOnLeave || s.rawDutyState == "ON_LEAVE" || s.leaveType != null }
+    val activeLeaveGuardIds = remember(leaveApplications, dateStr, shiftsOnDate) {
+        val shiftGuardIds = shiftsOnDate.map { it.guard }.toSet()
+        leaveApplications.filter {
+            it.status == "APPROVED" && it.startDate <= dateStr && it.endDate >= dateStr &&
+            (shiftGuardIds.isEmpty() || it.guard in shiftGuardIds)
+        }.map { it.guard }.toSet()
+    }
+    val isLeaveShift = { s: Shift -> s.isOnLeave || s.rawDutyState == "ON_LEAVE" || s.leaveType != null || s.guard in activeLeaveGuardIds }
     val dayShifts = shiftsOnDate.filter { it.shiftType == "DAY" && it.assignmentType != "TIME_OFF" && !isLeaveShift(it) }
     val nightShifts = shiftsOnDate.filter { it.shiftType == "NIGHT" && it.assignmentType != "TIME_OFF" && !isLeaveShift(it) }
     val timeOffShifts = shiftsOnDate.filter { (it.shiftType == "OFF" || it.shiftType == "REST" || it.assignmentType == "TIME_OFF") && !isLeaveShift(it) }

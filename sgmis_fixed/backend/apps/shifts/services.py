@@ -260,6 +260,28 @@ def generate_roster_for_station(
                 campus_day_guard = campus_pair.guard_b
                 campus_night_guard = campus_pair.guard_a
 
+            # Multi-station protection: Guard cannot have an active working duty at another station
+            def _check_other_station_active(g, d):
+                conflict = Shift.objects.filter(
+                    guard=g,
+                    date=d,
+                ).exclude(
+                    station=station
+                ).exclude(
+                    roster__status=RosterStatus.ARCHIVED
+                ).exclude(
+                    shift_type=ShiftType.OFF
+                ).exclude(
+                    assignment_type=AssignmentType.TIME_OFF
+                ).select_related("station").first()
+                if conflict:
+                    raise ValidationError(
+                        f"Cannot schedule Guard {g.username} at station '{station.name}' on {d}: Guard already has an active duty at '{conflict.station.name}'."
+                    )
+
+            _check_other_station_active(campus_day_guard, current_date)
+            _check_other_station_active(campus_night_guard, current_date)
+
             # 1. Main Campus: 1 Day guard (07:00 - 18:00)
             existing_day = Shift.objects.filter(
                 station=station,
@@ -548,9 +570,9 @@ def validate_duty_roster(roster):
         if not day_shifts:
             raise ValidationError(f"Missing scheduled shifts on {current_date} for roster period.")
 
-        # Check Main Campus coverage
-        day_shifts_mc = [s for s in day_shifts if s.duty_location == "Main Campus" and s.shift_type == ShiftType.DAY and s.assignment_type == AssignmentType.NORMAL]
-        night_shifts_mc = [s for s in day_shifts if s.duty_location == "Main Campus" and s.shift_type == ShiftType.NIGHT and s.assignment_type == AssignmentType.NORMAL]
+        # Check Main Campus coverage (allowing NORMAL or authorized RELIEF)
+        day_shifts_mc = [s for s in day_shifts if s.duty_location == "Main Campus" and s.shift_type == ShiftType.DAY and s.assignment_type in [AssignmentType.NORMAL, AssignmentType.RELIEF]]
+        night_shifts_mc = [s for s in day_shifts if s.duty_location == "Main Campus" and s.shift_type == ShiftType.NIGHT and s.assignment_type in [AssignmentType.NORMAL, AssignmentType.RELIEF]]
 
         if len(day_shifts_mc) != 1:
             raise ValidationError(f"Main Campus requires exactly 1 DAY guard on {current_date} (found {len(day_shifts_mc)}).")
@@ -574,18 +596,47 @@ def validate_duty_roster(roster):
                                     f"Overlapping shift duties for guard {s1.guard.username} on {current_date}."
                                 )
 
-        # Check Day/Night assignment correctness
-        block_index = day_offset // block_length
-        active_pair_idx = block_index % num_pairs
-        active_pair = pairs[active_pair_idx]
-
-        mc_day_guard_id = day_shifts_mc[0].guard_id
-        mc_night_guard_id = night_shifts_mc[0].guard_id
-
-        # Verify active guards are valid station pair guards
+        # Verify guard pair membership for NORMAL assignments, or authorization audit for RELIEF
         valid_pair_guard_ids = {p.guard_a_id for p in pairs} | {p.guard_b_id for p in pairs}
-        if mc_day_guard_id not in valid_pair_guard_ids or mc_night_guard_id not in valid_pair_guard_ids:
-            raise ValidationError(f"Main Campus guard on {current_date} is not a valid pair guard for {station.name}.")
+
+        for mc_shift in [day_shifts_mc[0], night_shifts_mc[0]]:
+            if mc_shift.assignment_type == AssignmentType.NORMAL:
+                if mc_shift.guard_id not in valid_pair_guard_ids:
+                    raise ValidationError(f"Main Campus guard on {current_date} is not a valid pair guard for {station.name}.")
+            elif mc_shift.assignment_type == AssignmentType.RELIEF:
+                # 1. assignment_type == RELIEF
+                # 2 & 3. corresponding TemporaryAssignmentAudit record exists and is authorized
+                audit = TemporaryAssignmentAudit.objects.filter(
+                    guard_id=mc_shift.guard_id,
+                    temporary_assignment="RELIEF",
+                    start_date__lte=current_date,
+                    end_date__gte=current_date,
+                ).first()
+                if not audit or not audit.authorized_by:
+                    raise ValidationError(
+                        f"Relief guard {mc_shift.guard.username} on {current_date} is not properly authorized with a TemporaryAssignmentAudit record."
+                    )
+                # 4. the replacement guard is otherwise a valid active GUARD
+                if not mc_shift.guard.is_active or mc_shift.guard.role != UserRole.GUARD:
+                    raise ValidationError(
+                        f"Relief guard {mc_shift.guard.username} on {current_date} must be an active user with role GUARD."
+                    )
+                # 5. the replacement guard is not simultaneously assigned to an incompatible active duty
+                other_active = Shift.objects.filter(
+                    guard_id=mc_shift.guard_id,
+                    date=current_date,
+                ).exclude(id=mc_shift.id).exclude(
+                    roster__status=RosterStatus.ARCHIVED
+                ).exclude(
+                    assignment_type=AssignmentType.TIME_OFF
+                ).exclude(
+                    shift_type=ShiftType.OFF
+                ).select_related("station")
+                if other_active.exists():
+                    conflict_shift = other_active.first()
+                    raise ValidationError(
+                        f"Relief guard {mc_shift.guard.username} on {current_date} is simultaneously assigned to an incompatible active duty ({conflict_shift.assignment_type} at {conflict_shift.station.name})."
+                    )
 
     # 6. Verify 4-on / 8-off for complete 12-day blocks
     complete_cycles = total_days // 12
@@ -691,6 +742,17 @@ def approve_duty_roster(roster, user):
         locked_roster.approved_at = timezone.now()
         locked_roster.full_clean()
         locked_roster.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+
+        # Safely archive superseded or previously completed rosters for this station
+        DutyRoster.objects.filter(
+            station=locked_roster.station,
+            status__in=[RosterStatus.APPROVED, RosterStatus.ACTIVE],
+        ).exclude(
+            id=locked_roster.id
+        ).filter(
+            models.Q(end_date__lt=locked_roster.start_date) |
+            models.Q(start_date__lte=locked_roster.end_date, end_date__gte=locked_roster.start_date)
+        ).update(status=RosterStatus.ARCHIVED)
 
         # Notify all distinct active guards on this roster within the transaction boundary
         notify_roster_approval(locked_roster, user)
@@ -832,7 +894,7 @@ def schedule_exam_escort(
 
     return escort_shifts
 
-def detect_roster_conflicts(station, start_date=None, end_date=None):
+def detect_roster_conflicts(station, start_date=None, end_date=None, target_roster=None):
     """
     Authoritative conflict detection engine.
     Detects and flags:
@@ -841,33 +903,160 @@ def detect_roster_conflicts(station, start_date=None, end_date=None):
       3. Guard assigned to Escort (06:00-17:00) and another duty during that window.
       4. Location overstaffing (Main Campus > 1 Day or > 1 Night; Exam Venue > 2 Day).
       5. Coverage gaps (Main Campus missing Day or Night; Exam Venue missing guards when active).
-      6. Excessive consecutive working days:
+      6. Approved leave integration:
+         - Guards on approved leave do not count toward active coverage.
+         - Relief guards provide coverage for guards on leave.
+         - Approved leave without relief produces UNCOVERED_POST.
+      7. Excessive consecutive working days:
          - Normal duty allows at most 4 consecutive working days.
          - Exam duty explicitly permits 5 consecutive working days (authorized exception).
          - Flags > 5 days as violations.
+      8. Multi-station dual duties:
+         - Guard scheduled at this station cannot simultaneously have an active working duty at another station.
     """
     conflicts = []
 
-    from apps.accounts.models import User
-    station_guards = list(User.objects.filter(station=station))
-    station_shift_guard_ids = Shift.objects.filter(station=station).values_list("guard_id", flat=True)
-    all_guard_ids = set(g.id for g in station_guards).union(set(station_shift_guard_ids))
+    # Determine target operational period when start_date or end_date are absent
+    if not target_roster and (not start_date or not end_date):
+        target_roster = DutyRoster.objects.filter(
+            station=station,
+            status__in=[RosterStatus.ACTIVE, RosterStatus.APPROVED]
+        ).order_by("-start_date").first()
+        if not target_roster:
+            target_roster = DutyRoster.objects.filter(
+                station=station,
+                status__in=[RosterStatus.VALIDATED, RosterStatus.DRAFT]
+            ).order_by("-start_date").first()
 
-    qs = Shift.objects.filter(guard_id__in=all_guard_ids).exclude(assignment_type=AssignmentType.TIME_OFF).select_related("guard", "station")
-    if start_date:
-        qs = qs.filter(date__gte=start_date)
-    if end_date:
-        qs = qs.filter(date__lte=end_date)
+    if target_roster:
+        if not start_date:
+            start_date = target_roster.start_date
+        if not end_date:
+            end_date = target_roster.end_date
+
+    if not start_date or not end_date:
+        active_shifts_qs = Shift.objects.filter(station=station).exclude(
+            roster__status=RosterStatus.ARCHIVED
+        ).exclude(
+            assignment_type=AssignmentType.TIME_OFF
+        ).exclude(
+            shift_type=ShiftType.OFF
+        )
+        if active_shifts_qs.exists():
+            if not start_date:
+                start_date = active_shifts_qs.order_by("date").first().date
+            if not end_date:
+                end_date = active_shifts_qs.order_by("-date").first().date
+        else:
+            today = timezone.localdate() if hasattr(timezone, "localdate") else timezone.now().date()
+            if not start_date:
+                start_date = today
+            if not end_date:
+                end_date = today + timedelta(days=11)
+
+    # Strictly scope queryset to target station, operational date range, and unarchived shifts
+    qs = Shift.objects.filter(
+        station=station,
+        date__gte=start_date,
+        date__lte=end_date,
+    ).exclude(
+        roster__status=RosterStatus.ARCHIVED
+    ).exclude(
+        assignment_type=AssignmentType.TIME_OFF
+    ).exclude(
+        shift_type=ShiftType.OFF
+    ).select_related("guard", "station")
+
+    assigned_guard_ids = set(s.guard_id for s in qs)
+
+    # Multi-station conflict check: Guards assigned to this station cannot have active working duties elsewhere
+    external_shifts = Shift.objects.filter(
+        guard_id__in=assigned_guard_ids,
+        date__gte=start_date,
+        date__lte=end_date,
+    ).exclude(
+        station=station
+    ).exclude(
+        roster__status=RosterStatus.ARCHIVED
+    ).exclude(
+        assignment_type=AssignmentType.TIME_OFF
+    ).exclude(
+        shift_type=ShiftType.OFF
+    ).select_related("guard", "station")
+
+    external_by_guard_date = {}
+    for es in external_shifts:
+        external_by_guard_date[(es.guard_id, es.date)] = es
+
+    # Incorporate Approved Leave records
+    from apps.leave.models import LeaveApplication, LeaveStatus
+    approved_leaves = LeaveApplication.objects.filter(
+        guard_id__in=assigned_guard_ids,
+        status=LeaveStatus.APPROVED,
+        start_date__lte=end_date,
+        end_date__gte=start_date,
+    )
+
+    leaves_by_guard_date = {}
+    for l in approved_leaves:
+        l_start = max(l.start_date, start_date)
+        l_end = min(l.end_date, end_date)
+        cur_d = l_start
+        while cur_d <= l_end:
+            leaves_by_guard_date[(l.guard_id, cur_d)] = l
+            cur_d += timedelta(days=1)
 
     shifts_by_date = {}
     shifts_by_guard = {}
 
     for s in qs:
         shifts_by_date.setdefault(s.date, []).append(s)
-        shifts_by_guard.setdefault(s.guard_id, []).append(s)
+        # Guards on approved leave are not actively working, so leave days do not count toward consecutive working days
+        if (s.guard_id, s.date) not in leaves_by_guard_date:
+            shifts_by_guard.setdefault(s.guard_id, []).append(s)
 
-    # 1. Per-date checks (Overlaps, Double bookings, Overstaffing, Uncovered posts)
+    # Check each date in the operational roster window
     for date_val, d_shifts in shifts_by_date.items():
+        # Check cross-station conflicts
+        for s in d_shifts:
+            if (s.guard_id, date_val) in external_by_guard_date:
+                ext_shift = external_by_guard_date[(s.guard_id, date_val)]
+                conflicts.append({
+                    "type": "DUAL_STATION_DUTY",
+                    "severity": "ERROR",
+                    "date": str(date_val),
+                    "guard": s.guard.username,
+                    "message": f"Guard {s.guard.username} assigned simultaneously to {station.name} and {ext_shift.station.name} on {date_val}."
+                })
+
+                if ("Main Campus" in s.duty_location and "Exam" in ext_shift.duty_location) or \
+                   ("Main Campus" in ext_shift.duty_location and "Exam" in s.duty_location):
+                    conflicts.append({
+                        "type": "DUAL_VENUE_ASSIGNMENT",
+                        "severity": "ERROR",
+                        "date": str(date_val),
+                        "guard": s.guard.username,
+                        "message": f"Guard {s.guard.username} assigned simultaneously to Main Campus and Exam Venue on {date_val}."
+                    })
+
+                if ext_shift.assignment_type == AssignmentType.ESCORT or s.assignment_type == AssignmentType.ESCORT:
+                    conflicts.append({
+                        "type": "ESCORT_DUTY_OVERLAP",
+                        "severity": "ERROR",
+                        "date": str(date_val),
+                        "guard": s.guard.username,
+                        "message": f"Guard {s.guard.username} assigned to collection escort and overlapping duty on {date_val}."
+                    })
+
+                if not (s.end_time <= ext_shift.start_time or ext_shift.end_time <= s.start_time):
+                    conflicts.append({
+                        "type": "OVERLAPPING_DUTIES",
+                        "severity": "ERROR",
+                        "date": str(date_val),
+                        "guard": s.guard.username,
+                        "message": f"Guard {s.guard.username} has overlapping duties on {date_val} ({s.assignment_type} and {ext_shift.assignment_type})."
+                    })
+
         # Check guard duplicates / overlaps on this date
         guard_shifts_map = {}
         for s in d_shifts:
@@ -875,12 +1064,10 @@ def detect_roster_conflicts(station, start_date=None, end_date=None):
 
         for gid, g_shifts in guard_shifts_map.items():
             if len(g_shifts) > 1:
-                # Compare pairs for time overlap
                 guard_name = g_shifts[0].guard.username
                 for i in range(len(g_shifts)):
                     for j in range(i + 1, len(g_shifts)):
                         s1, s2 = g_shifts[i], g_shifts[j]
-                        # Main Campus + Exam Venue simultaneous assignment
                         if ("Main Campus" in s1.duty_location and "Exam" in s2.duty_location) or \
                            ("Main Campus" in s2.duty_location and "Exam" in s1.duty_location):
                             conflicts.append({
@@ -891,7 +1078,6 @@ def detect_roster_conflicts(station, start_date=None, end_date=None):
                                 "message": f"Guard {guard_name} assigned simultaneously to Main Campus and Exam Venue on {date_val}."
                             })
 
-                        # Escort overlap check
                         if s1.assignment_type == AssignmentType.ESCORT or s2.assignment_type == AssignmentType.ESCORT:
                             conflicts.append({
                                 "type": "ESCORT_DUTY_OVERLAP",
@@ -901,8 +1087,6 @@ def detect_roster_conflicts(station, start_date=None, end_date=None):
                                 "message": f"Guard {guard_name} assigned to collection escort and overlapping duty on {date_val}."
                             })
 
-                        # General time overlap
-                        # Daytime shifts overlap if not s1.end_time <= s2.start_time and not s2.end_time <= s1.start_time
                         if not (s1.end_time <= s2.start_time or s2.end_time <= s1.start_time):
                             conflicts.append({
                                 "type": "OVERLAPPING_DUTIES",
@@ -912,66 +1096,97 @@ def detect_roster_conflicts(station, start_date=None, end_date=None):
                                 "message": f"Guard {guard_name} has overlapping duties on {date_val} ({s1.assignment_type} and {s2.assignment_type})."
                             })
 
-        # Staffing level checks for Main Campus
-        campus_day = [s for s in d_shifts if s.duty_location == "Main Campus" and s.shift_type == ShiftType.DAY]
-        campus_night = [s for s in d_shifts if s.duty_location == "Main Campus" and s.shift_type == ShiftType.NIGHT]
+        # Staffing level checks for Main Campus (accounting for approved leave and relief)
+        campus_day_all = [s for s in d_shifts if s.duty_location == "Main Campus" and s.shift_type == ShiftType.DAY]
+        campus_night_all = [s for s in d_shifts if s.duty_location == "Main Campus" and s.shift_type == ShiftType.NIGHT]
 
-        if len(campus_day) == 0:
-            conflicts.append({
-                "type": "UNCOVERED_POST",
-                "severity": "ERROR",
-                "date": str(date_val),
-                "guard": None,
-                "message": f"Main Campus Day shift has no assigned security guard on {date_val}."
-            })
-        elif len(campus_day) > 1:
+        # Active coverage excludes guards on approved leave
+        campus_day_active = [s for s in campus_day_all if (s.guard_id, date_val) not in leaves_by_guard_date]
+        campus_night_active = [s for s in campus_night_all if (s.guard_id, date_val) not in leaves_by_guard_date]
+
+        if len(campus_day_active) == 0:
+            if campus_day_all:
+                leave_guard = campus_day_all[0].guard.username
+                conflicts.append({
+                    "type": "UNCOVERED_POST",
+                    "severity": "ERROR",
+                    "shift_type": ShiftType.DAY,
+                    "date": str(date_val),
+                    "guard": leave_guard,
+                    "message": f"Main Campus Day shift has no active security coverage on {date_val} (Guard {leave_guard} is on approved leave without relief)."
+                })
+            else:
+                conflicts.append({
+                    "type": "UNCOVERED_POST",
+                    "severity": "ERROR",
+                    "shift_type": ShiftType.DAY,
+                    "date": str(date_val),
+                    "guard": None,
+                    "message": f"Main Campus Day shift has no assigned security guard on {date_val}."
+                })
+        elif len(campus_day_active) > 1:
             conflicts.append({
                 "type": "LOCATION_OVERSTAFFED",
                 "severity": "WARNING",
+                "shift_type": ShiftType.DAY,
                 "date": str(date_val),
                 "guard": None,
-                "message": f"Main Campus Day shift has {len(campus_day)} guards assigned on {date_val} (expected 1)."
+                "message": f"Main Campus Day shift has {len(campus_day_active)} active guards assigned on {date_val} (expected 1)."
             })
 
-        if len(campus_night) == 0:
-            conflicts.append({
-                "type": "UNCOVERED_POST",
-                "severity": "ERROR",
-                "date": str(date_val),
-                "guard": None,
-                "message": f"Main Campus Night shift has no assigned security guard on {date_val}."
-            })
-        elif len(campus_night) > 1:
+        if len(campus_night_active) == 0:
+            if campus_night_all:
+                leave_guard = campus_night_all[0].guard.username
+                conflicts.append({
+                    "type": "UNCOVERED_POST",
+                    "severity": "ERROR",
+                    "shift_type": ShiftType.NIGHT,
+                    "date": str(date_val),
+                    "guard": leave_guard,
+                    "message": f"Main Campus Night shift has no active security coverage on {date_val} (Guard {leave_guard} is on approved leave without relief)."
+                })
+            else:
+                conflicts.append({
+                    "type": "UNCOVERED_POST",
+                    "severity": "ERROR",
+                    "shift_type": ShiftType.NIGHT,
+                    "date": str(date_val),
+                    "guard": None,
+                    "message": f"Main Campus Night shift has no assigned security guard on {date_val}."
+                })
+        elif len(campus_night_active) > 1:
             conflicts.append({
                 "type": "LOCATION_OVERSTAFFED",
                 "severity": "WARNING",
+                "shift_type": ShiftType.NIGHT,
                 "date": str(date_val),
                 "guard": None,
-                "message": f"Main Campus Night shift has {len(campus_night)} guards assigned on {date_val} (expected 1)."
+                "message": f"Main Campus Night shift has {len(campus_night_active)} active guards assigned on {date_val} (expected 1)."
             })
 
         # Staffing level checks for Exam Venue (if active on this date)
-        exam_shifts = [s for s in d_shifts if s.assignment_type == AssignmentType.EXAM and s.shift_type == ShiftType.DAY]
+        exam_shifts_all = [s for s in d_shifts if s.assignment_type == AssignmentType.EXAM and s.shift_type == ShiftType.DAY]
+        exam_shifts_active = [s for s in exam_shifts_all if (s.guard_id, date_val) not in leaves_by_guard_date]
         has_active_exam_period = ExaminationPeriod.objects.filter(
             station=station, is_active=True, start_date__lte=date_val, end_date__gte=date_val
         ).exists()
 
-        if has_active_exam_period or len(exam_shifts) > 0:
-            if len(exam_shifts) < 2:
+        if has_active_exam_period or len(exam_shifts_all) > 0:
+            if len(exam_shifts_active) < 2:
                 conflicts.append({
                     "type": "EXAM_VENUE_UNDERSTAFFED",
                     "severity": "ERROR",
                     "date": str(date_val),
                     "guard": None,
-                    "message": f"Examination venue requires exactly 2 day guards, but only {len(exam_shifts)} assigned on {date_val}."
+                    "message": f"Examination venue requires exactly 2 active day guards, but only {len(exam_shifts_active)} assigned on {date_val}."
                 })
-            elif len(exam_shifts) > 2:
+            elif len(exam_shifts_active) > 2:
                 conflicts.append({
                     "type": "LOCATION_OVERSTAFFED",
                     "severity": "WARNING",
                     "date": str(date_val),
                     "guard": None,
-                    "message": f"Examination venue has {len(exam_shifts)} guards assigned on {date_val} (exceeds required 2)."
+                    "message": f"Examination venue has {len(exam_shifts_active)} active guards assigned on {date_val} (exceeds required 2)."
                 })
 
     # 2. Consecutive working days check
@@ -995,12 +1210,10 @@ def detect_roster_conflicts(station, start_date=None, end_date=None):
 
         for run in runs:
             run_length = len(run)
-            # Check if any shift in this run is an EXAM shift
             run_shifts = [s for s in g_shifts if s.date in run]
             has_exam_duty = any(s.assignment_type == AssignmentType.EXAM for s in run_shifts)
 
             if has_exam_duty:
-                # 5 consecutive days on exam duty is an explicit authorized exception!
                 if run_length > 5:
                     conflicts.append({
                         "type": "EXCESSIVE_CONSECUTIVE_DAYS",
@@ -1010,7 +1223,6 @@ def detect_roster_conflicts(station, start_date=None, end_date=None):
                         "message": f"Guard {guard_name} scheduled for {run_length} consecutive working days (exceeds authorized 5-day examination limit)."
                     })
             else:
-                # Normal duty maximum is 4 consecutive working days
                 if run_length > 4:
                     conflicts.append({
                         "type": "EXCESSIVE_CONSECUTIVE_DAYS",
@@ -1026,6 +1238,9 @@ def detect_roster_conflicts(station, start_date=None, end_date=None):
     return {
         "has_conflicts": has_errors,
         "has_warnings": has_warnings,
+        "start_date": str(start_date),
+        "end_date": str(end_date),
+        "shifts_scanned": qs.count(),
         "total_conflicts": len(conflicts),
         "conflicts": conflicts,
     }

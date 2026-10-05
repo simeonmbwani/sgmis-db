@@ -914,7 +914,9 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
         Supports query filters: station, start_date, end_date, pair, guard, assignment_type, shift_type.
         """
         user = request.user
-        qs = Shift.objects.all().select_related(
+        qs = Shift.objects.all().exclude(
+            roster__status=RosterStatus.ARCHIVED
+        ).select_related(
             "station", "guard", "pair", "pair__guard_a", "pair__guard_b"
         ).order_by("date", "start_time", "guard__username")
 
@@ -941,6 +943,24 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(pair_id=pair_id)
 
         start_date = request.query_params.get("start_date")
+        end_date = request.query_params.get("end_date")
+
+        # When dates are omitted, scope to current operational roster period for the station
+        if not start_date and not end_date:
+            target_st = user.station if user.role == UserRole.SUPERVISOR else (Station.objects.filter(id=station_id).first() if station_id else None)
+            if target_st:
+                target_roster = DutyRoster.objects.filter(
+                    station=target_st,
+                    status__in=[RosterStatus.ACTIVE, RosterStatus.APPROVED]
+                ).order_by("-start_date").first()
+                if not target_roster:
+                    target_roster = DutyRoster.objects.filter(
+                        station=target_st,
+                        status__in=[RosterStatus.VALIDATED, RosterStatus.DRAFT]
+                    ).order_by("-start_date").first()
+                if target_roster:
+                    qs = qs.filter(date__gte=target_roster.start_date, date__lte=target_roster.end_date)
+
         if start_date:
             try:
                 parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date()
@@ -948,7 +968,6 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
             except ValueError:
                 pass
 
-        end_date = request.query_params.get("end_date")
         if end_date:
             try:
                 parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date()
@@ -1023,6 +1042,7 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
         station = get_object_or_404(Station, id=station_id)
         start_date = request.data.get("start_date") or request.query_params.get("start_date")
         end_date = request.data.get("end_date") or request.query_params.get("end_date")
+        roster_id = request.data.get("roster_id") or request.query_params.get("roster_id")
 
         try:
             parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else None
@@ -1030,7 +1050,14 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
         except (ValueError, TypeError):
             return Response({"detail": "Dates must be in YYYY-MM-DD format."}, status=status.HTTP_400_BAD_REQUEST)
 
-        report = detect_roster_conflicts(station, start_date=parsed_start, end_date=parsed_end)
+        target_roster = None
+        if roster_id:
+            try:
+                target_roster = DutyRoster.objects.filter(id=roster_id, station=station).first()
+            except (ValueError, TypeError):
+                target_roster = None
+
+        report = detect_roster_conflicts(station, start_date=parsed_start, end_date=parsed_end, target_roster=target_roster)
         return Response(report, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="schedule_escort", permission_classes=[IsSupervisorOrAdmin])
