@@ -629,30 +629,29 @@ class SGMISBackendEndToEndTests(TestCase):
 
     def test_patrol_start_auto_station_assignment(self):
         """
-        Tests Patrol start:
-        1. Guard with station calls POST /patrols/logs/ with empty payload
-        2. Station is automatically derived from guard.station
-        3. Response is 201 Created and station matches
+        Supervisor assigns patrol to guard; station is automatically derived from supervisor.station.
+        Guard then starts assigned patrol.
         """
-        self.client.force_authenticate(user=self.guard_a)
-        resp = self.client.post("/patrols/logs/", {})
+        self.client.force_authenticate(user=self.supervisor)
+        resp = self.client.post("/patrols/logs/", {
+            "guard": str(self.guard_a.id),
+        })
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.assertEqual(str(resp.data["station"]), str(self.station.id))
         self.assertEqual(str(resp.data["guard"]), str(self.guard_a.id))
-        self.assertEqual(resp.data["status"], "IN_PROGRESS")
+        self.assertEqual(resp.data["status"], "ASSIGNED")
+
+        # Guard starts assigned patrol
+        self.client.force_authenticate(user=self.guard_a)
+        start_resp = self.client.post(f"/patrols/logs/{resp.data['id']}/start/")
+        self.assertEqual(start_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(start_resp.data["status"], "IN_PROGRESS")
 
     def test_patrol_start_unassigned_guard_rejected(self):
-        """Guard without station receives clear error when starting patrol."""
-        unassigned = UserModel.objects.create_user(
-            username="unassigned_patrol_guard",
-            password=self.password,
-            role=UserRole.GUARD,
-            station=None,
-        )
-        self.client.force_authenticate(user=unassigned)
+        """Guards cannot initiate arbitrary patrols."""
+        self.client.force_authenticate(user=self.guard_a)
         resp = self.client.post("/patrols/logs/", {})
-        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("station", str(resp.data).lower())
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_leave_rules_casual_and_vacation_accrual(self):
         """
@@ -852,7 +851,7 @@ class SGMISBackendEndToEndTests(TestCase):
     def test_regression_patrol_guard_cannot_override_station(self):
         """
         Regression Test D (Patrol Station Authority):
-        - Guard assigned to Station A passes Station B's ID in patrol start payload.
+        - Supervisor assigned to Station A passes Station B's ID in patrol assignment payload.
         - Backend authoritatively binds patrol log to Station A (ignoring Station B).
         - DB record has station = Station A.
         """
@@ -862,8 +861,9 @@ class SGMISBackendEndToEndTests(TestCase):
             latitude=-1.2921,
             longitude=36.8219,
         )
-        self.client.force_authenticate(user=self.guard_a)
+        self.client.force_authenticate(user=self.supervisor)
         resp = self.client.post("/patrols/logs/", {
+            "guard": str(self.guard_a.id),
             "station": str(station_b.id),
             "notes": "Attempting to spoof station assignment.",
         })
@@ -947,12 +947,13 @@ class SGMISBackendEndToEndTests(TestCase):
 
     def test_guard_patrol_termination_guard_only(self):
         """Only on-duty guards can terminate their own active patrol."""
-        self.client.force_authenticate(user=self.guard_a)
-        start_resp = self.client.post("/patrols/logs/", {
-            "notes": "Guard starting patrol",
-        })
-        self.assertEqual(start_resp.status_code, status.HTTP_201_CREATED)
-        patrol_id = start_resp.data["id"]
+        patrol = PatrolLog.objects.create(
+            guard=self.guard_a,
+            station=self.station,
+            assigned_by=self.supervisor,
+            status=PatrolStatus.IN_PROGRESS,
+        )
+        patrol_id = patrol.id
 
         # Supervisor cannot terminate patrol
         self.client.force_authenticate(user=self.supervisor)

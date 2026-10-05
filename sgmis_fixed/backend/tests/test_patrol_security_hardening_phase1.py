@@ -140,10 +140,14 @@ class PatrolSecurityHardeningPhase1Tests(APITestCase):
 
     def _start_patrol_a(self):
         """Helper to create an active patrol for Guard A."""
+        patrol = PatrolLog.objects.create(
+            guard=self.guard_a,
+            station=self.station_a,
+            assigned_by=self.supervisor_a,
+            status=PatrolStatus.IN_PROGRESS,
+        )
         self.client.force_authenticate(user=self.guard_a)
-        resp = self.client.post("/api/patrols/logs/", {})
-        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
-        return PatrolLog.objects.get(id=resp.data["id"])
+        return patrol
 
     # =========================================================================
     # A. Valid registered NFC UID accepted
@@ -233,9 +237,12 @@ class PatrolSecurityHardeningPhase1Tests(APITestCase):
             nfc_uid="",  # No registered NFC
             is_active=True,
         )
+        patrol = PatrolLog.objects.create(
+            guard=guard_e,
+            station=station_e,
+            status=PatrolStatus.IN_PROGRESS,
+        )
         self.client.force_authenticate(user=guard_e)
-        p_resp = self.client.post("/api/patrols/logs/", {})
-        patrol = PatrolLog.objects.get(id=p_resp.data["id"])
 
         resp = self.client.post(f"/api/patrols/logs/{patrol.id}/scan/", {
             "checkpoint": str(cp_unconfigured.id),
@@ -281,9 +288,12 @@ class PatrolSecurityHardeningPhase1Tests(APITestCase):
             order=1,
             is_active=True,
         )
+        patrol = PatrolLog.objects.create(
+            guard=guard_f,
+            station=station_f,
+            status=PatrolStatus.IN_PROGRESS,
+        )
         self.client.force_authenticate(user=guard_f)
-        p_resp = self.client.post("/api/patrols/logs/", {})
-        patrol = PatrolLog.objects.get(id=p_resp.data["id"])
 
         resp = self.client.post(f"/api/patrols/logs/{patrol.id}/scan/", {
             "checkpoint": str(cp_zero.id),

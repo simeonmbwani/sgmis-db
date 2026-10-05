@@ -75,3 +75,43 @@ interface CheckpointDao {
     suspend fun clearCheckpoints()
 }
 
+@Dao
+interface PatrolDao {
+    @Query("SELECT * FROM cached_patrol_logs ORDER BY startTime DESC, startWindow DESC")
+    fun getAllPatrolLogsFlow(): Flow<List<CachedPatrolLogEntity>>
+
+    @Query("SELECT * FROM cached_patrol_logs ORDER BY startTime DESC, startWindow DESC")
+    suspend fun getAllPatrolLogs(): List<CachedPatrolLogEntity>
+
+    @Query("SELECT * FROM cached_patrol_logs WHERE id = :id LIMIT 1")
+    suspend fun getPatrolLogById(id: String): CachedPatrolLogEntity?
+
+    @Query("SELECT * FROM cached_patrol_logs WHERE status = 'IN_PROGRESS' OR status = 'ACTIVE' LIMIT 1")
+    fun getActivePatrolFlow(): Flow<CachedPatrolLogEntity?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPatrolLogs(logs: List<CachedPatrolLogEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPatrolLog(log: CachedPatrolLogEntity)
+
+    @Query("DELETE FROM cached_patrol_logs")
+    suspend fun clearPatrolLogs()
+
+    @Query("SELECT * FROM cached_patrol_events WHERE patrolLogId = :patrolLogId AND isSynced = 0 ORDER BY checkpointOrder ASC")
+    suspend fun getUnsyncedEventsForPatrol(patrolLogId: String): List<CachedPatrolEventEntity>
+
+    @Query("SELECT * FROM cached_patrol_events WHERE isSynced = 0 ORDER BY checkpointOrder ASC")
+    suspend fun getAllUnsyncedEvents(): List<CachedPatrolEventEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPatrolEvent(event: CachedPatrolEventEntity)
+
+    @Query("UPDATE cached_patrol_events SET isSynced = 1 WHERE clientEventId IN (:clientEventIds)")
+    suspend fun markEventsSynced(clientEventIds: List<String>)
+
+    @Query("DELETE FROM cached_patrol_events WHERE patrolLogId = :patrolLogId")
+    suspend fun clearEventsForPatrol(patrolLogId: String)
+}
+
+

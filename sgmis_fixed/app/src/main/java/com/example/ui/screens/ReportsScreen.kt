@@ -105,7 +105,7 @@ fun ReportsScreen(
                                     }
                                     "PATROLS" -> uiState.patrolLogs.forEach {
                                         appendLine("[PATROL] ${it.stationName} (${it.status}) by ${it.guardName}")
-                                        appendLine("Started: ${it.startTime.take(16).replace("T", " ")} | Scans: ${it.scansCount}")
+                                        appendLine("Started: ${it.startTime?.take(16)?.replace("T", " ") ?: "Not started"} | Scans: ${it.scansCount}")
                                         appendLine("---")
                                     }
                                     "VISITORS" -> uiState.visitors.forEach {
@@ -337,7 +337,7 @@ fun ReportsScreen(
                                             selectedDetailItem = ReportDetailItem(
                                                 title = "Patrol at ${p.stationName}",
                                                 subtitle = "Status: ${p.status}",
-                                                timestamp = p.startTime.take(19).replace("T", " "),
+                                                timestamp = p.startTime?.take(19)?.replace("T", " ") ?: "Not started",
                                                 metadata = listOf(
                                                     "Officer" to p.guardName,
                                                     "Station" to p.stationName,
@@ -355,7 +355,7 @@ fun ReportsScreen(
                                             Text(p.status, style = MaterialTheme.typography.labelSmall)
                                         }
                                         Text("Officer: ${p.guardName} • Scans: ${p.scansCount}", style = MaterialTheme.typography.bodySmall)
-                                        Text("Started: ${p.startTime.take(16).replace("T", " ")}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text("Started: ${p.startTime?.take(16)?.replace("T", " ") ?: "Not started"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 }
                             }

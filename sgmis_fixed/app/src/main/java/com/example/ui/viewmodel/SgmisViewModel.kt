@@ -51,6 +51,10 @@ data class SgmisUiState(
     val checkpoints: List<Checkpoint> = emptyList(),
     val activePatrol: PatrolLog? = null,
     val patrolLogs: List<PatrolLog> = emptyList(),
+    val assignedPatrols: List<PatrolLog> = emptyList(),
+    val unsyncedPatrolEventsCount: Int = 0,
+    val isSyncingPatrolEvents: Boolean = false,
+    val isReviewingPatrol: Boolean = false,
     val patrolsLoading: Boolean = false,
 
     // Leave
@@ -897,8 +901,110 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         viewModelScope.launch {
             val res = repository.fetchPatrolLogs()
             res.onSuccess { logs ->
-                val active = logs.firstOrNull { it.status == "IN_PROGRESS" }
-                _uiState.update { it.copy(patrolLogs = logs, activePatrol = active) }
+                val active = logs.firstOrNull { it.status == "IN_PROGRESS" || it.status == "ACTIVE" }
+                val assigned = logs.filter { it.status == "ASSIGNED" }
+                val unsyncedCount = repository.getUnsyncedPatrolEventsCount()
+                _uiState.update {
+                    it.copy(
+                        patrolLogs = logs,
+                        activePatrol = active,
+                        assignedPatrols = assigned,
+                        unsyncedPatrolEventsCount = unsyncedCount
+                    )
+                }
+            }
+        }
+    }
+
+    fun startAssignedPatrol(patrolId: String, notes: String? = "Patrol started by guard") {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.startAssignedPatrol(patrolId, notes)
+            res.onSuccess { patrol ->
+                _uiState.update {
+                    it.copy(
+                        activePatrol = patrol,
+                        isLoading = false,
+                        successMessage = "Patrol '${patrol.name}' started successfully."
+                    )
+                }
+                fetchPatrolLogs()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun assignPatrol(
+        guardId: String,
+        stationId: String? = null,
+        name: String = "Routine Station Patrol",
+        startWindow: String? = null,
+        deadline: String? = null,
+        notes: String? = null,
+        onSuccess: (() -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.assignPatrol(guardId, stationId, name, startWindow, deadline, notes)
+            res.onSuccess {
+                _uiState.update { it.copy(isLoading = false, successMessage = "Patrol assigned to guard successfully.") }
+                fetchPatrolLogs()
+                onSuccess?.invoke()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun cancelPatrol(patrolId: String, reason: String = "Cancelled by supervisor") {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.cancelPatrol(patrolId, reason)
+            res.onSuccess {
+                _uiState.update { it.copy(isLoading = false, successMessage = "Patrol cancelled.") }
+                fetchPatrolLogs()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun reassignPatrol(patrolId: String, newGuardId: String, reason: String = "Reassigned by supervisor") {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.reassignPatrol(patrolId, newGuardId, reason)
+            res.onSuccess {
+                _uiState.update { it.copy(isLoading = false, successMessage = "Patrol reassigned.") }
+                fetchPatrolLogs()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun approvePatrol(patrolId: String, notes: String? = "Patrol verified and approved") {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isReviewingPatrol = true, errorMessage = null) }
+            val res = repository.approvePatrol(patrolId, notes)
+            res.onSuccess {
+                _uiState.update { it.copy(isReviewingPatrol = false, successMessage = "Patrol log approved.") }
+                fetchPatrolLogs()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isReviewingPatrol = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun rejectPatrol(patrolId: String, reason: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isReviewingPatrol = true, errorMessage = null) }
+            val res = repository.rejectPatrol(patrolId, reason)
+            res.onSuccess {
+                _uiState.update { it.copy(isReviewingPatrol = false, successMessage = "Patrol marked rejected.") }
+                fetchPatrolLogs()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isReviewingPatrol = false, errorMessage = err.message) }
             }
         }
     }
@@ -922,17 +1028,67 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
-    fun scanCheckpoint(patrolId: String, checkpointId: String, gps: String, notes: String) {
+    fun scanCheckpoint(
+        patrolId: String,
+        checkpointId: String,
+        gps: String,
+        notes: String,
+        checkpointCode: String = "",
+        checkpointOrder: Int = 1,
+        verificationMethod: String = "NFC",
+        accuracy: Double? = null
+    ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val res = repository.scanCheckpoint(patrolId, checkpointId, gps, notes)
+            val res = repository.scanCheckpoint(
+                patrolId = patrolId,
+                checkpointId = checkpointId,
+                gps = gps,
+                notes = notes,
+                checkpointCode = checkpointCode,
+                checkpointOrder = checkpointOrder,
+                verificationMethod = verificationMethod,
+                accuracy = accuracy
+            )
             res.onSuccess {
+                val unsyncedCount = repository.getUnsyncedPatrolEventsCount()
                 _uiState.update {
-                    it.copy(isLoading = false, successMessage = "Checkpoint verification logged.")
+                    it.copy(
+                        isLoading = false,
+                        successMessage = "Checkpoint verification logged ($verificationMethod).",
+                        unsyncedPatrolEventsCount = unsyncedCount
+                    )
                 }
                 fetchPatrolLogs()
             }.onFailure { err ->
-                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+                val unsyncedCount = repository.getUnsyncedPatrolEventsCount()
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        errorMessage = err.message,
+                        unsyncedPatrolEventsCount = unsyncedCount
+                    )
+                }
+            }
+        }
+    }
+
+    fun syncOfflinePatrolEvents(patrolId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncingPatrolEvents = true, errorMessage = null) }
+            val res = repository.syncOfflinePatrolEvents(patrolId)
+            res.onSuccess { syncRes ->
+                val unsyncedCount = repository.getUnsyncedPatrolEventsCount()
+                _uiState.update {
+                    it.copy(
+                        isSyncingPatrolEvents = false,
+                        unsyncedPatrolEventsCount = unsyncedCount,
+                        successMessage = "Synced ${syncRes.syncedCount} patrol events successfully."
+                    )
+                }
+                fetchPatrolLogs()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isSyncingPatrolEvents = false, errorMessage = err.message) }
             }
         }
     }

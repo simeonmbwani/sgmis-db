@@ -247,6 +247,45 @@ interface ApiService {
     @POST("patrols/logs/")
     suspend fun startPatrol(@Body request: StartPatrolRequest = StartPatrolRequest()): Response<PatrolLog>
 
+    @POST("patrols/logs/")
+    suspend fun assignPatrol(@Body request: AssignPatrolRequest): Response<PatrolLog>
+
+    @POST("patrols/logs/{id}/start/")
+    suspend fun startAssignedPatrol(
+        @Path("id") id: String,
+        @Body request: StartAssignedPatrolRequest = StartAssignedPatrolRequest()
+    ): Response<PatrolLog>
+
+    @POST("patrols/logs/{id}/cancel/")
+    suspend fun cancelPatrol(
+        @Path("id") id: String,
+        @Body request: CancelPatrolRequest = CancelPatrolRequest()
+    ): Response<PatrolLog>
+
+    @POST("patrols/logs/{id}/reassign/")
+    suspend fun reassignPatrol(
+        @Path("id") id: String,
+        @Body request: ReassignPatrolRequest
+    ): Response<PatrolLog>
+
+    @POST("patrols/logs/{id}/approve/")
+    suspend fun approvePatrol(
+        @Path("id") id: String,
+        @Body request: ApprovePatrolRequest = ApprovePatrolRequest()
+    ): Response<PatrolLog>
+
+    @POST("patrols/logs/{id}/reject/")
+    suspend fun rejectPatrol(
+        @Path("id") id: String,
+        @Body request: RejectPatrolRequest
+    ): Response<PatrolLog>
+
+    @POST("patrols/logs/{id}/sync_events/")
+    suspend fun syncPatrolEvents(
+        @Path("id") id: String,
+        @Body request: SyncPatrolEventsRequest
+    ): Response<SyncPatrolEventsResponse>
+
     @POST("patrols/logs/{id}/scan/")
     suspend fun scanCheckpoint(
         @Path("id") patrolId: String,

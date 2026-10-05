@@ -2189,8 +2189,11 @@ private fun SupervisorCommandConsole(
     // 8. Patrol Monitoring
     SupervisorPatrolCard(
         hasStation = hasStation,
-        activePatrol = stationPatrols.firstOrNull { it.status == "IN_PROGRESS" } ?: uiState.activePatrol,
+        activePatrol = stationPatrols.firstOrNull { it.status == "IN_PROGRESS" || it.status == "ACTIVE" } ?: uiState.activePatrol,
+        pendingReviewPatrol = stationPatrols.firstOrNull { it.status == "COMPLETED" && !it.isApproved },
         totalLogsToday = stationPatrols.size,
+        onApprovePatrol = { viewModel.approvePatrol(it) },
+        onRejectPatrol = { id, reason -> viewModel.rejectPatrol(id, reason) },
         onNavigate = onNavigate
     )
 
@@ -3713,7 +3716,10 @@ private fun SupervisorIncidentsCard(
 private fun SupervisorPatrolCard(
     hasStation: Boolean,
     activePatrol: PatrolLog?,
+    pendingReviewPatrol: PatrolLog? = null,
     totalLogsToday: Int,
+    onApprovePatrol: (String) -> Unit = {},
+    onRejectPatrol: (String, String) -> Unit = { _, _ -> },
     onNavigate: (String) -> Unit
 ) {
     Card(
@@ -3744,19 +3750,23 @@ private fun SupervisorPatrolCard(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "PATROL OVERSIGHT",
+                        text = "PATROL OVERSIGHT & VERIFICATION",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
                 Surface(
-                    color = if (activePatrol != null) StatusSuccess else MaterialTheme.colorScheme.surfaceVariant,
+                    color = if (activePatrol != null) StatusSuccess
+                           else if (pendingReviewPatrol != null) MaterialTheme.colorScheme.tertiary
+                           else MaterialTheme.colorScheme.surfaceVariant,
                     shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
-                        text = if (activePatrol != null) "● IN PROGRESS" else "IDLE",
-                        color = if (activePatrol != null) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                        text = if (activePatrol != null) "● IN PROGRESS"
+                               else if (pendingReviewPatrol != null) "PENDING REVIEW"
+                               else "IDLE",
+                        color = if (activePatrol != null || pendingReviewPatrol != null) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -3783,20 +3793,78 @@ private fun SupervisorPatrolCard(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
-                            text = "Active Patrol: ${activePatrol.guardName}",
+                            text = "Active Patrol: ${activePatrol.name} (${activePatrol.guardName})",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Started at: ${activePatrol.startTime} • ${activePatrol.scansCount} checkpoints verified",
+                            text = "Started: ${activePatrol.startTime?.take(16)?.replace('T', ' ') ?: "Just now"} • Route scans: ${activePatrol.scansCount}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         if (!activePatrol.notes.isNullOrBlank()) {
                             Text(
-                                text = "Notes: ${activePatrol.notes}",
+                                text = "Instructions: ${activePatrol.notes}",
                                 style = MaterialTheme.typography.labelSmall
                             )
+                        }
+                    }
+                }
+            } else if (pendingReviewPatrol != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Patrol Awaiting Review: ${pendingReviewPatrol.name}",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (pendingReviewPatrol.anomaliesCount > 0) {
+                                Surface(color = MaterialTheme.colorScheme.error, shape = RoundedCornerShape(4.dp)) {
+                                    Text(
+                                        text = "${pendingReviewPatrol.anomaliesCount} ANOMALIES",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Text(
+                            text = "Conducted by: ${pendingReviewPatrol.guardName} • Checkpoint Scans: ${pendingReviewPatrol.scansCount}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { onApprovePatrol(pendingReviewPatrol.id) },
+                                colors = ButtonDefaults.buttonColors(containerColor = StatusSuccess),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Approve", style = MaterialTheme.typography.labelSmall)
+                            }
+                            OutlinedButton(
+                                onClick = { onRejectPatrol(pendingReviewPatrol.id, "Supervisor rejected patrol log") },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Reject", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
                 }
@@ -3806,6 +3874,16 @@ private fun SupervisorPatrolCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+
+            OutlinedButton(
+                onClick = { onNavigate(NavRoutes.PATROL) },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.DirectionsWalk, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("OPEN PATROL OVERSIGHT")
             }
         }
     }

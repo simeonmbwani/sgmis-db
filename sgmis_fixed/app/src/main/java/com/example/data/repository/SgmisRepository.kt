@@ -2,12 +2,8 @@ package com.example.data.repository
 
 import com.example.data.api.ApiClient
 import com.example.data.api.SessionManager
-import com.example.data.local.CachedCheckpointEntity
-import com.example.data.local.CachedIncidentEntity
-import com.example.data.local.CachedOBEntity
-import com.example.data.local.CachedShiftEntity
-import com.example.data.local.CachedStationEntity
-import com.example.data.local.SgmisDatabase
+import com.example.data.local.*
+
 import com.example.data.model.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -572,9 +568,11 @@ class SgmisRepository(
                         name = it.name,
                         code = it.code,
                         qrCode = it.qrCode,
+                        nfcUid = it.nfcUid,
                         latitude = it.latitude,
                         longitude = it.longitude,
                         order = it.order,
+                        minIntervalSeconds = it.minIntervalSeconds,
                         isActive = it.isActive
                     )
                 })
@@ -588,9 +586,11 @@ class SgmisRepository(
                         name = it.name,
                         code = it.code,
                         qrCode = it.qrCode,
+                        nfcUid = it.nfcUid,
                         latitude = it.latitude,
                         longitude = it.longitude,
                         order = it.order,
+                        minIntervalSeconds = it.minIntervalSeconds,
                         isActive = it.isActive
                     )
                 })
@@ -609,9 +609,11 @@ class SgmisRepository(
                         name = it.name,
                         code = it.code,
                         qrCode = it.qrCode,
+                        nfcUid = it.nfcUid,
                         latitude = it.latitude,
                         longitude = it.longitude,
                         order = it.order,
+                        minIntervalSeconds = it.minIntervalSeconds,
                         isActive = it.isActive
                     )
                 })
@@ -631,23 +633,255 @@ class SgmisRepository(
                     name = it.name,
                     code = it.code,
                     qrCode = it.qrCode,
+                    nfcUid = it.nfcUid,
                     latitude = it.latitude,
                     longitude = it.longitude,
                     order = it.order,
+                    minIntervalSeconds = it.minIntervalSeconds,
                     isActive = it.isActive
                 )
             }
         }
     }
 
-
     suspend fun fetchPatrolLogs(): Result<List<PatrolLog>> {
         return try {
             val response = api.getPatrolLogs()
             if (response.isSuccessful && response.body() != null) {
+                val logs = response.body()!!
+                database.patrolDao().insertPatrolLogs(logs.map {
+                    CachedPatrolLogEntity(
+                        id = it.id,
+                        name = it.name,
+                        guard = it.guard,
+                        guardName = it.guardName,
+                        station = it.station,
+                        stationName = it.stationName,
+                        assignedBy = it.assignedBy,
+                        assignedByName = it.assignedByName,
+                        startWindow = it.startWindow,
+                        deadline = it.deadline,
+                        startTime = it.startTime,
+                        endTime = it.endTime,
+                        status = it.status,
+                        isApproved = it.isApproved,
+                        approvedBy = it.approvedBy,
+                        approvedByName = it.approvedByName,
+                        approvedAt = it.approvedAt,
+                        anomaliesCount = it.anomaliesCount,
+                        notes = it.notes,
+                        scansCount = it.scansCount
+                    )
+                })
+                Result.success(logs)
+            } else {
+                val cached = database.patrolDao().getAllPatrolLogs()
+                if (cached.isNotEmpty()) {
+                    Result.success(cached.map {
+                        PatrolLog(
+                            id = it.id,
+                            name = it.name,
+                            guard = it.guard,
+                            guardName = it.guardName,
+                            station = it.station,
+                            stationName = it.stationName,
+                            assignedBy = it.assignedBy,
+                            assignedByName = it.assignedByName,
+                            startWindow = it.startWindow,
+                            deadline = it.deadline,
+                            startTime = it.startTime,
+                            endTime = it.endTime,
+                            status = it.status,
+                            isApproved = it.isApproved,
+                            approvedBy = it.approvedBy,
+                            approvedByName = it.approvedByName,
+                            approvedAt = it.approvedAt,
+                            anomaliesCount = it.anomaliesCount,
+                            notes = it.notes,
+                            scansCount = it.scansCount
+                        )
+                    })
+                } else {
+                    val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch patrol history")
+                    Result.failure(Exception(err))
+                }
+            }
+        } catch (e: Exception) {
+            val cached = database.patrolDao().getAllPatrolLogs()
+            if (cached.isNotEmpty()) {
+                Result.success(cached.map {
+                    PatrolLog(
+                        id = it.id,
+                        name = it.name,
+                        guard = it.guard,
+                        guardName = it.guardName,
+                        station = it.station,
+                        stationName = it.stationName,
+                        assignedBy = it.assignedBy,
+                        assignedByName = it.assignedByName,
+                        startWindow = it.startWindow,
+                        deadline = it.deadline,
+                        startTime = it.startTime,
+                        endTime = it.endTime,
+                        status = it.status,
+                        isApproved = it.isApproved,
+                        approvedBy = it.approvedBy,
+                        approvedByName = it.approvedByName,
+                        approvedAt = it.approvedAt,
+                        anomaliesCount = it.anomaliesCount,
+                        notes = it.notes,
+                        scansCount = it.scansCount
+                    )
+                })
+            } else {
+                Result.failure(sanitizeException(e))
+            }
+        }
+    }
+
+    suspend fun assignPatrol(
+        guardId: String,
+        stationId: String? = null,
+        name: String = "Routine Station Patrol",
+        startWindow: String? = null,
+        deadline: String? = null,
+        notes: String? = null
+    ): Result<PatrolLog> {
+        return try {
+            val response = api.assignPatrol(
+                AssignPatrolRequest(
+                    guard = guardId,
+                    station = stationId ?: currentUser?.station,
+                    name = name,
+                    startWindow = startWindow,
+                    deadline = deadline,
+                    notes = notes
+                )
+            )
+            if (response.isSuccessful && response.body() != null) {
+                val patrol = response.body()!!
+                database.patrolDao().insertPatrolLog(
+                    CachedPatrolLogEntity(
+                        id = patrol.id,
+                        name = patrol.name,
+                        guard = patrol.guard,
+                        guardName = patrol.guardName,
+                        station = patrol.station,
+                        stationName = patrol.stationName,
+                        assignedBy = patrol.assignedBy,
+                        assignedByName = patrol.assignedByName,
+                        startWindow = patrol.startWindow,
+                        deadline = patrol.deadline,
+                        startTime = patrol.startTime,
+                        endTime = patrol.endTime,
+                        status = patrol.status,
+                        isApproved = patrol.isApproved,
+                        approvedBy = patrol.approvedBy,
+                        approvedByName = patrol.approvedByName,
+                        approvedAt = patrol.approvedAt,
+                        anomaliesCount = patrol.anomaliesCount,
+                        notes = patrol.notes,
+                        scansCount = patrol.scansCount
+                    )
+                )
+                Result.success(patrol)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to assign patrol")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e))
+        }
+    }
+
+    suspend fun startAssignedPatrol(patrolId: String, notes: String? = "Patrol started by guard"): Result<PatrolLog> {
+        return try {
+            val response = api.startAssignedPatrol(patrolId, StartAssignedPatrolRequest(notes = notes))
+            if (response.isSuccessful && response.body() != null) {
+                val patrol = response.body()!!
+                database.patrolDao().insertPatrolLog(
+                    CachedPatrolLogEntity(
+                        id = patrol.id,
+                        name = patrol.name,
+                        guard = patrol.guard,
+                        guardName = patrol.guardName,
+                        station = patrol.station,
+                        stationName = patrol.stationName,
+                        assignedBy = patrol.assignedBy,
+                        assignedByName = patrol.assignedByName,
+                        startWindow = patrol.startWindow,
+                        deadline = patrol.deadline,
+                        startTime = patrol.startTime,
+                        endTime = patrol.endTime,
+                        status = patrol.status,
+                        isApproved = patrol.isApproved,
+                        approvedBy = patrol.approvedBy,
+                        approvedByName = patrol.approvedByName,
+                        approvedAt = patrol.approvedAt,
+                        anomaliesCount = patrol.anomaliesCount,
+                        notes = patrol.notes,
+                        scansCount = patrol.scansCount
+                    )
+                )
+                Result.success(patrol)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to start assigned patrol")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e))
+        }
+    }
+
+    suspend fun cancelPatrol(patrolId: String, reason: String = "Patrol cancelled by supervisor"): Result<PatrolLog> {
+        return try {
+            val response = api.cancelPatrol(patrolId, CancelPatrolRequest(reason = reason))
+            if (response.isSuccessful && response.body() != null) {
                 Result.success(response.body()!!)
             } else {
-                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch patrol history")
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to cancel patrol")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e))
+        }
+    }
+
+    suspend fun reassignPatrol(patrolId: String, newGuardId: String, reason: String = "Patrol reassigned by supervisor"): Result<PatrolLog> {
+        return try {
+            val response = api.reassignPatrol(patrolId, ReassignPatrolRequest(guard = newGuardId, reason = reason))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to reassign patrol")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e))
+        }
+    }
+
+    suspend fun approvePatrol(patrolId: String, notes: String? = "Patrol verified and approved"): Result<PatrolLog> {
+        return try {
+            val response = api.approvePatrol(patrolId, ApprovePatrolRequest(notes = notes))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to approve patrol")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e))
+        }
+    }
+
+    suspend fun rejectPatrol(patrolId: String, reason: String): Result<PatrolLog> {
+        return try {
+            val response = api.rejectPatrol(patrolId, RejectPatrolRequest(reason = reason))
+            if (response.isSuccessful && response.body() != null) {
+                Result.success(response.body()!!)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to reject patrol")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -670,13 +904,98 @@ class SgmisRepository(
         }
     }
 
-    suspend fun scanCheckpoint(patrolId: String, checkpointId: String, gps: String, notes: String): Result<Unit> {
+    suspend fun scanCheckpoint(
+        patrolId: String,
+        checkpointId: String,
+        gps: String,
+        notes: String,
+        checkpointCode: String = "",
+        checkpointOrder: Int = 1,
+        verificationMethod: String = "NFC",
+        accuracy: Double? = null
+    ): Result<Unit> {
+        val clientEventId = java.util.UUID.randomUUID().toString()
+        val clientTimestamp = java.time.Instant.now().toString()
         return try {
-            val response = api.scanCheckpoint(patrolId, CheckpointScanRequest(checkpointId, gps, notes))
+            val response = api.scanCheckpoint(
+                patrolId,
+                CheckpointScanRequest(
+                    checkpoint = checkpointId,
+                    gpsCoords = gps,
+                    notes = notes,
+                    accuracy = accuracy,
+                    verificationMethod = verificationMethod,
+                    clientEventId = clientEventId,
+                    clientTimestamp = clientTimestamp
+                )
+            )
             if (response.isSuccessful) {
                 Result.success(Unit)
             } else {
-                val err = parseDrfError(response.errorBody()?.string(), "Checkpoint scan verification failed")
+                database.patrolDao().insertPatrolEvent(
+                    CachedPatrolEventEntity(
+                        clientEventId = clientEventId,
+                        patrolLogId = patrolId,
+                        checkpointId = checkpointId,
+                        checkpointCode = checkpointCode,
+                        checkpointOrder = checkpointOrder,
+                        scannedAt = clientTimestamp,
+                        clientTimestamp = clientTimestamp,
+                        gpsCoords = gps,
+                        accuracy = accuracy,
+                        verificationMethod = verificationMethod,
+                        notes = notes,
+                        isSynced = false
+                    )
+                )
+                val err = parseDrfError(response.errorBody()?.string(), "Checkpoint scan verification queued offline")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            database.patrolDao().insertPatrolEvent(
+                CachedPatrolEventEntity(
+                    clientEventId = clientEventId,
+                    patrolLogId = patrolId,
+                    checkpointId = checkpointId,
+                    checkpointCode = checkpointCode,
+                    checkpointOrder = checkpointOrder,
+                    scannedAt = clientTimestamp,
+                    clientTimestamp = clientTimestamp,
+                    gpsCoords = gps,
+                    accuracy = accuracy,
+                    verificationMethod = verificationMethod,
+                    notes = notes,
+                    isSynced = false
+                )
+            )
+            Result.success(Unit)
+        }
+    }
+
+    suspend fun syncOfflinePatrolEvents(patrolId: String): Result<SyncPatrolEventsResponse> {
+        return try {
+            val unsynced = database.patrolDao().getUnsyncedEventsForPatrol(patrolId)
+            if (unsynced.isEmpty()) {
+                return Result.success(SyncPatrolEventsResponse(syncedCount = 0, anomaliesDetected = 0))
+            }
+            val requestEvents = unsynced.map {
+                OfflinePatrolEvent(
+                    clientEventId = it.clientEventId,
+                    checkpoint = it.checkpointId,
+                    clientTimestamp = it.clientTimestamp,
+                    verificationMethod = it.verificationMethod,
+                    gpsCoords = it.gpsCoords,
+                    accuracy = it.accuracy,
+                    notes = it.notes
+                )
+            }
+            val response = api.syncPatrolEvents(patrolId, SyncPatrolEventsRequest(events = requestEvents))
+            if (response.isSuccessful && response.body() != null) {
+                val res = response.body()!!
+                database.patrolDao().markEventsSynced(unsynced.map { it.clientEventId })
+                Result.success(res)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Offline patrol synchronization failed")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -684,11 +1003,44 @@ class SgmisRepository(
         }
     }
 
+    suspend fun getUnsyncedPatrolEventsCount(): Int {
+        return try {
+            database.patrolDao().getAllUnsyncedEvents().size
+        } catch (e: Exception) {
+            0
+        }
+    }
+
     suspend fun finishPatrol(patrolId: String, notes: String): Result<PatrolLog> {
         return try {
             val response = api.finishPatrol(patrolId, FinishPatrolRequest(notes = notes))
             if (response.isSuccessful && response.body() != null) {
-                Result.success(response.body()!!)
+                val patrol = response.body()!!
+                database.patrolDao().insertPatrolLog(
+                    CachedPatrolLogEntity(
+                        id = patrol.id,
+                        name = patrol.name,
+                        guard = patrol.guard,
+                        guardName = patrol.guardName,
+                        station = patrol.station,
+                        stationName = patrol.stationName,
+                        assignedBy = patrol.assignedBy,
+                        assignedByName = patrol.assignedByName,
+                        startWindow = patrol.startWindow,
+                        deadline = patrol.deadline,
+                        startTime = patrol.startTime,
+                        endTime = patrol.endTime,
+                        status = patrol.status,
+                        isApproved = patrol.isApproved,
+                        approvedBy = patrol.approvedBy,
+                        approvedByName = patrol.approvedByName,
+                        approvedAt = patrol.approvedAt,
+                        anomaliesCount = patrol.anomaliesCount,
+                        notes = patrol.notes,
+                        scansCount = patrol.scansCount
+                    )
+                )
+                Result.success(patrol)
             } else {
                 val err = parseDrfError(response.errorBody()?.string(), "Failed to complete patrol")
                 Result.failure(Exception(err))

@@ -358,31 +358,132 @@ data class Checkpoint(
     val name: String,
     val code: String,
     @Json(name = "qr_code") val qrCode: String,
+    @Json(name = "nfc_uid") val nfcUid: String? = null,
     val latitude: Double,
     val longitude: Double,
     val order: Int,
+    @Json(name = "min_interval_seconds") val minIntervalSeconds: Int = 60,
     @Json(name = "is_active") val isActive: Boolean = true
+)
+
+@JsonClass(generateAdapter = true)
+data class CheckpointScan(
+    val id: String? = null,
+    @Json(name = "client_event_id") val clientEventId: String? = null,
+    @Json(name = "patrol_log") val patrolLog: String? = null,
+    val checkpoint: String,
+    @Json(name = "checkpoint_name") val checkpointName: String? = null,
+    @Json(name = "checkpoint_code") val checkpointCode: String? = null,
+    @Json(name = "scanned_at") val scannedAt: String? = null,
+    @Json(name = "client_timestamp") val clientTimestamp: String? = null,
+    @Json(name = "gps_coords") val gpsCoords: String? = null,
+    val accuracy: Double? = null,
+    @Json(name = "verification_method") val verificationMethod: String = "NFC",
+    val notes: String? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class PatrolLog(
     val id: String,
+    val name: String = "Routine Station Patrol",
     val guard: String,
     @Json(name = "guard_name") val guardName: String,
     val station: String,
     @Json(name = "station_name") val stationName: String,
-    @Json(name = "start_time") val startTime: String,
+    @Json(name = "assigned_by") val assignedBy: String? = null,
+    @Json(name = "assigned_by_name") val assignedByName: String? = null,
+    @Json(name = "start_window") val startWindow: String? = null,
+    val deadline: String? = null,
+    @Json(name = "start_time") val startTime: String? = null,
     @Json(name = "end_time") val endTime: String? = null,
-    val status: String,
+    val status: String = "ASSIGNED",
+    @Json(name = "is_approved") val isApproved: Boolean = false,
+    @Json(name = "approved_by") val approvedBy: String? = null,
+    @Json(name = "approved_by_name") val approvedByName: String? = null,
+    @Json(name = "approved_at") val approvedAt: String? = null,
+    val anomalies: List<Map<String, Any?>> = emptyList(),
+    @Json(name = "anomalies_count") val anomaliesCount: Int = 0,
     val notes: String? = null,
-    @Json(name = "scans_count") val scansCount: Int = 0
-)
+    @Json(name = "scans_count") val scansCount: Int = 0,
+    val scans: List<CheckpointScan> = emptyList()
+) {
+    val isAssigned: Boolean get() = status == "ASSIGNED"
+    val isInProgress: Boolean get() = status == "IN_PROGRESS" || status == "ACTIVE"
+    val isCompleted: Boolean get() = status == "COMPLETED"
+    val isApprovedStatus: Boolean get() = status == "APPROVED" || isApproved
+    val isFailed: Boolean get() = status == "FAILED"
+    val isCancelled: Boolean get() = status == "CANCELLED"
+    val isExpired: Boolean get() = status == "EXPIRED"
+}
 
 @JsonClass(generateAdapter = true)
 data class CheckpointScanRequest(
     val checkpoint: String,
     @Json(name = "gps_coords") val gpsCoords: String = "",
-    val notes: String = "Checkpoint verified secure."
+    val notes: String = "Checkpoint verified secure.",
+    val accuracy: Double? = null,
+    @Json(name = "verification_method") val verificationMethod: String = "NFC",
+    @Json(name = "client_event_id") val clientEventId: String? = null,
+    @Json(name = "client_timestamp") val clientTimestamp: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class AssignPatrolRequest(
+    val guard: String,
+    val station: String? = null,
+    val name: String = "Routine Station Patrol",
+    @Json(name = "start_window") val startWindow: String? = null,
+    val deadline: String? = null,
+    val notes: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class StartAssignedPatrolRequest(
+    val notes: String? = "Patrol started by guard"
+)
+
+@JsonClass(generateAdapter = true)
+data class CancelPatrolRequest(
+    val reason: String = "Patrol cancelled by supervisor"
+)
+
+@JsonClass(generateAdapter = true)
+data class ReassignPatrolRequest(
+    val guard: String,
+    val reason: String = "Patrol reassigned by supervisor"
+)
+
+@JsonClass(generateAdapter = true)
+data class ApprovePatrolRequest(
+    val notes: String? = "Patrol approved by supervisor"
+)
+
+@JsonClass(generateAdapter = true)
+data class RejectPatrolRequest(
+    val reason: String = "Patrol rejected by supervisor"
+)
+
+@JsonClass(generateAdapter = true)
+data class OfflinePatrolEvent(
+    @Json(name = "client_event_id") val clientEventId: String,
+    val checkpoint: String,
+    @Json(name = "client_timestamp") val clientTimestamp: String,
+    @Json(name = "verification_method") val verificationMethod: String = "NFC",
+    @Json(name = "gps_coords") val gpsCoords: String? = null,
+    val accuracy: Double? = null,
+    val notes: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SyncPatrolEventsRequest(
+    val events: List<OfflinePatrolEvent>
+)
+
+@JsonClass(generateAdapter = true)
+data class SyncPatrolEventsResponse(
+    @Json(name = "synced_count") val syncedCount: Int = 0,
+    @Json(name = "anomalies_detected") val anomaliesDetected: Int = 0,
+    @Json(name = "patrol_status") val patrolStatus: String = "IN_PROGRESS"
 )
 
 @JsonClass(generateAdapter = true)

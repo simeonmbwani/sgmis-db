@@ -68,9 +68,51 @@ data class CachedCheckpointEntity(
     val name: String,
     val code: String,
     val qrCode: String,
+    val nfcUid: String? = null,
     val latitude: Double,
     val longitude: Double,
     val order: Int,
+    val minIntervalSeconds: Int = 60,
     val isActive: Boolean
+)
+
+@Entity(tableName = "cached_patrol_logs")
+data class CachedPatrolLogEntity(
+    @PrimaryKey val id: String,
+    val name: String,
+    val guard: String,
+    val guardName: String,
+    val station: String,
+    val stationName: String,
+    val assignedBy: String?,
+    val assignedByName: String?,
+    val startWindow: String?,
+    val deadline: String?,
+    val startTime: String?,
+    val endTime: String?,
+    val status: String,
+    val isApproved: Boolean,
+    val approvedBy: String?,
+    val approvedByName: String?,
+    val approvedAt: String?,
+    val anomaliesCount: Int,
+    val notes: String?,
+    val scansCount: Int
+)
+
+@Entity(tableName = "cached_patrol_events")
+data class CachedPatrolEventEntity(
+    @PrimaryKey val clientEventId: String,
+    val patrolLogId: String,
+    val checkpointId: String,
+    val checkpointCode: String,
+    val checkpointOrder: Int,
+    val scannedAt: String,
+    val clientTimestamp: String,
+    val gpsCoords: String?,
+    val accuracy: Double?,
+    val verificationMethod: String,
+    val notes: String?,
+    val isSynced: Boolean = false
 )
 

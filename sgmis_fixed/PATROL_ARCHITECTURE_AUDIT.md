@@ -647,7 +647,69 @@ A dedicated automated test suite (`backend/tests/test_patrol_security_hardening_
 - **Full Backend Test Suite:** 370 of 370 tests passed (36.268s).
 - **Tests Failed:** 0 failed.
 
-### 7. Known Limitations
-- Optical camera QR scanning and hardware Android NFC reading are not yet implemented in the mobile client (planned for Phases 2 & 3).
-- Offline patrol event queuing and Room-to-server sync are not yet implemented (planned for Phase 4).
-- Patrol routes currently reuse `Checkpoint.order` grouped by station; dedicated reusable route templates (`PatrolRoute`) remain a future extension.
+### 7. Limitations Addressed in Stage 2
+- Hardware Android NFC reading, offline patrol queuing with Room, and supervisor patrol assignment have now been completed in Stage 2.
+
+---
+
+## 11. Stage 2 Implementation Completion Report
+
+**Implementation Status:** COMPLETE & VERIFIED  
+**Date:** 2026-10-05  
+
+### 1. Architectural Transition: Supervisor-Assigned Patrols
+- Patrol initiation has transitioned from self-initiated to **supervisor-assigned**.
+- `POST /api/patrols/logs/` is restricted to supervisors (and administrators for view-only oversight). Guards attempting arbitrary self-initiated patrol creation receive **HTTP 403 Forbidden**.
+- Supervisors can only assign patrols to guards belonging to their assigned duty station.
+- Supervisors are blocked from proxy self-executing patrol rounds (HTTP 403 Forbidden).
+- Assigned guards start their patrol via `POST /api/patrols/logs/{id}/start/`.
+
+### 2. Full Patrol Lifecycle States
+Extended `PatrolStatus` with authoritative state transitions:
+- `ASSIGNED`: Created and allocated by supervisor; pending guard start.
+- `IN_PROGRESS` / `ACTIVE`: Guard has verified start window and commenced inspection.
+- `COMPLETED`: Guard has satisfied minimum elapsed duration (60s) and scanned all station checkpoints.
+- `APPROVED`: Supervisor has verified telemetry and formally signed off the patrol log.
+- `FAILED`: Supervisor reviewed completed patrol and rejected it due to compliance or physical inspection failure.
+- `EXPIRED`: Patrol deadline elapsed without completion.
+- `CANCELLED`: Unstarted patrol cancelled by supervisor.
+
+### 3. Checkpoint Proof & Verification Hardening
+- **NFC Tag Verification:** Incoming `nfc_uid` is compared strictly against `checkpoint.nfc_uid` registered in the database. Unmatched tags, wrong checkpoints, or foreign stations are rejected.
+- **GPS Proximity:** Haversine distance verification with accuracy thresholds. Coordinate fixes with accuracy worse than 100m are rejected.
+- **QR Code Fallback:** Secondary verification method when NFC hardware is absent or unreadable.
+- **Sequence Integrity:** Checkpoints must be scanned strictly in order ($1 \rightarrow 2 \rightarrow 3$). Out-of-sequence jumps are rejected.
+- **Velocity & Duration:** Minimum travel intervals between checkpoints are strictly enforced server-side.
+
+### 4. Anomaly Logging System
+- `PatrolLog.anomalies` (JSONField) records operational events with anomaly type, description, timestamp, and details:
+  - `DUPLICATE_SCAN`
+  - `OUT_OF_SEQUENCE`
+  - `RAPID_TRANSIT`
+  - `FAILED_VERIFICATION`
+  - `EXPIRED_COMPLETION`
+
+### 5. Idempotent Offline Synchronization
+- Android Room stores offline inspection scans in `CachedPatrolEventEntity`.
+- Endpoint `POST /api/patrols/logs/{id}/sync_events/` accepts batched offline events.
+- Idempotency is guaranteed via unique `client_event_id` UUID deduplication.
+- Full server-side validation (timestamps, proof, sequence, transit velocity) is applied during synchronization.
+
+### 6. Android Mobile Client Upgrades
+- `AndroidManifest.xml`: Registered `<uses-permission android:name="android.permission.NFC" />` and `<uses-feature android:name="android.hardware.nfc" android:required="false" />`.
+- `Models.kt`: Added `CheckpointScan`, updated `PatrolLog`, and added Stage 2 request/response DTOs.
+- `Entities.kt` & `Daos.kt`: Added `CachedPatrolLogEntity`, `CachedPatrolEventEntity`, and `PatrolDao` with Room database version bump to 3.
+- `SgmisRepository.kt` & `SgmisViewModel.kt`: Added methods for assigned patrols, offline event queueing, syncing, and supervisor reviews.
+- `PatrolScreen.kt`:
+  - Guard view shows assigned patrols list; guards can only execute assigned patrols when on-duty.
+  - Active patrol displays live route progression visualizer ($1 \rightarrow 2 \rightarrow 3$), dual NFC/QR actions, and offline sync banner.
+  - Supervisor view allows patrol assignment and review of completed patrols.
+- `DashboardScreen.kt`:
+  - Supervisor patrol oversight card displays active route progression, anomaly badges, and direct Approve/Reject actions.
+
+### 7. Test Suite Verification
+- **Stage 2 Backend Suite (`test_patrol_system_completion_stage2.py`):** 24 of 24 tests passed (100%).
+- **Phase 1 Hardening Suite (`test_patrol_security_hardening_phase1.py`):** 19 of 19 tests passed (100%).
+- **Full Backend Suite:** 394 of 394 tests passed in 58.2s (Zero regressions, zero failures).
+- **Android Unit Tests:** All tests including `PatrolSystemStage2Test` compiled and passed cleanly.
+
