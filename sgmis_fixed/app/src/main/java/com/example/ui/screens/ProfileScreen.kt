@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -16,12 +19,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.R
 import com.example.ui.viewmodel.SgmisViewModel
 
@@ -31,6 +37,7 @@ fun ProfileScreen(
     viewModel: SgmisViewModel,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
     val user = uiState.currentUser
     val scrollState = rememberScrollState()
@@ -38,7 +45,39 @@ fun ProfileScreen(
     var firstName by remember(user?.firstName) { mutableStateOf(user?.firstName ?: "") }
     var lastName by remember(user?.lastName) { mutableStateOf(user?.lastName ?: "") }
     var phone by remember(user?.phoneNumber) { mutableStateOf(user?.phoneNumber ?: "") }
+    var email by remember(user?.email) { mutableStateOf(user?.email ?: "") }
+    var address by remember(user?.address) { mutableStateOf(user?.address ?: "") }
     var photoUrl by remember(user?.profilePhoto) { mutableStateOf(user?.profilePhoto ?: "") }
+
+    val fullPhotoUrl = remember(user?.profilePhoto, uiState.serverUrl) {
+        val photo = user?.profilePhoto
+        when {
+            photo.isNullOrBlank() -> null
+            photo.startsWith("http://") || photo.startsWith("https://") -> photo
+            photo.startsWith("/") -> "${uiState.serverUrl.removeSuffix("/")}$photo"
+            else -> "${uiState.serverUrl.removeSuffix("/")}/$photo"
+        }
+    }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { selectedUri ->
+            try {
+                val inputStream = context.contentResolver.openInputStream(selectedUri)
+                val bytes = inputStream?.readBytes()
+                inputStream?.close()
+                if (bytes != null && bytes.isNotEmpty()) {
+                    val mimeType = context.contentResolver.getType(selectedUri) ?: "image/jpeg"
+                    val ext = if (mimeType.contains("png")) "png" else "jpg"
+                    val filename = "profile_${System.currentTimeMillis()}.$ext"
+                    viewModel.uploadProfilePhoto(bytes, filename, mimeType)
+                }
+            } catch (e: Exception) {
+                // Handled in viewModel error state
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -109,57 +148,82 @@ fun ProfileScreen(
                 }
             }
 
-            // Header Profile Card
+            // Header Profile Card with Photo & Quick Identity
             Card(
                 modifier = Modifier.fillMaxWidth().testTag("profile_header_card"),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(16.dp),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(64.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val initials = "${user?.firstName?.take(1) ?: ""}${user?.lastName?.take(1) ?: ""}".ifEmpty {
-                            user?.username?.take(2)?.uppercase() ?: "SG"
+                        Box(
+                            modifier = Modifier
+                                .size(72.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (!fullPhotoUrl.isNullOrBlank()) {
+                                AsyncImage(
+                                    model = fullPhotoUrl,
+                                    contentDescription = "Profile Photo",
+                                    modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                val initials = "${user?.firstName?.take(1) ?: ""}${user?.lastName?.take(1) ?: ""}".ifEmpty {
+                                    user?.username?.take(2)?.uppercase() ?: "SG"
+                                }
+                                Text(
+                                    text = initials,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 24.sp,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
                         }
-                        Text(
-                            text = initials,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 22.sp,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+
+                        Spacer(modifier = Modifier.width(16.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = user?.fullName ?: user?.username ?: "Officer",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Employee ID: ${user?.employeeNumber ?: "—"}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            AssistChip(
+                                onClick = {},
+                                label = { Text(user?.role ?: "GUARD", fontWeight = FontWeight.Bold, fontSize = 11.sp) },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    labelColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            )
+                        }
                     }
 
-                    Spacer(modifier = Modifier.width(16.dp))
-
-                    Column {
-                        Text(
-                            text = user?.fullName ?: user?.username ?: "Officer",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "@${user?.username ?: "user"}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        AssistChip(
-                            onClick = {},
-                            label = { Text(user?.role ?: "GUARD", fontWeight = FontWeight.Bold, fontSize = 11.sp) },
-                            colors = AssistChipDefaults.assistChipColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                labelColor = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                        )
+                    // Gallery photo upload action
+                    OutlinedButton(
+                        onClick = { photoPickerLauncher.launch("image/*") },
+                        modifier = Modifier.fillMaxWidth().testTag("profile_photo_upload_button"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Select & Upload Photo from Gallery")
                     }
                 }
             }
@@ -198,6 +262,7 @@ fun ProfileScreen(
                     ProfileDetailRow("Employee ID", user?.employeeNumber ?: "—")
                     ProfileDetailRow("Operational Role", user?.role ?: "—")
                     ProfileDetailRow("Assigned Station", user?.stationName ?: "Unassigned")
+                    ProfileDetailRow("Current Duty Status", uiState.guardDutyState.label)
                     ProfileDetailRow("Rank / Title", user?.rank ?: "Security Officer")
                     ProfileDetailRow("Account Status", if (user?.isActive == true) "Active Duty" else "Suspended")
                 }
@@ -252,9 +317,26 @@ fun ProfileScreen(
                     )
 
                     OutlinedTextField(
+                        value = email,
+                        onValueChange = { email = it },
+                        label = { Text("Email Address") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("profile_email_input")
+                    )
+
+                    OutlinedTextField(
+                        value = address,
+                        onValueChange = { address = it },
+                        label = { Text("Residential Address") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("profile_address_input")
+                    )
+
+                    OutlinedTextField(
                         value = photoUrl,
                         onValueChange = { photoUrl = it },
-                        label = { Text("Profile Photo URL") },
+                        label = { Text("Profile Photo URL (or use Gallery above)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("profile_photo_url_input")
                     )
@@ -268,6 +350,8 @@ fun ProfileScreen(
                                 firstName = user?.firstName ?: ""
                                 lastName = user?.lastName ?: ""
                                 phone = user?.phoneNumber ?: ""
+                                email = user?.email ?: ""
+                                address = user?.address ?: ""
                                 photoUrl = user?.profilePhoto ?: ""
                             },
                             modifier = Modifier.weight(1f)
@@ -277,7 +361,7 @@ fun ProfileScreen(
 
                         Button(
                             onClick = {
-                                viewModel.updateProfile(firstName, lastName, phone, photoUrl)
+                                viewModel.updateProfile(firstName, lastName, phone, email, address, photoUrl)
                             },
                             enabled = !uiState.isLoading,
                             modifier = Modifier.weight(1f).testTag("save_profile_button")

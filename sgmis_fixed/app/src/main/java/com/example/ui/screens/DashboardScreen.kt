@@ -121,20 +121,22 @@ fun DashboardScreen(
     }
 
     // Server-derived next duty shift for off-duty display (strictly filtered to current guard)
-    val nextDutyShift = remember(uiState.rosterShifts, user, todayStr) {
-        val uid = user?.id
-        val uName = user?.username
-        val emp = user?.employeeNumber
-        uiState.rosterShifts
-            .filter { s ->
-                s.date >= todayStr &&
-                s.shiftType.uppercase() != "OFF" &&
-                s.assignmentType.uppercase() != "TIME_OFF" &&
-                ((uid != null && s.guard == uid) ||
-                 (uName != null && s.guardName.equals(uName, ignoreCase = true)) ||
-                 (emp != null && s.employeeNumber == emp))
-            }
-            .minByOrNull { it.date }
+    val nextDutyShift = remember(uiState.serverDutyState, uiState.rosterShifts, user, todayStr) {
+        uiState.serverDutyState?.nextDuty ?: run {
+            val uid = user?.id
+            val uName = user?.username
+            val emp = user?.employeeNumber
+            uiState.rosterShifts
+                .filter { s ->
+                    s.date >= todayStr &&
+                    s.shiftType.uppercase() != "OFF" &&
+                    s.assignmentType.uppercase() != "TIME_OFF" &&
+                    ((uid != null && s.guard == uid) ||
+                     (uName != null && s.guardName.equals(uName, ignoreCase = true)) ||
+                     (emp != null && s.employeeNumber == emp))
+                }
+                .minByOrNull { it.date }
+        }
     }
 
     Scaffold(
@@ -852,10 +854,60 @@ fun DashboardScreen(
                                     )
                                 } else {
                                     Text(
+                                        text = "NO UPCOMING DUTY",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
                                         text = "No upcoming shifts scheduled on the active server roster.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                }
+                            }
+                        }
+
+                        // Off-Duty Informational Cards: Profile & About App
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { onNavigate(NavRoutes.PROFILE) }
+                                    .testTag("nav_profile"),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                shape = RoundedCornerShape(14.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("Profile", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                        Text("View & edit", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { onNavigate(NavRoutes.ABOUT) }
+                                    .testTag("nav_about"),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                shape = RoundedCornerShape(14.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text("About App", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                        Text("Version & info", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
                                 }
                             }
                         }

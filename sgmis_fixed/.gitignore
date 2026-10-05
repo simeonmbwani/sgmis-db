@@ -24,3 +24,5 @@ __pycache__/
 *$py.class
 db.sqlite3
 .pytest_cache/
+backend/media/
+

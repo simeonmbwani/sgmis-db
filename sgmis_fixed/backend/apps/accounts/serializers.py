@@ -20,6 +20,7 @@ class UserSerializer(serializers.ModelSerializer):
             "role",
             "rank",
             "phone_number",
+            "address",
             "station",
             "station_name",
             "profile_photo",
@@ -47,6 +48,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
             "role",
             "rank",
             "phone_number",
+            "address",
             "station",
             "profile_photo",
             "password",
@@ -64,7 +66,32 @@ class UserCreateSerializer(serializers.ModelSerializer):
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["first_name", "last_name", "phone_number", "profile_photo"]
+        fields = ["first_name", "last_name", "phone_number", "email", "address", "profile_photo"]
+
+    def validate_phone_number(self, value):
+        if value:
+            cleaned = value.strip()
+            digits_only = "".join(c for c in cleaned if c.isdigit())
+            if len(digits_only) < 7:
+                raise serializers.ValidationError("Please provide a valid phone number with at least 7 digits.")
+            return cleaned
+        return value
+
+    def validate_email(self, value):
+        if value:
+            cleaned = value.strip().lower()
+            existing = User.objects.filter(email__iexact=cleaned).exclude(id=self.instance.id).first()
+            if existing:
+                raise serializers.ValidationError("This email address is already in use by another account.")
+            return cleaned
+        return value
+
+    def validate(self, attrs):
+        # Strict security rule: Disallow altering operational fields
+        disallowed = ["employee_number", "role", "station", "is_active", "rank", "is_staff", "is_superuser"]
+        for field in disallowed:
+            attrs.pop(field, None)
+        return attrs
 
 class LoginSerializer(serializers.Serializer):
     identifier = serializers.CharField(required=True, help_text="Username or Employee Number")

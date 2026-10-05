@@ -28,7 +28,8 @@ import com.example.ui.viewmodel.SgmisViewModel
 @Composable
 fun SettingsScreen(
     viewModel: SgmisViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigate: (String) -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
@@ -189,6 +190,16 @@ fun SettingsScreen(
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
+                    OutlinedButton(
+                        onClick = { onNavigate(com.example.ui.navigation.NavRoutes.PROFILE) },
+                        modifier = Modifier.fillMaxWidth().testTag("settings_profile_button"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Outlined.Person, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("View & Edit Profile")
+                    }
+
                     Button(
                         onClick = { showLogoutDialog = true },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer),
@@ -244,6 +255,17 @@ fun SettingsScreen(
                     )
                     InfoRow(label = "Build Type", value = BuildConfig.BUILD_TYPE)
                     InfoRow(label = "Security Standard", value = "ISO 27001 / SOC 2 Type II Compliant")
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    OutlinedButton(
+                        onClick = { onNavigate(com.example.ui.navigation.NavRoutes.ABOUT) },
+                        modifier = Modifier.fillMaxWidth().testTag("view_full_about_button"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Outlined.Info, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("View Complete App & Features Overview")
+                    }
                 }
             }
         }

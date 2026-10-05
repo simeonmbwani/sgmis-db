@@ -100,7 +100,11 @@ fun EscortDutiesScreen(
                     Text("No escort duties assigned.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     items(uiState.escortDuties) { duty ->
                         EscortCard(
                             duty = duty,

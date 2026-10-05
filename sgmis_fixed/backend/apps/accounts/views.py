@@ -8,6 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.exceptions import ValidationError, PermissionDenied
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 from django.conf import settings
@@ -362,18 +363,106 @@ class PasswordResetConfirmView(APIView):
 class CustomTokenRefreshView(TokenRefreshView):
     permission_classes = [AllowAny]
 
+def save_user_profile_photo(user, photo_input):
+    """
+    Saves an uploaded photo file or base64 data to MEDIA_ROOT/profile_photos/
+    and updates user.profile_photo.
+    """
+    import os, base64
+    from django.core.files.uploadedfile import UploadedFile
+
+    media_dir = os.path.join(settings.MEDIA_ROOT, "profile_photos")
+    os.makedirs(media_dir, exist_ok=True)
+
+    allowed_exts = {".jpg", ".jpeg", ".png", ".webp"}
+    max_size = 5 * 1024 * 1024  # 5MB
+
+    if isinstance(photo_input, UploadedFile):
+        if photo_input.size > max_size:
+            raise ValidationError({"profile_photo": "Profile photo must be 5MB or smaller."})
+        _, ext = os.path.splitext(photo_input.name.lower())
+        if ext not in allowed_exts:
+            ext = ".jpg"
+        filename = f"user_{user.id}_{int(timezone.now().timestamp())}{ext}"
+        filepath = os.path.join(media_dir, filename)
+        with open(filepath, "wb+") as destination:
+            for chunk in photo_input.chunks():
+                destination.write(chunk)
+        user.profile_photo = f"{settings.MEDIA_URL}profile_photos/{filename}"
+        user.save(update_fields=["profile_photo", "updated_at"])
+        return user.profile_photo
+
+    elif isinstance(photo_input, str) and photo_input.startswith("data:image/"):
+        try:
+            header, base64_data = photo_input.split(";base64,", 1)
+            mime = header.split("data:image/")[1].lower()
+            ext = f".{mime}" if f".{mime}" in allowed_exts else ".jpg"
+            data_bytes = base64.b64decode(base64_data)
+            if len(data_bytes) > max_size:
+                raise ValidationError({"profile_photo": "Profile photo must be 5MB or smaller."})
+            filename = f"user_{user.id}_{int(timezone.now().timestamp())}{ext}"
+            filepath = os.path.join(media_dir, filename)
+            with open(filepath, "wb") as destination:
+                destination.write(data_bytes)
+            user.profile_photo = f"{settings.MEDIA_URL}profile_photos/{filename}"
+            user.save(update_fields=["profile_photo", "updated_at"])
+            return user.profile_photo
+        except Exception as e:
+            if isinstance(e, ValidationError):
+                raise
+            raise ValidationError({"profile_photo": f"Failed to process image: {str(e)}"})
+    elif isinstance(photo_input, str) and (photo_input.startswith("http://") or photo_input.startswith("https://") or photo_input.startswith("/media/")):
+        user.profile_photo = photo_input
+        user.save(update_fields=["profile_photo", "updated_at"])
+        return user.profile_photo
+    return None
+
+
 class CurrentUserView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
 
     def patch(self, request):
-        serializer = UserProfileUpdateSerializer(request.user, data=request.data, partial=True)
+        photo_file = request.FILES.get("photo") or request.FILES.get("profile_photo")
+        if photo_file:
+            save_user_profile_photo(request.user, photo_file)
+
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        photo_data = data.get("profile_photo")
+        if photo_data and isinstance(photo_data, str) and photo_data.startswith("data:image/"):
+            save_user_profile_photo(request.user, photo_data)
+            data.pop("profile_photo", None)
+
+        serializer = UserProfileUpdateSerializer(request.user, data=data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(UserSerializer(request.user).data)
+
+    def post(self, request):
+        return self.patch(request)
+
+
+class CurrentUserPhotoUploadView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request):
+        photo_file = request.FILES.get("photo") or request.FILES.get("profile_photo")
+        photo_str = request.data.get("photo") or request.data.get("profile_photo")
+        photo_input = photo_file or photo_str
+        if not photo_input:
+            return Response({"detail": "No photo file or image data provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        url = save_user_profile_photo(request.user, photo_input)
+        return Response({
+            "message": "Profile photo updated successfully.",
+            "profile_photo": url,
+            "user": UserSerializer(request.user).data
+        }, status=status.HTTP_200_OK)
 
 class UserViewSet(viewsets.ModelViewSet):
     """

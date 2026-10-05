@@ -191,7 +191,7 @@ fun SgmisApp(viewModel: SgmisViewModel) {
                 EmergencySosScreen(viewModel = viewModel) { navController.popBackStack() }
             }
             composable("settings") {
-                SettingsScreen(viewModel = viewModel) { navController.popBackStack() }
+                SettingsScreen(viewModel = viewModel, onBack = { navController.popBackStack() }, onNavigate = safeNavigate)
             }
             composable("users") {
                 UserManagementScreen(viewModel = viewModel) { navController.popBackStack() }
@@ -207,6 +207,9 @@ fun SgmisApp(viewModel: SgmisViewModel) {
             }
             composable("profile") {
                 ProfileScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
+            composable("about") {
+                AboutAppScreen(viewModel = viewModel) { navController.popBackStack() }
             }
             composable("guard_duty_plan") {
                 GuardDutyPlanScreen(viewModel = viewModel) { navController.popBackStack() }

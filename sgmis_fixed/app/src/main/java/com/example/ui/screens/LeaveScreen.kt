@@ -104,14 +104,17 @@ fun LeaveScreen(
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { showApplyDialog = true },
-                icon = { Icon(Icons.Default.Add, null) },
-                text = { Text("Apply for Leave") },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.testTag("apply_leave_fab")
-            )
+            val isPersonalLeaveActive = (!isSupervisor && !isAdmin) || (isSupervisor && selectedTabIndex == 1) || (isAdmin && selectedTabIndex == 2)
+            if (isPersonalLeaveActive) {
+                ExtendedFloatingActionButton(
+                    onClick = { showApplyDialog = true },
+                    icon = { Icon(Icons.Default.Add, null) },
+                    text = { Text("Apply for Leave") },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.testTag("apply_leave_fab")
+                )
+            }
         }
     ) { paddingValues ->
         Column(
@@ -248,7 +251,8 @@ fun LeaveScreen(
                         applications = uiState.leaveApplications,
                         canReview = false,
                         onApprove = {},
-                        onReject = {}
+                        onReject = {},
+                        onApplyLeave = { showApplyDialog = true }
                     )
                 }
             }
@@ -314,7 +318,8 @@ fun PersonalLeaveView(
     applications: List<LeaveApplication>,
     canReview: Boolean,
     onApprove: (LeaveApplication) -> Unit,
-    onReject: (LeaveApplication) -> Unit
+    onReject: (LeaveApplication) -> Unit,
+    onApplyLeave: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -396,6 +401,17 @@ fun PersonalLeaveView(
             }
         }
 
+        // Inline Apply for Leave Action Button
+        Button(
+            onClick = onApplyLeave,
+            modifier = Modifier.fillMaxWidth().testTag("apply_leave_inline_button"),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Apply for Leave", fontWeight = FontWeight.SemiBold)
+        }
+
         Text("Applications History", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
 
         if (applications.isEmpty()) {
@@ -405,7 +421,7 @@ fun PersonalLeaveView(
         } else {
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(bottom = 88.dp),
+                contentPadding = PaddingValues(bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(applications) { app ->
@@ -430,7 +446,7 @@ fun SupervisorStationCommandView(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 88.dp),
+        contentPadding = PaddingValues(bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
@@ -526,7 +542,7 @@ fun AdminNationalAccrualView(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 88.dp),
+        contentPadding = PaddingValues(bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // Accrual Engine Action Card
@@ -619,7 +635,7 @@ fun ApplicationsReviewQueueView(
     } else {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 88.dp),
+            contentPadding = PaddingValues(bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(applications) { app ->

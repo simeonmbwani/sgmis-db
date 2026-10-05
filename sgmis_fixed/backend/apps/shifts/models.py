@@ -249,28 +249,57 @@ class Shift(models.Model):
 
     def clean(self):
         super().clean()
-        if self.pair and self.assignment_type == AssignmentType.NORMAL and self.shift_type in [ShiftType.DAY, ShiftType.NIGHT]:
-            # Enforce pair invariant: No duplicate shift_type under same pair on same date
-            dup = Shift.objects.filter(
-                pair=self.pair,
+
+        # Rule 1: ONE GUARD = ONE ACTIVE STATION AT A TIME
+        # A guard cannot have active working duties at multiple stations on the same date.
+        # Historical, expired, archived, and cancelled records do NOT count as conflicts.
+        if self.guard_id and self.station_id and self.shift_type != ShiftType.OFF and self.assignment_type != AssignmentType.TIME_OFF:
+            conflict = Shift.objects.filter(
+                guard_id=self.guard_id,
                 date=self.date,
-                shift_type=self.shift_type,
-                assignment_type=AssignmentType.NORMAL,
-            ).exclude(id=self.id)
-            if dup.exists():
+            ).exclude(id=self.id).exclude(
+                roster__status__in=[RosterStatus.ARCHIVED]
+            ).exclude(
+                shift_type=ShiftType.OFF
+            ).exclude(
+                assignment_type=AssignmentType.TIME_OFF
+            ).exclude(
+                station_id=self.station_id
+            ).select_related("station").first()
+            if conflict:
                 raise ValidationError(
-                    f"Pair already has an active {self.shift_type} shift on {self.date}."
+                    f"Guard already has an active assignment at another station ({conflict.station.name}) on {self.date}."
                 )
 
-            # Maximum 2 distinct active guards scheduled per pair per date (1 DAY, 1 NIGHT)
-            active_pair_shifts = Shift.objects.filter(
-                pair=self.pair,
+        # Rule 2: NORMAL STATION PAIR / MAXIMUM TWO ACTIVE GUARDS (1 DAY, 1 NIGHT)
+        if self.assignment_type in [AssignmentType.NORMAL, AssignmentType.RELIEF] and self.shift_type in [ShiftType.DAY, ShiftType.NIGHT]:
+            target_filter = {"pair": self.pair} if self.pair else {"station_id": self.station_id}
+
+            # Enforce pair/station invariant: No duplicate shift_type on same date
+            dup = Shift.objects.filter(
                 date=self.date,
-                assignment_type=AssignmentType.NORMAL,
-            ).exclude(id=self.id).exclude(shift_type=ShiftType.OFF)
-            if active_pair_shifts.count() >= 2:
+                shift_type=self.shift_type,
+                assignment_type__in=[AssignmentType.NORMAL, AssignmentType.RELIEF],
+                **target_filter,
+            ).exclude(id=self.id).exclude(roster__status__in=[RosterStatus.ARCHIVED])
+            if dup.exists():
+                entity_label = "Pair" if self.pair else "Station"
                 raise ValidationError(
-                    f"Maximum 2 guards (1 DAY, 1 NIGHT) can be scheduled for a pair on {self.date}."
+                    f"{entity_label} already has an active {self.shift_type} shift on {self.date}."
+                )
+
+            # Maximum 2 distinct active guards scheduled per pair/station per date (1 DAY, 1 NIGHT)
+            active_shifts = Shift.objects.filter(
+                date=self.date,
+                assignment_type__in=[AssignmentType.NORMAL, AssignmentType.RELIEF],
+                **target_filter,
+            ).exclude(id=self.id).exclude(shift_type=ShiftType.OFF).exclude(
+                assignment_type=AssignmentType.TIME_OFF
+            ).exclude(roster__status__in=[RosterStatus.ARCHIVED])
+            if active_shifts.count() >= 2:
+                entity_label = "pair" if self.pair else "station"
+                raise ValidationError(
+                    f"Maximum 2 guards (1 DAY, 1 NIGHT) can be scheduled for a {entity_label} on {self.date}."
                 )
 
     def get_partner(self):

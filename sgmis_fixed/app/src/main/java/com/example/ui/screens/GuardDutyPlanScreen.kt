@@ -89,8 +89,8 @@ fun GuardDutyPlanScreen(
             st == "OFF" || at == "TIME_OFF"
         }
     }
-    val nextDuty = remember(myShifts, todayStr) {
-        myShifts
+    val nextDuty = remember(uiState.serverDutyState, myShifts, todayStr) {
+        uiState.serverDutyState?.nextDuty ?: myShifts
             .filter { it.date >= todayStr && it.shiftType.uppercase() != "OFF" && it.assignmentType.uppercase() != "TIME_OFF" }
             .minByOrNull { it.date }
     }
@@ -304,26 +304,26 @@ fun GuardDutyPlanScreen(
             }
 
             // Next Duty Card
-            if (nextDuty != null) {
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
-                        shape = RoundedCornerShape(12.dp)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().testTag("next_duty_card"),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.EventAvailable, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column {
-                                Text(
-                                    text = "Next Scheduled Duty",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                        Icon(Icons.Default.EventAvailable, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "Next Scheduled Duty",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            if (nextDuty != null) {
                                 Text(
                                     text = "${nextDuty.date} • ${nextDuty.shiftType} Shift (${nextDuty.startTime}–${nextDuty.endTime})",
                                     style = MaterialTheme.typography.titleSmall,
@@ -331,6 +331,18 @@ fun GuardDutyPlanScreen(
                                 )
                                 Text(
                                     text = "Station: ${nextDuty.stationName}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Text(
+                                    text = "NO UPCOMING DUTY",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "No upcoming shifts scheduled on the active server roster.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

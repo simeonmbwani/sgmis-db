@@ -43,6 +43,17 @@ enum class GuardDutyState {
     val isOnLeave: Boolean get() = this == ON_LEAVE
     val isSpecialDuty: Boolean get() = this == EXAM || this == ESCORT
 
+    val label: String get() = when (this) {
+        OFF_DUTY -> "Off Duty"
+        ELIGIBLE_FOR_DUTY -> "Eligible for Duty"
+        ON_DUTY -> "On Duty"
+        TIME_OFF -> "Time Off"
+        ON_LEAVE -> "On Approved Leave"
+        EARLY_EXIT_PENDING -> "Early Exit Pending"
+        EXAM -> "Exam Duty"
+        ESCORT -> "Escort Duty"
+    }
+
     companion object {
         fun fromShift(shift: Shift?): GuardDutyState {
             if (shift == null) return OFF_DUTY
@@ -82,6 +93,7 @@ data class User(
     val id: String,
     val username: String,
     val email: String? = null,
+    val address: String? = null,
     @Json(name = "employee_number") val employeeNumber: String? = null,
     @Json(name = "first_name") val firstName: String? = null,
     @Json(name = "last_name") val lastName: String? = null,
@@ -496,6 +508,8 @@ data class UpdateProfileRequest(
     @Json(name = "first_name") val firstName: String? = null,
     @Json(name = "last_name") val lastName: String? = null,
     @Json(name = "phone_number") val phoneNumber: String? = null,
+    val email: String? = null,
+    val address: String? = null,
     @Json(name = "profile_photo") val profilePhoto: String? = null
 )
 
@@ -1308,7 +1322,8 @@ data class DutyStateResponse(
     @Json(name = "is_eligible_for_duty") val isEligibleForDuty: Boolean = false,
     val shift: Shift? = null,
     @Json(name = "exam_duty") val examDuty: ExamDuty? = null,
-    @Json(name = "escort_duty") val escortDuty: EscortDuty? = null
+    @Json(name = "escort_duty") val escortDuty: EscortDuty? = null,
+    @Json(name = "next_duty") val nextDuty: Shift? = null
 )
 
 @JsonClass(generateAdapter = true)

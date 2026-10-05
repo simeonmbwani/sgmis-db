@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import android.util.Log
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 
 class SgmisRepository(
     private val apiClient: ApiClient,
@@ -1570,13 +1572,17 @@ class SgmisRepository(
         firstName: String?,
         lastName: String?,
         phoneNumber: String?,
-        profilePhoto: String?
+        email: String? = null,
+        address: String? = null,
+        profilePhoto: String? = null
     ): Result<User> {
         return try {
             val request = UpdateProfileRequest(
                 firstName = firstName,
                 lastName = lastName,
                 phoneNumber = phoneNumber,
+                email = email,
+                address = address,
                 profilePhoto = profilePhoto
             )
             val response = api.updateProfile(request)
@@ -1586,6 +1592,29 @@ class SgmisRepository(
                 Result.success(updatedUser)
             } else {
                 val err = parseDrfError(response.errorBody()?.string(), "Failed to update profile")
+                Result.failure(Exception(err))
+            }
+        } catch (e: Exception) {
+            Result.failure(sanitizeException(e))
+        }
+    }
+
+    suspend fun uploadProfilePhoto(
+        bytes: ByteArray,
+        filename: String = "profile.jpg",
+        mimeType: String = "image/jpeg"
+    ): Result<User> {
+        return try {
+            val mediaType = mimeType.toMediaTypeOrNull()
+            val reqBody = bytes.toRequestBody(mediaType)
+            val part = okhttp3.MultipartBody.Part.createFormData("photo", filename, reqBody)
+            val response = api.uploadProfilePhoto(part)
+            if (response.isSuccessful && response.body() != null) {
+                val updatedUser = response.body()!!
+                sessionManager.saveUser(updatedUser)
+                Result.success(updatedUser)
+            } else {
+                val err = parseDrfError(response.errorBody()?.string(), "Failed to upload photo")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {

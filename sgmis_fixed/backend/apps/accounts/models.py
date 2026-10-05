@@ -38,6 +38,7 @@ class User(AbstractUser):
     )
     rank = models.CharField(max_length=64, default="Security Officer", blank=True)
     phone_number = models.CharField(max_length=32, blank=True, default="")
+    address = models.CharField(max_length=255, blank=True, default="")
     profile_photo = models.URLField(max_length=500, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

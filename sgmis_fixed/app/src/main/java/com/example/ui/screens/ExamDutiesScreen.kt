@@ -100,7 +100,11 @@ fun ExamDutiesScreen(
                     Text("No exam period security duties scheduled.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     items(uiState.examDuties) { duty ->
                         ExamDutyCard(
                             duty = duty,

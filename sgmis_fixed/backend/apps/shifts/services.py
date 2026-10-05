@@ -1267,6 +1267,91 @@ def reject_holiday_compensation(duty_record, user, reason=""):
         return locked_record
 
 
+def resolve_next_guard_duty(guard, reference_date=None):
+    """
+    Authoritative computation of a guard's next upcoming working duty shift.
+    Rules:
+    - Excludes OFF and TIME_OFF shifts.
+    - Excludes dates where the guard has approved leave (LeaveApplication.APPROVED).
+    - If today has an upcoming shift that has not yet concluded, returns today's shift.
+    - Otherwise, looks at future dates chronologically (date > reference_date).
+    - Returns Shift model instance or None.
+    """
+    from apps.accounts.models import User
+    from apps.leave.models import LeaveApplication, LeaveStatus
+
+    if isinstance(guard, (str, uuid.UUID)):
+        guard = User.objects.filter(id=guard).first()
+
+    if not guard or not guard.is_active:
+        return None
+
+    now_tz = timezone.localtime(timezone.now())
+    if reference_date is None:
+        target_date = now_tz.date()
+    elif isinstance(reference_date, str):
+        try:
+            target_date = dt_cls.strptime(reference_date, "%Y-%m-%d").date()
+        except ValueError:
+            target_date = now_tz.date()
+    else:
+        target_date = reference_date
+
+    # Approved leave periods
+    approved_leaves = list(LeaveApplication.objects.filter(
+        guard=guard,
+        status=LeaveStatus.APPROVED,
+        end_date__gte=target_date,
+    ).values("start_date", "end_date"))
+
+    def is_date_on_leave(d):
+        return any(l["start_date"] <= d <= l["end_date"] for l in approved_leaves)
+
+    # 1. Check today's shift if evaluating today
+    if target_date == now_tz.date() and not is_date_on_leave(target_date):
+        today_shifts = list(
+            Shift.objects.filter(guard=guard, date=target_date)
+            .exclude(shift_type=ShiftType.OFF)
+            .exclude(assignment_type=AssignmentType.TIME_OFF)
+            .select_related("station", "pair")
+            .order_by("start_time")
+        )
+        for s in today_shifts:
+            att = Attendance.objects.filter(shift=s, guard=guard).first()
+            if att and att.clock_out:
+                continue
+
+            # Schedule end boundary
+            if s.end_time <= s.start_time:
+                sched_end_dt = timezone.make_aware(
+                    dt_cls.combine(s.date + timedelta(days=1), s.end_time),
+                    timezone.get_current_timezone(),
+                )
+            else:
+                sched_end_dt = timezone.make_aware(
+                    dt_cls.combine(s.date, s.end_time), timezone.get_current_timezone()
+                )
+
+            if now_tz <= sched_end_dt or (att and att.clock_in and not att.clock_out):
+                return s
+
+    # 2. Check future shifts (date > target_date)
+    future_shifts = Shift.objects.filter(
+        guard=guard,
+        date__gt=target_date,
+    ).exclude(
+        shift_type=ShiftType.OFF
+    ).exclude(
+        assignment_type=AssignmentType.TIME_OFF
+    ).select_related("station", "pair").order_by("date", "start_time")
+
+    for s in future_shifts:
+        if not is_date_on_leave(s.date):
+            return s
+
+    return None
+
+
 def resolve_guard_duty(guard, date=None, current_time=None):
     """
     Authoritative single source of truth for resolving a guard's duty status.
@@ -1331,6 +1416,7 @@ def resolve_guard_duty(guard, date=None, current_time=None):
         "clock_in_enabled": False,
         "clock_out_enabled": False,
         "shift": None,
+        "next_duty": None,
         "leave_app": None,
         "exam_duty": None,
         "escort_duty": None,
@@ -1341,6 +1427,8 @@ def resolve_guard_duty(guard, date=None, current_time=None):
     if not guard or not guard.is_active:
         base_result["duty_state"] = "INACTIVE"
         return base_result
+
+    base_result["next_duty"] = resolve_next_guard_duty(guard, reference_date=target_date)
 
     # 1. Approved Leave Check (strictly checking start_date <= date <= end_date)
     leave_app = LeaveApplication.objects.filter(

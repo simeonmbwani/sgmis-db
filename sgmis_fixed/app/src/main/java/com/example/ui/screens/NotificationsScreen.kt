@@ -171,21 +171,67 @@ fun NotificationsScreen(
                 }
             }
 
-            if (state.notifications.isEmpty()) {
+            var selectedTab by remember { mutableIntStateOf(0) }
+            val unreadAlerts = remember(state.notifications) { state.notifications.filter { !it.read } }
+            val readAlerts = remember(state.notifications) { state.notifications.filter { it.read } }
+            val recentAlerts = remember(state.notifications, unreadAlerts) {
+                if (unreadAlerts.isNotEmpty()) unreadAlerts else state.notifications.take(15)
+            }
+            val archiveAlerts = readAlerts
+
+            TabRow(
+                selectedTabIndex = selectedTab,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = {
+                        Text(
+                            if (unreadAlerts.isNotEmpty()) "Recent Alerts (${unreadAlerts.size})"
+                            else "Recent Alerts"
+                        )
+                    },
+                    icon = { Icon(Icons.Outlined.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = {
+                        Text(
+                            if (archiveAlerts.isNotEmpty()) "Archive (${archiveAlerts.size})"
+                            else "Archive"
+                        )
+                    },
+                    icon = { Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                )
+            }
+
+            val displayedAlerts = if (selectedTab == 0) recentAlerts else archiveAlerts
+
+            if (displayedAlerts.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Outlined.NotificationsNone, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(48.dp))
+                        Icon(
+                            if (selectedTab == 0) Icons.Outlined.NotificationsNone else Icons.Default.Archive,
+                            null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(48.dp)
+                        )
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("No active security notifications", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            if (selectedTab == 0) "No active security notifications" else "No archived notifications",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(bottom = 88.dp)
+                    contentPadding = PaddingValues(bottom = 120.dp)
                 ) {
-                    items(state.notifications, key = { it.id }) { n ->
+                    items(displayedAlerts, key = { it.id }) { n ->
                         NotificationCard(
                             notification = n,
                             onMarkRead = { viewModel.markNotificationRead(n.id) },

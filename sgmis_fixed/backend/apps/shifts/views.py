@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, time, timedelta
+from django.db import transaction
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework import status, viewsets
@@ -287,116 +288,178 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
         station_id = request.data.get("station_id")
         station = get_object_or_404(Station, id=station_id) if station_id else shift.station
 
-        # 1. Active shift conflict check: exclude archived rosters, TIME_OFF, and OFF
-        conflict = Shift.objects.filter(guard=guard, date=shift.date).exclude(id=shift.id).exclude(
-            roster__status=RosterStatus.ARCHIVED
-        ).exclude(
-            assignment_type=AssignmentType.TIME_OFF
-        ).exclude(shift_type=ShiftType.OFF).exists()
-        if conflict:
-            return Response({"detail": "The selected guard already has another active shift on this date."}, status=status.HTTP_409_CONFLICT)
+        with transaction.atomic():
+            # 1. Active shift conflict check: exclude archived rosters, TIME_OFF, and OFF
+            conflict = Shift.objects.filter(guard=guard, date=shift.date).exclude(id=shift.id).exclude(
+                roster__status=RosterStatus.ARCHIVED
+            ).exclude(
+                assignment_type=AssignmentType.TIME_OFF
+            ).exclude(shift_type=ShiftType.OFF).select_related("station").first()
 
-        # 2. Approved leave conflict check
-        from apps.leave.models import LeaveApplication, LeaveStatus
-        on_leave = LeaveApplication.objects.filter(
-            guard=guard,
-            status=LeaveStatus.APPROVED,
-            start_date__lte=shift.date,
-            end_date__gte=shift.date,
-        ).exists()
-        if on_leave:
-            return Response({"detail": "The selected guard is on approved leave on this date and cannot be assigned to a shift."}, status=status.HTTP_409_CONFLICT)
+            if conflict:
+                detail_msg = f"GUARD ALREADY ASSIGNED\nStation: {conflict.station.name}\nDuty: {conflict.shift_type}\nDate: {conflict.date}\nStatus: Active"
+                return Response({
+                    "detail": detail_msg,
+                    "conflict": {
+                        "station": conflict.station.name,
+                        "shift_type": conflict.shift_type,
+                        "date": str(conflict.date),
+                        "status": "Active"
+                    }
+                }, status=status.HTTP_409_CONFLICT)
 
-        # 3. Exam duty conflict check
-        from apps.exams.models import ExamDuty, ExamStatus
-        on_exam = ExamDuty.objects.filter(
-            guard=guard,
-            date=shift.date,
-            status__in=[ExamStatus.ASSIGNED, ExamStatus.ACKNOWLEDGED, ExamStatus.IN_PROGRESS],
-        ).exists()
-        if on_exam:
-            return Response({"detail": "The selected guard is assigned to examination duty on this date and cannot be assigned to a normal shift."}, status=status.HTTP_409_CONFLICT)
+            # 2. Approved leave conflict check
+            from apps.leave.models import LeaveApplication, LeaveStatus
+            on_leave = LeaveApplication.objects.filter(
+                guard=guard,
+                status=LeaveStatus.APPROVED,
+                start_date__lte=shift.date,
+                end_date__gte=shift.date,
+            ).exists()
+            if on_leave:
+                return Response({"detail": "The selected guard is on approved leave on this date and cannot be assigned to a shift."}, status=status.HTTP_409_CONFLICT)
 
-        # 4. Escort duty conflict check
-        from apps.escorts.models import EscortDuty, EscortStatus
-        on_escort = EscortDuty.objects.filter(
-            guard=guard,
-            start_time__date__lte=shift.date,
-            end_time__date__gte=shift.date,
-            status__in=[EscortStatus.SCHEDULED, EscortStatus.ASSIGNED, EscortStatus.ACKNOWLEDGED, EscortStatus.EN_ROUTE],
-        ).exists()
-        if on_escort:
-            return Response({"detail": "The selected guard is assigned to escort duty on this date and cannot be assigned to a normal shift."}, status=status.HTTP_409_CONFLICT)
+            # 3. Exam duty conflict check
+            from apps.exams.models import ExamDuty, ExamStatus
+            on_exam = ExamDuty.objects.filter(
+                guard=guard,
+                date=shift.date,
+                status__in=[ExamStatus.ASSIGNED, ExamStatus.ACKNOWLEDGED, ExamStatus.IN_PROGRESS],
+            ).exists()
+            if on_exam:
+                return Response({"detail": "The selected guard is assigned to examination duty on this date and cannot be assigned to a normal shift."}, status=status.HTTP_409_CONFLICT)
 
-        # Clean up any existing scheduled TIME_OFF / OFF shift for the newly assigned guard on this date
-        Shift.objects.filter(guard=guard, date=shift.date, shift_type=ShiftType.OFF).delete()
-        Shift.objects.filter(guard=guard, date=shift.date, assignment_type=AssignmentType.TIME_OFF).delete()
+            # 4. Escort duty conflict check
+            from apps.escorts.models import EscortDuty, EscortStatus
+            on_escort = EscortDuty.objects.filter(
+                guard=guard,
+                start_time__date__lte=shift.date,
+                end_time__date__gte=shift.date,
+                status__in=[EscortStatus.SCHEDULED, EscortStatus.ASSIGNED, EscortStatus.ACKNOWLEDGED, EscortStatus.EN_ROUTE],
+            ).exists()
+            if on_escort:
+                return Response({"detail": "The selected guard is assigned to escort duty on this date and cannot be assigned to a normal shift."}, status=status.HTTP_409_CONFLICT)
 
-        old_guard = shift.guard
-        old_station = shift.station
-        shift.guard = guard
-        shift.station = station
-        shift.is_override = True
-        shift.override_reason = reason
+            # Target shift type calculation
+            target_shift_type = shift.shift_type
+            new_shift_type = request.data.get("shift_type")
+            if new_shift_type:
+                st_norm = str(new_shift_type).strip().upper()
+                if st_norm in [ShiftType.DAY, ShiftType.NIGHT, ShiftType.OFF]:
+                    target_shift_type = st_norm
 
-        # Optional shift_type adjustment (e.g. DAY <-> NIGHT)
-        new_shift_type = request.data.get("shift_type")
-        if new_shift_type:
-            st_norm = str(new_shift_type).strip().upper()
-            if st_norm in [ShiftType.DAY, ShiftType.NIGHT, ShiftType.OFF]:
-                shift.shift_type = st_norm
-                if st_norm == ShiftType.DAY:
-                    shift.start_time = time(7, 0)
-                    shift.end_time = time(18, 0)
-                elif st_norm == ShiftType.NIGHT:
-                    shift.start_time = time(18, 0)
-                    shift.end_time = time(7, 0)
+            # 5. Destination station pair / 2-guard limit check (Part B)
+            if target_shift_type in [ShiftType.DAY, ShiftType.NIGHT]:
+                target_pair = shift.pair if (shift.pair and guard.id in (shift.pair.guard_a_id, shift.pair.guard_b_id)) else None
+                check_filter = {"pair": target_pair} if target_pair else {"station": station}
 
-        # Optional assignment_type adjustment (e.g. RELIEF)
-        new_assignment_type = request.data.get("assignment_type")
-        if new_assignment_type:
-            at_norm = str(new_assignment_type).strip().upper()
-            if at_norm in [AssignmentType.NORMAL, AssignmentType.RELIEF, AssignmentType.EXAM, AssignmentType.ESCORT]:
-                shift.assignment_type = at_norm
-        elif old_guard.id != guard.id and shift.assignment_type == AssignmentType.NORMAL:
-            if not shift.pair or guard.id not in (shift.pair.guard_a_id, shift.pair.guard_b_id):
-                shift.assignment_type = AssignmentType.RELIEF
+                dup_type = Shift.objects.filter(
+                    date=shift.date,
+                    shift_type=target_shift_type,
+                    assignment_type__in=[AssignmentType.NORMAL, AssignmentType.RELIEF],
+                    **check_filter
+                ).exclude(id=shift.id).exclude(roster__status__in=[RosterStatus.ARCHIVED])
+                if dup_type.exists():
+                    label = "Pair" if target_pair else "Station"
+                    return Response({
+                        "detail": f"{label} already has an active {target_shift_type} guard on {shift.date}."
+                    }, status=status.HTTP_409_CONFLICT)
 
-        if shift.pair and guard.id not in (shift.pair.guard_a_id, shift.pair.guard_b_id):
-            shift.pair = None
-        shift.save()
+                active_count = Shift.objects.filter(
+                    date=shift.date,
+                    assignment_type__in=[AssignmentType.NORMAL, AssignmentType.RELIEF],
+                    **check_filter
+                ).exclude(id=shift.id).exclude(shift_type=ShiftType.OFF).exclude(
+                    assignment_type=AssignmentType.TIME_OFF
+                ).exclude(roster__status__in=[RosterStatus.ARCHIVED]).count()
+                if active_count >= 2:
+                    label = "pair" if target_pair else "station"
+                    return Response({
+                        "detail": f"Maximum 2 guards (1 DAY, 1 NIGHT) can be scheduled for a {label} on {shift.date}."
+                    }, status=status.HTTP_409_CONFLICT)
 
-        details = {
-            "action": "SINGLE_SHIFT_REASSIGNED", "date": shift.date.isoformat(),
-            "old_guard_id": str(old_guard.id), "old_guard": old_guard.get_full_name() or old_guard.username,
-            "new_guard_id": str(guard.id), "new_guard": guard.get_full_name() or guard.username,
-            "old_station_id": str(old_station.id) if old_station else None,
-            "new_station_id": str(station.id) if station else None,
-            "shift_type": shift.shift_type, "assignment_type": shift.assignment_type, "reason": reason,
-        }
-        SupervisorOverrideAudit.objects.create(
-            supervisor=request.user, action_type="SINGLE_SHIFT_REASSIGNMENT",
-            target_model="Shift", target_id=str(shift.id), reason=reason,
-        )
-        SecurityAuditEvent.objects.create(
-            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
-            actor=request.user, actor_username=request.user.username,
-            target_model="Shift", target_id=str(shift.id), details=details,
-        )
-        actor_role = "supervisor" if request.user.role == UserRole.SUPERVISOR else "administrator"
-        Notification.objects.create(
-            user=guard, title="Duty Assignment Updated",
-            message=f"You were assigned to a {shift.shift_type} ({shift.assignment_type}) shift at {station.name if station else 'station'} on {shift.date}. Reason: {reason}",
-            notification_type="DUTY_ASSIGNMENT",
-        )
-        if old_guard.id != guard.id:
+            # Clean up any existing scheduled TIME_OFF / OFF shift for the newly assigned guard on this date
+            Shift.objects.filter(guard=guard, date=shift.date, shift_type=ShiftType.OFF).delete()
+            Shift.objects.filter(guard=guard, date=shift.date, assignment_type=AssignmentType.TIME_OFF).delete()
+
+            old_guard = shift.guard
+            old_station = shift.station
+            shift.guard = guard
+            shift.station = station
+            shift.is_override = True
+            shift.override_reason = reason
+
+            # Optional shift_type adjustment (e.g. DAY <-> NIGHT)
+            if new_shift_type:
+                st_norm = str(new_shift_type).strip().upper()
+                if st_norm in [ShiftType.DAY, ShiftType.NIGHT, ShiftType.OFF]:
+                    shift.shift_type = st_norm
+                    if st_norm == ShiftType.DAY:
+                        shift.start_time = time(7, 0)
+                        shift.end_time = time(18, 0)
+                    elif st_norm == ShiftType.NIGHT:
+                        shift.start_time = time(18, 0)
+                        shift.end_time = time(7, 0)
+
+            # Optional assignment_type adjustment (e.g. RELIEF)
+            new_assignment_type = request.data.get("assignment_type")
+            if new_assignment_type:
+                at_norm = str(new_assignment_type).strip().upper()
+                if at_norm in [AssignmentType.NORMAL, AssignmentType.RELIEF, AssignmentType.EXAM, AssignmentType.ESCORT]:
+                    shift.assignment_type = at_norm
+            elif old_guard.id != guard.id and shift.assignment_type == AssignmentType.NORMAL:
+                if not shift.pair or guard.id not in (shift.pair.guard_a_id, shift.pair.guard_b_id):
+                    shift.assignment_type = AssignmentType.RELIEF
+
+            if shift.pair and guard.id not in (shift.pair.guard_a_id, shift.pair.guard_b_id):
+                shift.pair = None
+            shift.save()
+
+            details = {
+                "action": "SINGLE_SHIFT_REASSIGNED", "date": shift.date.isoformat(),
+                "old_guard_id": str(old_guard.id), "old_guard": old_guard.get_full_name() or old_guard.username,
+                "new_guard_id": str(guard.id), "new_guard": guard.get_full_name() or guard.username,
+                "old_station_id": str(old_station.id) if old_station else None,
+                "new_station_id": str(station.id) if station else None,
+                "shift_type": shift.shift_type, "assignment_type": shift.assignment_type, "reason": reason,
+            }
+            SupervisorOverrideAudit.objects.create(
+                supervisor=request.user, action_type="SINGLE_SHIFT_REASSIGNMENT",
+                target_model="Shift", target_id=str(shift.id), reason=reason,
+            )
+            SecurityAuditEvent.objects.create(
+                event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+                actor=request.user, actor_username=request.user.username,
+                target_model="Shift", target_id=str(shift.id), details=details,
+            )
+            if shift.assignment_type == AssignmentType.RELIEF:
+                TemporaryAssignmentAudit.objects.create(
+                    guard=guard,
+                    original_pair=getattr(guard, "pairs_as_guard_a", None).first() or getattr(guard, "pairs_as_guard_b", None).first(),
+                    original_assignment="TIME_OFF",
+                    temporary_assignment="RELIEF",
+                    location=shift.duty_location or (station.name if station else "Relief Duty"),
+                    start_date=shift.date,
+                    end_date=shift.date,
+                    start_time=shift.start_time,
+                    end_time=shift.end_time,
+                    reason=reason,
+                    authorized_by=request.user,
+                )
+            actor_role = "supervisor" if request.user.role == UserRole.SUPERVISOR else "administrator"
             Notification.objects.create(
-                user=old_guard, title="Duty Assignment Changed",
-                message=f"Your {shift.shift_type} shift on {shift.date} has been reassigned by a {actor_role}.",
+                user=guard, title="Duty Assignment Updated",
+                message=f"You were assigned to a {shift.shift_type} ({shift.assignment_type}) shift at {station.name if station else 'station'} on {shift.date}. Reason: {reason}",
                 notification_type="DUTY_ASSIGNMENT",
             )
-        return Response({"message": "Single shift reassigned.", "shift": ShiftSerializer(shift).data,
-                         "historical_preserved": True, "roster_regenerated": False}, status=status.HTTP_200_OK)
+            if old_guard.id != guard.id:
+                Notification.objects.create(
+                    user=old_guard, title="Duty Assignment Changed",
+                    message=f"Your {shift.shift_type} shift on {shift.date} has been reassigned by a {actor_role}.",
+                    notification_type="DUTY_ASSIGNMENT",
+                )
+            return Response({"message": "Single shift reassigned.", "shift": ShiftSerializer(shift).data,
+                             "historical_preserved": True, "roster_regenerated": False}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="swap_pair_duties", permission_classes=[IsSupervisorOrAdmin])
     def swap_pair_duties(self, request):
@@ -804,6 +867,8 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
         resolved = resolve_guard_duty(user)
         shift = resolved["shift"]
         shift_data = ShiftSerializer(shift, context={"request": request}).data if shift else None
+        next_duty = resolved.get("next_duty")
+        next_duty_data = ShiftSerializer(next_duty, context={"request": request}).data if next_duty else None
 
         return Response({
             "guard_id": str(user.id),
@@ -819,8 +884,25 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
             "clock_in_enabled": resolved["clock_in_enabled"],
             "clock_out_enabled": resolved["clock_out_enabled"],
             "shift": shift_data,
+            "next_duty": next_duty_data,
             "exam_duty": ExamDutySerializer(resolved["exam_duty"]).data if resolved["exam_duty"] else None,
             "escort_duty": EscortDutySerializer(resolved["escort_duty"]).data if resolved["escort_duty"] else None,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="next_duty")
+    def next_duty(self, request):
+        """
+        GET /shifts/shifts/next_duty/
+        Returns the next scheduled duty shift for the authenticated guard.
+        Respects approved leave, excludes TIME_OFF/OFF, ordered chronologically.
+        """
+        user = request.user
+        from .services import resolve_next_guard_duty
+        next_shift = resolve_next_guard_duty(user)
+        if not next_shift:
+            return Response({"detail": "NO UPCOMING DUTY", "next_duty": None}, status=status.HTTP_200_OK)
+        return Response({
+            "next_duty": ShiftSerializer(next_shift, context={"request": request}).data
         }, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["get"], url_path="operational", permission_classes=[IsAuthenticated])

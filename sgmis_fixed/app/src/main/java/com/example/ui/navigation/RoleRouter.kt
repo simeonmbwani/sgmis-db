@@ -32,6 +32,7 @@ object NavRoutes {
     const val NOTIFICATIONS = "notifications"
     const val SETTINGS = "settings"
     const val PROFILE = "profile"
+    const val ABOUT = "about"
 
     // Supervisory & Administrative Management Routes
     const val ATTENDANCE_MANAGEMENT = "attendance_management"
@@ -132,7 +133,8 @@ object RoleRouter {
                     NavRoutes.GUARD_DUTY_PLAN,
                     NavRoutes.NOTIFICATIONS,
                     NavRoutes.SETTINGS,
-                    NavRoutes.PROFILE
+                    NavRoutes.PROFILE,
+                    NavRoutes.ABOUT
                 )
             }
         }

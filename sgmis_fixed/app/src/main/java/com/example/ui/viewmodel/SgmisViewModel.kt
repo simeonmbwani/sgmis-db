@@ -1685,18 +1685,51 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         firstName: String?,
         lastName: String?,
         phoneNumber: String?,
+        email: String? = null,
+        address: String? = null,
         profilePhoto: String? = null,
         onSuccess: () -> Unit = {}
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            val res = repository.updateUserProfile(firstName, lastName, phoneNumber, profilePhoto)
+            val res = repository.updateUserProfile(
+                firstName = firstName,
+                lastName = lastName,
+                phoneNumber = phoneNumber,
+                email = email,
+                address = address,
+                profilePhoto = profilePhoto
+            )
             res.onSuccess { updatedUser ->
                 _uiState.update {
                     it.copy(
                         currentUser = updatedUser,
                         isLoading = false,
                         successMessage = "Personnel profile updated successfully."
+                    )
+                }
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun uploadProfilePhoto(
+        bytes: ByteArray,
+        filename: String = "profile.jpg",
+        mimeType: String = "image/jpeg",
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.uploadProfilePhoto(bytes, filename, mimeType)
+            res.onSuccess { updatedUser ->
+                _uiState.update {
+                    it.copy(
+                        currentUser = updatedUser,
+                        isLoading = false,
+                        successMessage = "Profile photo updated successfully."
                     )
                 }
                 onSuccess()
