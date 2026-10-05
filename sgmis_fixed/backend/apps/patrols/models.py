@@ -15,6 +15,8 @@ class Checkpoint(models.Model):
     latitude = models.FloatField(default=0.0)
     longitude = models.FloatField(default=0.0)
     order = models.PositiveIntegerField(default=1)
+    nfc_uid = models.CharField(max_length=64, blank=True, default="", help_text="Registered hardware NFC UID for physical checkpoint verification.")
+    min_interval_seconds = models.PositiveIntegerField(default=0, help_text="Minimum transit/travel time in seconds required from previous checkpoint.")
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -35,6 +37,9 @@ class PatrolLog(models.Model):
     start_time = models.DateTimeField(auto_now_add=True)
     end_time = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=PatrolStatus.choices, default=PatrolStatus.IN_PROGRESS)
+    is_approved = models.BooleanField(default=False)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="approved_patrols")
+    approved_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True, default="")
 
     class Meta:

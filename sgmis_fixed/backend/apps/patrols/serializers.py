@@ -13,9 +13,11 @@ class CheckpointSerializer(serializers.ModelSerializer):
             "name",
             "code",
             "qr_code",
+            "nfc_uid",
             "latitude",
             "longitude",
             "order",
+            "min_interval_seconds",
             "is_active",
         ]
 
@@ -40,6 +42,7 @@ class CheckpointScanSerializer(serializers.ModelSerializer):
 class PatrolLogSerializer(serializers.ModelSerializer):
     guard_name = serializers.SerializerMethodField()
     station_name = serializers.CharField(source="station.name", read_only=True)
+    approved_by_name = serializers.SerializerMethodField()
     scans = CheckpointScanSerializer(many=True, read_only=True)
     scans_count = serializers.IntegerField(source="scans.count", read_only=True)
 
@@ -54,11 +57,15 @@ class PatrolLogSerializer(serializers.ModelSerializer):
             "start_time",
             "end_time",
             "status",
+            "is_approved",
+            "approved_by",
+            "approved_by_name",
+            "approved_at",
             "notes",
             "scans_count",
             "scans",
         ]
-        read_only_fields = ["id", "guard", "start_time"]
+        read_only_fields = ["id", "guard", "start_time", "is_approved", "approved_by", "approved_at"]
         extra_kwargs = {
             "station": {"required": False, "allow_null": True},
         }
@@ -97,3 +104,9 @@ class PatrolLogSerializer(serializers.ModelSerializer):
     def get_guard_name(self, obj):
         name = obj.guard.get_full_name().strip()
         return name if name else obj.guard.username
+
+    def get_approved_by_name(self, obj):
+        if obj.approved_by:
+            name = obj.approved_by.get_full_name().strip()
+            return name if name else obj.approved_by.username
+        return None
