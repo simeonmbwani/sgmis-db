@@ -202,14 +202,51 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        # Station boundary check
+        if request.user.station and patrol.station != request.user.station:
+            return Response(
+                {"detail": "You cannot complete a patrol for a station you are not assigned to."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Minimum elapsed patrol duration enforcement (physical inspection cannot be instantaneous)
+        now = timezone.now()
+        elapsed_seconds = (now - patrol.start_time).total_seconds()
+        MIN_PATROL_DURATION_SECONDS = 60
+        if elapsed_seconds < MIN_PATROL_DURATION_SECONDS:
+            return Response(
+                {
+                    "detail": f"Patrol duration too short ({int(elapsed_seconds)}s elapsed). Physical inspection requires at least {MIN_PATROL_DURATION_SECONDS} seconds before completion.",
+                    "elapsed_seconds": int(elapsed_seconds),
+                    "required_seconds": MIN_PATROL_DURATION_SECONDS,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Station checkpoint completion enforcement
+        active_checkpoints = Checkpoint.objects.filter(station=patrol.station, is_active=True)
+        if active_checkpoints.exists():
+            scanned_ids = set(patrol.scans.values_list("checkpoint_id", flat=True))
+            missing_checkpoints = active_checkpoints.exclude(id__in=scanned_ids)
+            if missing_checkpoints.exists():
+                missing_names = ", ".join(missing_checkpoints.values_list("name", flat=True)[:3])
+                return Response(
+                    {
+                        "detail": f"Cannot complete patrol: {missing_checkpoints.count()} required checkpoint(s) have not been scanned ({missing_names}). All active station checkpoints must be inspected and verified.",
+                        "missing_count": missing_checkpoints.count(),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         patrol.status = PatrolStatus.COMPLETED
-        patrol.end_time = timezone.now()
+        patrol.end_time = now
         notes = request.data.get("notes")
         if notes:
             patrol.notes = notes
         patrol.save()
 
         return Response(self.get_serializer(patrol).data, status=status.HTTP_200_OK)
+
 
     @action(detail=True, methods=["post"], url_path="approve", permission_classes=[IsSupervisorOrAdmin])
     def approve_patrol(self, request, pk=None):

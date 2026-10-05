@@ -43,10 +43,18 @@ class ExamDutyViewSet(viewsets.ModelViewSet):
         user = self.request.user
         target_guard = serializer.validated_data.get("guard")
         target_date = serializer.validated_data.get("date")
+        target_start = serializer.validated_data.get("start_time")
+        target_end = serializer.validated_data.get("end_time")
         if target_guard and target_date:
-            from apps.leave.models import LeaveApplication, LeaveStatus
-            if LeaveApplication.objects.filter(guard=target_guard, status=LeaveStatus.APPROVED, start_date__lte=target_date, end_date__gte=target_date).exists():
-                raise ValidationError({"guard": "The selected guard is on approved leave on this date."})
+            from apps.shifts.services import validate_guard_duty_availability
+            validate_guard_duty_availability(
+                guard=target_guard,
+                date=target_date,
+                start_time=target_start,
+                end_time=target_end,
+                duty_type="EXAM",
+                as_drf=True,
+            )
         supervisor = serializer.validated_data.get("supervisor") or (user if user.role in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR] else None)
         station = serializer.validated_data.get("station") or (user.station if user.station else None)
         duty = serializer.save(supervisor=supervisor, station=station)
@@ -76,6 +84,20 @@ class ExamDutyViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         old_guard_id = serializer.instance.guard_id
+        target_guard = serializer.validated_data.get("guard") or serializer.instance.guard
+        target_date = serializer.validated_data.get("date") or serializer.instance.date
+        target_start = serializer.validated_data.get("start_time") or serializer.instance.start_time
+        target_end = serializer.validated_data.get("end_time") or serializer.instance.end_time
+        from apps.shifts.services import validate_guard_duty_availability
+        validate_guard_duty_availability(
+            guard=target_guard,
+            date=target_date,
+            start_time=target_start,
+            end_time=target_end,
+            duty_type="EXAM",
+            exclude_exam_id=serializer.instance.id,
+            as_drf=True,
+        )
         changed = {key: str(value) for key, value in serializer.validated_data.items()}
         duty = serializer.save()
         SecurityAuditEvent.objects.create(
@@ -83,6 +105,7 @@ class ExamDutyViewSet(viewsets.ModelViewSet):
             actor=self.request.user,
             actor_username=self.request.user.username,
             target_model="ExamDuty",
+
             target_id=str(duty.id),
             details={"action": "EXAM_DUTY_UPDATED", "reference": duty.reference,
                      "old_guard_id": str(old_guard_id), "new_guard_id": str(duty.guard_id),

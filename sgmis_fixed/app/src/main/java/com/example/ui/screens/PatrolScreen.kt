@@ -171,8 +171,11 @@ fun PatrolScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val latestCompleted = uiState.patrolLogs.firstOrNull { it.status == "COMPLETED" }
                         Text(
-                            text = if (activePatrol != null) "PATROL IN PROGRESS" else "NO ACTIVE PATROL",
+                            text = if (activePatrol != null) "PATROL IN PROGRESS"
+                                   else if (latestCompleted != null) "RECENT PATROL COMPLETED"
+                                   else "NO ACTIVE PATROL",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = if (activePatrol != null) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
@@ -180,8 +183,28 @@ fun PatrolScreen(
                         if (activePatrol != null) {
                             Surface(color = StatusSuccess, shape = RoundedCornerShape(12.dp)) {
                                 Text(
-                                    text = "ACTIVE",
+                                    text = "IN PROGRESS",
                                     color = MaterialTheme.colorScheme.surface,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                        } else if (latestCompleted != null) {
+                            Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f), shape = RoundedCornerShape(12.dp)) {
+                                Text(
+                                    text = "COMPLETED",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                        } else {
+                            Surface(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), shape = RoundedCornerShape(12.dp)) {
+                                Text(
+                                    text = "NOT STARTED",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
@@ -267,8 +290,10 @@ fun PatrolScreen(
                         if (isGuard) {
                             Button(
                                 onClick = {
-                                    if (completedScans == 0 && totalCheckpoints > 0) {
-                                        viewModel.postSecurityAlert("Checkpoint Scan Required: You must inspect and verify at least one checkpoint before submitting the patrol log.")
+                                    if (elapsedSeconds < 60) {
+                                        viewModel.postSecurityAlert("Minimum Patrol Duration: Physical inspection requires at least 60 seconds elapsed before submission (${60 - elapsedSeconds}s remaining).")
+                                    } else if (totalCheckpoints > 0 && remainingCheckpoints > 0) {
+                                        viewModel.postSecurityAlert("Checkpoint Scan Required: All $totalCheckpoints active station checkpoints must be verified ($remainingCheckpoints remaining).")
                                     } else {
                                         showFinishConfirmDialog = true
                                     }
@@ -277,6 +302,7 @@ fun PatrolScreen(
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                                 modifier = Modifier.fillMaxWidth().testTag("finish_patrol_button")
                             ) {
+
                                 if (uiState.isLoading) {
                                     CircularProgressIndicator(
                                         color = MaterialTheme.colorScheme.onPrimary,

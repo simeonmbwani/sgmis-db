@@ -458,11 +458,12 @@ class CurrentUserPhotoUploadView(APIView):
             return Response({"detail": "No photo file or image data provided."}, status=status.HTTP_400_BAD_REQUEST)
 
         url = save_user_profile_photo(request.user, photo_input)
-        return Response({
-            "message": "Profile photo updated successfully.",
-            "profile_photo": url,
-            "user": UserSerializer(request.user).data
-        }, status=status.HTTP_200_OK)
+        user_data = UserSerializer(request.user).data
+        user_data["message"] = "Profile photo updated successfully."
+        user_data["profile_photo"] = url
+        user_data["user"] = dict(user_data)
+        return Response(user_data, status=status.HTTP_200_OK)
+
 
 class UserViewSet(viewsets.ModelViewSet):
     """

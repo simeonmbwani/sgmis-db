@@ -1838,3 +1838,181 @@ def resolve_guard_duty(guard, date=None, current_time=None):
     return base_result
 
 
+def validate_guard_duty_availability(
+    guard,
+    date,
+    start_time=None,
+    end_time=None,
+    duty_type="NORMAL",
+    exclude_shift_id=None,
+    exclude_exam_id=None,
+    exclude_escort_id=None,
+    as_drf=True,
+):
+    """
+    Central authoritative operational duty conflict validator.
+    Enforces mutual exclusion and time-window integrity across all duty types:
+    NORMAL (or RELIEF), EXAM, ESCORT, and APPROVED LEAVE.
+    Applies to both today and future operational dates.
+
+    Raises rest_framework.exceptions.ValidationError or django.core.exceptions.ValidationError.
+    """
+    from datetime import date as dt_date, time as dt_time, datetime as dt_cls
+    from rest_framework.exceptions import ValidationError as DRFValidationError
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    def _raise(message):
+        if as_drf:
+            raise DRFValidationError({"guard": message, "detail": message})
+        raise DjangoValidationError(message)
+
+    if not guard or not date:
+        return
+
+    # Normalize date
+    if isinstance(date, str):
+        try:
+            date = dt_cls.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+
+    # Normalize start_time and end_time to dt_time if provided
+    def _to_time(val):
+        if val is None:
+            return None
+        if isinstance(val, dt_time):
+            return val
+        if isinstance(val, dt_cls):
+            return val.time()
+        if isinstance(val, str):
+            val_clean = val.strip()
+            for fmt in ["%H:%M:%S", "%H:%M"]:
+                try:
+                    return dt_cls.strptime(val_clean, fmt).time()
+                except ValueError:
+                    pass
+        return None
+
+    norm_start = _to_time(start_time)
+    norm_end = _to_time(end_time)
+    duty_type_norm = str(duty_type).strip().upper()
+
+    guard_name = guard.get_full_name() or guard.username
+
+    # 1. Approved Leave Check
+    from apps.leave.models import LeaveApplication, LeaveStatus
+    on_leave = LeaveApplication.objects.filter(
+        guard=guard,
+        status=LeaveStatus.APPROVED,
+        start_date__lte=date,
+        end_date__gte=date,
+    ).exists()
+    if on_leave:
+        _raise(f"The selected guard ({guard_name}) is on approved leave on {date} and cannot be assigned to operational duties.")
+
+    # 2. Normal / Relief Shift Check
+    from apps.shifts.models import Shift, ShiftType, AssignmentType, RosterStatus
+    shift_qs = Shift.objects.filter(
+        guard=guard,
+        date=date,
+    ).exclude(
+        roster__status=RosterStatus.ARCHIVED
+    ).exclude(
+        shift_type=ShiftType.OFF
+    ).exclude(
+        assignment_type=AssignmentType.TIME_OFF
+    ).select_related("station")
+
+    if exclude_shift_id:
+        shift_qs = shift_qs.exclude(id=exclude_shift_id)
+
+    existing_shift = shift_qs.first()
+    if existing_shift:
+        st_name = existing_shift.station.name if existing_shift.station else "Assigned Station"
+        if duty_type_norm in ["EXAM", "ESCORT"]:
+            _raise(
+                f"Scheduling Conflict: Guard {guard_name} already has a scheduled "
+                f"NORMAL {existing_shift.shift_type} shift at {st_name} on {date}. "
+                f"Normal station duty and {duty_type_norm} duty are mutually exclusive on the same date."
+            )
+        elif duty_type_norm in ["NORMAL", "RELIEF"]:
+            _raise(
+                f"Scheduling Conflict: Guard {guard_name} already has an active "
+                f"{existing_shift.shift_type} shift at {st_name} on {date}."
+            )
+
+    # 3. Exam Duty Check
+    from apps.exams.models import ExamDuty, ExamStatus
+    exam_qs = ExamDuty.objects.filter(
+        guard=guard,
+        date=date,
+    ).exclude(status=ExamStatus.CANCELLED)
+
+    if exclude_exam_id:
+        exam_qs = exam_qs.exclude(id=exclude_exam_id)
+
+    existing_exam = exam_qs.first()
+    if existing_exam:
+        ex_start_str = existing_exam.start_time.strftime("%H:%M") if hasattr(existing_exam.start_time, "strftime") else str(existing_exam.start_time)
+        ex_end_str = existing_exam.end_time.strftime("%H:%M") if hasattr(existing_exam.end_time, "strftime") else str(existing_exam.end_time)
+        ex_start = _to_time(existing_exam.start_time)
+        ex_end = _to_time(existing_exam.end_time)
+
+        if duty_type_norm in ["NORMAL", "RELIEF"]:
+            _raise(
+                f"Scheduling Conflict: Guard {guard_name} is already assigned to "
+                f"examination duty '{existing_exam.exam_title}' at {existing_exam.institution} ({ex_start_str}-{ex_end_str}) on {date}. "
+                f"Normal shifts and exam duties are mutually exclusive on the same date."
+            )
+        elif duty_type_norm in ["EXAM", "ESCORT"]:
+            if norm_start and norm_end and ex_start and ex_end:
+                if not (norm_end <= ex_start or norm_start >= ex_end):
+                    _raise(
+                        f"Time Overlap Conflict: Guard {guard_name} already has exam duty "
+                        f"'{existing_exam.exam_title}' on {date} ({ex_start_str}-{ex_end_str})."
+                    )
+            else:
+                _raise(
+                    f"Duty Conflict: Guard {guard_name} is already assigned to exam duty "
+                    f"'{existing_exam.exam_title}' on {date}."
+                )
+
+    # 4. Escort Duty Check
+    from apps.escorts.models import EscortDuty, EscortStatus
+    escort_qs = EscortDuty.objects.filter(
+        guard=guard,
+        start_time__date__lte=date,
+        end_time__date__gte=date,
+    ).exclude(status=EscortStatus.CANCELLED)
+
+    if exclude_escort_id:
+        escort_qs = escort_qs.exclude(id=exclude_escort_id)
+
+    existing_escort = escort_qs.first()
+    if existing_escort:
+        esc_start_str = existing_escort.start_time.strftime("%Y-%m-%d %H:%M")
+        esc_end_str = existing_escort.end_time.strftime("%Y-%m-%d %H:%M")
+        esc_start_time = existing_escort.start_time.time()
+        esc_end_time = existing_escort.end_time.time()
+
+        if duty_type_norm in ["NORMAL", "RELIEF"]:
+            _raise(
+                f"Scheduling Conflict: Guard {guard_name} is already assigned to "
+                f"escort mission '{existing_escort.mission_name}' on {date} ({esc_start_str} to {esc_end_str}). "
+                f"Normal shifts and escort missions are mutually exclusive on the same date."
+            )
+        elif duty_type_norm in ["EXAM", "ESCORT"]:
+            if norm_start and norm_end:
+                if not (norm_end <= esc_start_time or norm_start >= esc_end_time):
+                    _raise(
+                        f"Time Overlap Conflict: Guard {guard_name} is already assigned to "
+                        f"escort mission '{existing_escort.mission_name}' on {date} ({esc_start_str} to {esc_end_str})."
+                    )
+            else:
+                _raise(
+                    f"Duty Conflict: Guard {guard_name} is already assigned to "
+                    f"escort mission '{existing_escort.mission_name}' on {date}."
+                )
+
+
+

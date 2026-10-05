@@ -959,11 +959,20 @@ class SGMISBackendEndToEndTests(TestCase):
         sup_fin = self.client.post(f"/patrols/logs/{patrol_id}/finish/")
         self.assertEqual(sup_fin.status_code, status.HTTP_403_FORBIDDEN)
 
-        # Guard terminates own patrol
+        # Guard cannot terminate immediately (< 60 seconds)
         self.client.force_authenticate(user=self.guard_a)
+        early_resp = self.client.post(f"/patrols/logs/{patrol_id}/finish/", {"notes": "Patrol completed."})
+        self.assertEqual(early_resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("too short", early_resp.data["detail"])
+
+        # Backdate patrol start_time to satisfy minimum physical inspection duration
+        PatrolLog.objects.filter(id=patrol_id).update(start_time=timezone.now() - timedelta(seconds=120))
+
+        # Guard terminates own patrol after minimum duration elapsed
         fin_resp = self.client.post(f"/patrols/logs/{patrol_id}/finish/", {"notes": "Patrol completed securely."})
         self.assertEqual(fin_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(fin_resp.data["status"], "COMPLETED")
+
 
     def test_leave_application_emergency_details_and_routing(self):
         """Leave application stores emergency contacts and notifies administrators."""
@@ -1032,7 +1041,11 @@ class SGMISBackendEndToEndTests(TestCase):
             "end_time": escort_end.isoformat(),
         })
         self.assertEqual(conflict_resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("already assigned to active duty on another post", str(conflict_resp.data))
+        self.assertTrue(
+            "already assigned to active duty on another post" in str(conflict_resp.data)
+            or "Scheduling Conflict" in str(conflict_resp.data)
+            or "mutually exclusive" in str(conflict_resp.data)
+        )
 
     def test_today_shift_for_supervisor_and_admin(self):
         today = timezone.localdate()

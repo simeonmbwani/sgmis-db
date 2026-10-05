@@ -48,30 +48,28 @@ class EscortDutySerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"end_time": "End time must be strictly after start time."})
 
         if guard and start_time and end_time:
-            # 1. Overlapping escort duties
-            overlapping_escorts = EscortDuty.objects.filter(
+            from apps.shifts.services import validate_guard_duty_availability
+            # Validate start date
+            validate_guard_duty_availability(
                 guard=guard,
-                status__in=[EscortStatus.SCHEDULED, EscortStatus.EN_ROUTE],
-                start_time__lt=end_time,
-                end_time__gt=start_time,
+                date=start_time.date(),
+                start_time=start_time.time(),
+                end_time=end_time.time() if start_time.date() == end_time.date() else None,
+                duty_type="ESCORT",
+                exclude_escort_id=self.instance.id if self.instance else None,
+                as_drf=True,
             )
-            if self.instance:
-                overlapping_escorts = overlapping_escorts.exclude(id=self.instance.id)
-
-            if overlapping_escorts.exists():
-                raise serializers.ValidationError(
-                    {"guard": "Guard already assigned to active duty on another post. Overlapping assignment rejected to prevent post abandonment."}
-                )
-
-            # 2. Overlapping static station shifts
-            from apps.shifts.models import Shift
-            overlapping_shifts = Shift.objects.filter(
-                guard=guard,
-                date__in=[start_time.date(), end_time.date()],
-            )
-            if overlapping_shifts.exists():
-                raise serializers.ValidationError(
-                    {"guard": "Guard already assigned to active duty on another post. Overlapping assignment rejected to prevent post abandonment."}
+            # If escort spans across multiple dates, validate end date as well
+            if end_time.date() != start_time.date():
+                validate_guard_duty_availability(
+                    guard=guard,
+                    date=end_time.date(),
+                    start_time=None,
+                    end_time=end_time.time(),
+                    duty_type="ESCORT",
+                    exclude_escort_id=self.instance.id if self.instance else None,
+                    as_drf=True,
                 )
 
         return attrs
+

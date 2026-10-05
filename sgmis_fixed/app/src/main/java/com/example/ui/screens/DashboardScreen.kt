@@ -4106,21 +4106,13 @@ private fun AdministratorNationalControlCenter(
     val totalStations = uiState.stations.size
     val activeStations = uiState.stations.size
     val guardsOnDuty = uiState.attendanceRecords.count { it.clockIn != null && it.clockOut == null }
-    val totalGuards = uiState.users.count { it.role.uppercase() == "GUARD" }
-    val guardsOffDuty = (totalGuards - guardsOnDuty).coerceAtLeast(0)
-    val openIncidents = uiState.incidents.count { it.status != "RESOLVED" }
+    val guardsOnLeave = uiState.leaveApplications.count {
+        it.status.uppercase() == "APPROVED" && (todayStr.isEmpty() || (it.startDate <= todayStr && it.endDate >= todayStr))
+    }
     val activePatrols = uiState.patrolLogs.count { it.status == "IN_PROGRESS" }
-    val activeVisitors = uiState.visitors.count {
-        !it.occurrenceText.contains("Time Out:", ignoreCase = true) && !it.occurrenceText.contains("CHECKED OUT", ignoreCase = true)
-    }
+    val openIncidents = uiState.incidents.count { it.status != "RESOLVED" }
     val pendingLeave = uiState.leaveApplications.count { it.status == "PENDING" }
-    val todayShifts = uiState.rosterShifts.filter {
-        it.date == todayStr && it.shiftType.uppercase() != "OFF" && it.assignmentType.uppercase() != "TIME_OFF"
-    }
-    val todayShiftsCount = todayShifts.size
-    val attendanceRate = if (todayShiftsCount > 0) {
-        ((guardsOnDuty.toFloat() / todayShiftsCount.toFloat()) * 100).toInt().coerceIn(0, 100)
-    } else if (guardsOnDuty > 0) 100 else 100
+    val stationConflicts = uiState.conflictReport?.totalConflicts ?: 0
 
     // 1. National Command Header
     AdministratorNationalHeader(
@@ -4130,7 +4122,7 @@ private fun AdministratorNationalControlCenter(
         onViewProfile = { onNavigate(NavRoutes.PROFILE) }
     )
 
-    // 2. Section A: National Telemetry Metrics Grid (9 Core Metrics)
+    // 2. Section A: National Actionable Telemetry Metrics Grid
     Text(
         text = "National Command Telemetry",
         style = MaterialTheme.typography.titleMedium,
@@ -4138,15 +4130,12 @@ private fun AdministratorNationalControlCenter(
         color = MaterialTheme.colorScheme.onSurface
     )
     NationalMetricsGrid(
-        totalStations = totalStations,
-        activeStations = activeStations,
         guardsOnDuty = guardsOnDuty,
-        guardsOffDuty = guardsOffDuty,
-        openIncidents = openIncidents,
+        guardsOnLeave = guardsOnLeave,
         activePatrols = activePatrols,
-        activeVisitors = activeVisitors,
+        openIncidents = openIncidents,
         pendingLeave = pendingLeave,
-        attendanceRate = attendanceRate,
+        stationConflicts = stationConflicts,
         onNavigate = onNavigate
     )
 
@@ -4178,6 +4167,8 @@ private fun AdministratorNationalControlCenter(
         rosterShifts = uiState.rosterShifts,
         conflictReport = uiState.conflictReport,
         stations = uiState.stations,
+        handovers = uiState.handovers,
+        todayStr = todayStr,
         onNavigate = onNavigate
     )
 
@@ -4212,20 +4203,6 @@ private fun AdministratorNationalControlCenter(
     EarlyClockOutAuthorizationCard(
         viewModel = viewModel,
         uiState = uiState
-    )
-
-    // 8. Section G: National Analytics & Security Posture
-    Text(
-        text = "National Analytics & Security Posture",
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.onSurface
-    )
-    NationalAnalyticsCard(
-        uiState = uiState,
-        todayShiftsCount = todayShiftsCount,
-        guardsOnDuty = guardsOnDuty,
-        onNavigate = onNavigate
     )
 }
 
@@ -4331,15 +4308,12 @@ private fun AdministratorNationalHeader(
 
 @Composable
 private fun NationalMetricsGrid(
-    totalStations: Int,
-    activeStations: Int,
     guardsOnDuty: Int,
-    guardsOffDuty: Int,
-    openIncidents: Int,
+    guardsOnLeave: Int,
     activePatrols: Int,
-    activeVisitors: Int,
+    openIncidents: Int,
     pendingLeave: Int,
-    attendanceRate: Int,
+    stationConflicts: Int,
     onNavigate: (String) -> Unit
 ) {
     Card(
@@ -4357,17 +4331,8 @@ private fun NationalMetricsGrid(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Row 1: Stations & On Duty
+            // Row 1: Guards On Duty, Guards On Leave, Active Patrols
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                NationalMetricCard(
-                    title = "Stations",
-                    value = "$totalStations",
-                    subtitle = "$activeStations Active",
-                    color = MaterialTheme.colorScheme.primary,
-                    icon = Icons.Default.Business,
-                    onClick = { onNavigate(NavRoutes.STATION_MANAGEMENT) },
-                    modifier = Modifier.weight(1f)
-                )
                 NationalMetricCard(
                     title = "Guards On Duty",
                     value = "$guardsOnDuty",
@@ -4378,25 +4343,12 @@ private fun NationalMetricsGrid(
                     modifier = Modifier.weight(1f)
                 )
                 NationalMetricCard(
-                    title = "Guards Off Duty",
-                    value = "$guardsOffDuty",
-                    subtitle = "Available/Rest",
-                    color = MaterialTheme.colorScheme.outline,
-                    icon = Icons.Default.Person,
-                    onClick = { onNavigate(NavRoutes.USER_MANAGEMENT) },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            // Row 2: Incidents, Patrols, Visitors
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                NationalMetricCard(
-                    title = "Incidents / SOS",
-                    value = "$openIncidents",
-                    subtitle = if (openIncidents > 0) "Requires Review" else "All Clear",
-                    color = if (openIncidents > 0) MaterialTheme.colorScheme.error else StatusSuccess,
-                    icon = Icons.Default.Warning,
-                    onClick = { onNavigate(NavRoutes.INCIDENTS) },
+                    title = "Guards On Leave",
+                    value = "$guardsOnLeave",
+                    subtitle = if (guardsOnLeave > 0) "Approved" else "None Active",
+                    color = StatusWarning,
+                    icon = Icons.AutoMirrored.Filled.EventNote,
+                    onClick = { onNavigate(NavRoutes.LEAVE) },
                     modifier = Modifier.weight(1f)
                 )
                 NationalMetricCard(
@@ -4408,42 +4360,33 @@ private fun NationalMetricsGrid(
                     onClick = { onNavigate(NavRoutes.PATROL) },
                     modifier = Modifier.weight(1f)
                 )
-                NationalMetricCard(
-                    title = "Visitors",
-                    value = "$activeVisitors",
-                    subtitle = "Checked In",
-                    color = MaterialTheme.colorScheme.secondary,
-                    icon = Icons.Default.Badge,
-                    onClick = { onNavigate(NavRoutes.VISITOR_BOOK) },
-                    modifier = Modifier.weight(1f)
-                )
             }
 
-            // Row 3: Leave, Attendance Rate, Roster Health
+            // Row 2: Incidents/SOS, Pending Leave, Station Conflicts
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                NationalMetricCard(
+                    title = "Incidents / SOS",
+                    value = "$openIncidents",
+                    subtitle = if (openIncidents > 0) "Requires Action" else "All Clear",
+                    color = if (openIncidents > 0) MaterialTheme.colorScheme.error else StatusSuccess,
+                    icon = Icons.Default.Warning,
+                    onClick = { onNavigate(NavRoutes.INCIDENTS) },
+                    modifier = Modifier.weight(1f)
+                )
                 NationalMetricCard(
                     title = "Pending Leave",
                     value = "$pendingLeave",
                     subtitle = if (pendingLeave > 0) "Action Needed" else "Up to Date",
                     color = if (pendingLeave > 0) StatusWarning else MaterialTheme.colorScheme.onSurfaceVariant,
-                    icon = Icons.AutoMirrored.Filled.EventNote,
+                    icon = Icons.Default.Badge,
                     onClick = { onNavigate(NavRoutes.LEAVE) },
                     modifier = Modifier.weight(1f)
                 )
                 NationalMetricCard(
-                    title = "Attendance Rate",
-                    value = "$attendanceRate%",
-                    subtitle = "Roster Compliance",
-                    color = if (attendanceRate >= 80) StatusSuccess else StatusWarning,
-                    icon = Icons.Default.Assessment,
-                    onClick = { onNavigate(NavRoutes.REPORTS) },
-                    modifier = Modifier.weight(1f)
-                )
-                NationalMetricCard(
-                    title = "Roster Engine",
-                    value = "Live",
-                    subtitle = "Conflict Guard",
-                    color = MaterialTheme.colorScheme.primary,
+                    title = "Station Conflicts",
+                    value = "$stationConflicts",
+                    subtitle = if (stationConflicts > 0) "Conflicts Found" else "Zero Conflicts",
+                    color = if (stationConflicts > 0) MaterialTheme.colorScheme.error else StatusSuccess,
                     icon = Icons.Default.CalendarMonth,
                     onClick = { onNavigate(NavRoutes.ROSTER_MANAGEMENT) },
                     modifier = Modifier.weight(1f)
@@ -4654,6 +4597,8 @@ private fun NationalRosterOversightCard(
     rosterShifts: List<Shift>,
     conflictReport: ConflictReport?,
     stations: List<Station>,
+    handovers: List<ShiftHandover> = emptyList(),
+    todayStr: String = "",
     onNavigate: (String) -> Unit
 ) {
     Card(
@@ -4695,7 +4640,7 @@ private fun NationalRosterOversightCard(
                     shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
-                        text = "${rosterShifts.size} Shifts Total",
+                        text = "${rosterShifts.size} Shifts Active",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
@@ -4757,53 +4702,148 @@ private fun NationalRosterOversightCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // Preview of Recent Shifts
-            val previewShifts = rosterShifts.take(4)
-            if (previewShifts.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    previewShifts.forEach { shift ->
+            // Real Operational Guard-Level Status
+            val operationalShifts = rosterShifts.filter { shift ->
+                (todayStr.isEmpty() || shift.date == todayStr) &&
+                shift.shiftType.uppercase() != "OFF" &&
+                shift.assignmentType.uppercase() != "TIME_OFF"
+            }.ifEmpty {
+                rosterShifts.filter { it.shiftType.uppercase() != "OFF" && it.assignmentType.uppercase() != "TIME_OFF" }
+            }.take(8)
+
+            if (operationalShifts.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    operationalShifts.forEach { shift ->
+                        val shiftHandover = handovers.firstOrNull {
+                            it.outgoingShift == shift.id || it.incomingGuard == shift.guard || it.outgoingGuard == shift.guard
+                        }
+                        val handoverLabel = when {
+                            shiftHandover == null -> "No Handover Pending"
+                            shiftHandover.isHandoverRejected -> "Handover Disputed"
+                            shiftHandover.incomingAccepted -> "Handover Accepted"
+                            shiftHandover.outgoingSigned -> "Awaiting Acceptance"
+                            else -> "Handover In Progress"
+                        }
+
+                        val dutyBadgeColor = when (shift.dutyState) {
+                            GuardDutyState.ON_DUTY -> StatusSuccess
+                            GuardDutyState.ON_LEAVE -> StatusWarning
+                            GuardDutyState.ELIGIBLE_FOR_DUTY -> GoldAccent
+                            GuardDutyState.EXAM, GuardDutyState.ESCORT -> MaterialTheme.colorScheme.tertiary
+                            else -> MaterialTheme.colorScheme.outline
+                        }
+
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(10.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Column {
-                                    Text(
-                                        text = shift.guardName,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = shift.guardName,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        val empNo = shift.employeeNumber ?: if (shift.guard.length >= 6) "EMP-${shift.guard.take(6).uppercase()}" else "EMP-ID"
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surfaceVariant,
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = empNo,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                    Surface(
+                                        color = dutyBadgeColor.copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = shift.dutyState.label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = dutyBadgeColor,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Text(
                                         text = "${shift.stationName} • ${shift.date}",
                                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                    Surface(
+                                        color = when (shift.shiftType.uppercase()) {
+                                            "DAY" -> GoldAccent.copy(alpha = 0.25f)
+                                            "NIGHT" -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                                            else -> MaterialTheme.colorScheme.surfaceVariant
+                                        },
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "${shift.shiftType} • ${shift.assignmentType}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
                                 }
-                                Surface(
-                                    color = when (shift.shiftType.uppercase()) {
-                                        "DAY" -> GoldAccent.copy(alpha = 0.25f)
-                                        "NIGHT" -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                                        else -> MaterialTheme.colorScheme.surfaceVariant
-                                    },
-                                    shape = RoundedCornerShape(6.dp)
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SwapHoriz,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        text = "${shift.shiftType} • ${shift.assignmentType}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        text = handoverLabel,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
                         }
                     }
+                }
+            } else {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "No operational guard shifts recorded for the current window.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(12.dp)
+                    )
                 }
             }
 

@@ -250,10 +250,26 @@ class Shift(models.Model):
     def clean(self):
         super().clean()
 
+        # Rule 0: Duty Conflict Check (Leave, Exam, Escort)
+        # Normal shifts are mutually exclusive with approved leave, exam duty, and escort missions on the same date.
+        if self.guard_id and self.date and self.shift_type != ShiftType.OFF and self.assignment_type != AssignmentType.TIME_OFF:
+            from apps.leave.models import LeaveApplication, LeaveStatus
+            if LeaveApplication.objects.filter(guard_id=self.guard_id, status=LeaveStatus.APPROVED, start_date__lte=self.date, end_date__gte=self.date).exists():
+                raise ValidationError(f"The selected guard is on approved leave on {self.date} and cannot be assigned to a shift.")
+
+            from apps.exams.models import ExamDuty, ExamStatus
+            if ExamDuty.objects.filter(guard_id=self.guard_id, date=self.date).exclude(status=ExamStatus.CANCELLED).exists():
+                raise ValidationError(f"The selected guard is assigned to examination duty on {self.date} and cannot be assigned to a normal shift.")
+
+            from apps.escorts.models import EscortDuty, EscortStatus
+            if EscortDuty.objects.filter(guard_id=self.guard_id, start_time__date__lte=self.date, end_time__date__gte=self.date).exclude(status=EscortStatus.CANCELLED).exists():
+                raise ValidationError(f"The selected guard is assigned to escort duty on {self.date} and cannot be assigned to a normal shift.")
+
         # Rule 1: ONE GUARD = ONE ACTIVE STATION AT A TIME
         # A guard cannot have active working duties at multiple stations on the same date.
         # Historical, expired, archived, and cancelled records do NOT count as conflicts.
         if self.guard_id and self.station_id and self.shift_type != ShiftType.OFF and self.assignment_type != AssignmentType.TIME_OFF:
+
             conflict = Shift.objects.filter(
                 guard_id=self.guard_id,
                 date=self.date,

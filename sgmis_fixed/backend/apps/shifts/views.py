@@ -960,6 +960,12 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
                     ).order_by("-start_date").first()
                 if target_roster:
                     qs = qs.filter(date__gte=target_roster.start_date, date__lte=target_roster.end_date)
+            else:
+                # Minimum Data Principle: When viewing national operational shifts without specific date parameters,
+                # bound to current operational window (past 7 days to next 35 days) to avoid unbounded table scans.
+                today = timezone.localdate()
+                qs = qs.filter(date__gte=today - timedelta(days=7), date__lte=today + timedelta(days=35))
+
 
         if start_date:
             try:

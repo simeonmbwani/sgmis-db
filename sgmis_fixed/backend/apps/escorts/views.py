@@ -43,11 +43,26 @@ class EscortDutyViewSet(viewsets.ModelViewSet):
         user = self.request.user
         target_guard = serializer.validated_data.get("guard")
         start_time = serializer.validated_data.get("start_time")
+        end_time = serializer.validated_data.get("end_time")
         if target_guard and start_time:
-            target_date = start_time.date()
-            from apps.leave.models import LeaveApplication, LeaveStatus
-            if LeaveApplication.objects.filter(guard=target_guard, status=LeaveStatus.APPROVED, start_date__lte=target_date, end_date__gte=target_date).exists():
-                raise ValidationError({"guard": "The selected guard is on approved leave on this date."})
+            from apps.shifts.services import validate_guard_duty_availability
+            validate_guard_duty_availability(
+                guard=target_guard,
+                date=start_time.date(),
+                start_time=start_time.time(),
+                end_time=end_time.time() if (end_time and start_time.date() == end_time.date()) else None,
+                duty_type="ESCORT",
+                as_drf=True,
+            )
+            if end_time and end_time.date() != start_time.date():
+                validate_guard_duty_availability(
+                    guard=target_guard,
+                    date=end_time.date(),
+                    start_time=None,
+                    end_time=end_time.time(),
+                    duty_type="ESCORT",
+                    as_drf=True,
+                )
         supervisor = serializer.validated_data.get("supervisor") or (user if user.role in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR] else None)
         station = serializer.validated_data.get("station") or (user.station if user.station else None)
         duty = serializer.save(supervisor=supervisor, station=station)
@@ -80,6 +95,29 @@ class EscortDutyViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         old = serializer.instance
         old_guard_id = old.guard_id
+        target_guard = serializer.validated_data.get("guard") or serializer.instance.guard
+        start_time = serializer.validated_data.get("start_time") or serializer.instance.start_time
+        end_time = serializer.validated_data.get("end_time") or serializer.instance.end_time
+        from apps.shifts.services import validate_guard_duty_availability
+        validate_guard_duty_availability(
+            guard=target_guard,
+            date=start_time.date(),
+            start_time=start_time.time(),
+            end_time=end_time.time() if (end_time and start_time.date() == end_time.date()) else None,
+            duty_type="ESCORT",
+            exclude_escort_id=serializer.instance.id,
+            as_drf=True,
+        )
+        if end_time and end_time.date() != start_time.date():
+            validate_guard_duty_availability(
+                guard=target_guard,
+                date=end_time.date(),
+                start_time=None,
+                end_time=end_time.time(),
+                duty_type="ESCORT",
+                exclude_escort_id=serializer.instance.id,
+                as_drf=True,
+            )
         changed = {key: str(value) for key, value in serializer.validated_data.items()}
         duty = serializer.save()
         SecurityAuditEvent.objects.create(
@@ -88,6 +126,7 @@ class EscortDutyViewSet(viewsets.ModelViewSet):
             actor_username=self.request.user.username,
             target_model="EscortDuty",
             target_id=str(duty.id),
+
             details={"action": "ESCORT_DUTY_UPDATED", "reference": duty.reference,
                      "old_guard_id": str(old_guard_id), "new_guard_id": str(duty.guard_id),
                      "changed_fields": changed},
