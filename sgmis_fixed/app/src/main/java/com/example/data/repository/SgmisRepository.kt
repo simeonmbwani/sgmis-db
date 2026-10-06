@@ -133,11 +133,16 @@ class SgmisRepository(
         else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to reject adjustment")))
     } catch (e: Exception) { Result.failure(sanitizeException(e)) }
 
-    suspend fun fetchAdministrativeHistory(): Result<List<AdministrativeHistoryEntry>> = try {
-        val response = api.getAdministrativeHistory()
+    suspend fun fetchAdministrativeHistory(
+        search: String? = null,
+        kind: String? = null,
+        station: String? = null
+    ): Result<List<AdministrativeHistoryEntry>> = try {
+        val response = api.getAdministrativeHistory(search, kind, station)
         if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
         else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to load administrative history")))
     } catch (e: Exception) { Result.failure(sanitizeException(e)) }
+
 
     suspend fun fetchLeaveAdjustments(): Result<List<LeaveAdjustmentRecord>> = try {
         val response = api.getLeaveAdjustments()
@@ -661,12 +666,19 @@ class SgmisRepository(
         }
     }
 
-    suspend fun fetchPatrolLogs(): Result<List<PatrolLog>> {
+    suspend fun fetchPatrolLogs(
+        search: String? = null,
+        status: String? = null,
+        guard: String? = null,
+        date: String? = null,
+        archived: Boolean? = null
+    ): Result<List<PatrolLog>> {
         return try {
-            val response = api.getPatrolLogs()
+            val response = api.getPatrolLogs(search, status, guard, date, archived)
             if (response.isSuccessful && response.body() != null) {
                 val logs = response.body()!!
                 database.patrolDao().insertPatrolLogs(logs.map {
+
                     CachedPatrolLogEntity(
                         id = it.id,
                         name = it.name,
@@ -2231,4 +2243,60 @@ class SgmisRepository(
             Result.failure(sanitizeException(e, "Failed to mark message read"))
         }
     }
+
+    // --- Redesign: Dashboards, Policies, Duty Overrides & Pair Reassignments ---
+    suspend fun fetchSupervisorDashboard(stationId: String? = null): Result<SupervisorDashboardResponse> = try {
+        val response = api.getSupervisorDashboard(stationId)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to load station dashboard")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e, "Failed to load station dashboard")) }
+
+    suspend fun fetchAdminDashboard(): Result<AdminDashboardResponse> = try {
+        val response = api.getAdminDashboard()
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to load national control dashboard")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e, "Failed to load national control dashboard")) }
+
+    suspend fun fetchOrganizationPolicies(category: String? = null, search: String? = null): Result<List<OrganizationPolicy>> = try {
+        val response = api.getOrganizationPolicies(category, search)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to load organization policies")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e, "Failed to load organization policies")) }
+
+    suspend fun updateOrganizationPolicy(id: String, updates: Map<String, Any>): Result<OrganizationPolicy> = try {
+        val response = api.updateOrganizationPolicy(id, updates)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to update organization policy")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e, "Failed to update organization policy")) }
+
+    suspend fun fetchDutyOverrides(guardId: String? = null, date: String? = null, status: String? = null): Result<List<DutyOverride>> = try {
+        val response = api.getDutyOverrides(guardId, date, status)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to load duty overrides")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e, "Failed to load duty overrides")) }
+
+    suspend fun createDutyOverride(request: CreateDutyOverrideRequest): Result<DutyOverride> = try {
+        val response = api.createDutyOverride(request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to create duty override")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e, "Failed to create duty override")) }
+
+    suspend fun settleDutyOverrideCompensation(id: String): Result<Map<String, Any>> = try {
+        val response = api.settleDutyOverrideCompensation(id)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to settle compensation")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e, "Failed to settle compensation")) }
+
+    suspend fun reassignGuardPair(request: ReassignGuardPairRequest): Result<ReassignGuardPairResponse> = try {
+        val response = api.reassignGuardPair(request)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to reassign guard pair")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e, "Failed to reassign guard pair")) }
+
+    suspend fun fetchPairReassignments(stationId: String? = null, guardId: String? = null): Result<List<GuardPairReassignmentAudit>> = try {
+        val response = api.getPairReassignments(stationId, guardId)
+        if (response.isSuccessful && response.body() != null) Result.success(response.body()!!)
+        else Result.failure(Exception(parseDrfError(response.errorBody()?.string(), "Failed to load pair reassignments")))
+    } catch (e: Exception) { Result.failure(sanitizeException(e, "Failed to load pair reassignments")) }
 }
+

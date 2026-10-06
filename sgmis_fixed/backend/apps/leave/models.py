@@ -332,6 +332,13 @@ class PublicHolidayCompensationLedger(models.Model):
         blank=True,
         related_name="compensation_ledger_entries",
     )
+    duty_override = models.ForeignKey(
+        "shifts.DutyOverride",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="compensation_ledger_entries",
+    )
     notes = models.TextField(blank=True, default="")
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

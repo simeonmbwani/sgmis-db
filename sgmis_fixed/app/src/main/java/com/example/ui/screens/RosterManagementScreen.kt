@@ -25,6 +25,7 @@ import com.example.data.model.*
 import com.example.ui.theme.GoldAccent
 import com.example.ui.theme.StatusSuccess
 import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
 import com.example.ui.viewmodel.SgmisViewModel
 import java.text.SimpleDateFormat
 import java.util.*
@@ -40,6 +41,8 @@ fun RosterManagementScreen(
     var showGenerateDialog by remember { mutableStateOf(false) }
     var showResumeNormalDialog by remember { mutableStateOf(false) }
     var showConfirmRosterApproval by remember { mutableStateOf(false) }
+    var showDutyOverrideDialog by remember { mutableStateOf(false) }
+    var showPairReassignDialog by remember { mutableStateOf(false) }
     var shiftForReassignment by remember { mutableStateOf<Shift?>(null) }
 
     val role = uiState.currentUser?.role?.uppercase()
@@ -70,6 +73,8 @@ fun RosterManagementScreen(
         if (isAdmin || isSupervisor) {
             viewModel.fetchUsers(role = "GUARD")
             viewModel.fetchStationCoverage()
+            viewModel.fetchDutyOverrides()
+            viewModel.fetchPairReassignments()
         }
     }
 
@@ -232,7 +237,7 @@ fun RosterManagementScreen(
             }
 
             var selectedTabIndex by remember { mutableStateOf(0) }
-            val tabs = listOf("Operational Matrix", "Calendar & Audit", "Shift Records")
+            val tabs = listOf("Operational Matrix", "Calendar & Audit", "Shift Records", "Pair & Duty Overrides")
 
             TabRow(
                 selectedTabIndex = selectedTabIndex,
@@ -754,7 +759,7 @@ fun RosterManagementScreen(
                         }
                     }
                 }
-                } else {
+                } else if (selectedTabIndex == 2) {
                     // Tab 2: Individual Shifts Header and List
                     item {
                         Text(
@@ -765,30 +770,148 @@ fun RosterManagementScreen(
                         )
                     }
 
-                if (uiState.adminLoading) {
-                    item {
-                        Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    if (uiState.adminLoading) {
+                        item {
+                            Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    } else if (targetOperationalShifts.isEmpty()) {
+                        item {
+                            Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                Text("No roster shifts generated for this station. Tap 'Generate Roster' to calculate rotational duty schedule.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    } else {
+                        items(targetOperationalShifts) { shift ->
+                            Column {
+                                RosterShiftCard(shift)
+                                if (isAdmin || isSupervisor) TextButton(onClick = { shiftForReassignment = shift }) { Text("Reassign This Shift") }
+                            }
                         }
                     }
-                } else if (targetOperationalShifts.isEmpty()) {
+                } else if (selectedTabIndex == 3) {
+                    // Tab 3: Pair & Duty Overrides
                     item {
-                        Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                            Text("No roster shifts generated for this station. Tap 'Generate Roster' to calculate rotational duty schedule.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            shape = RoundedCornerShape(12.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text(
+                                    text = "Operational Overrides & Pairing Management",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Authorized supervisors and administrators can perform emergency duty overrides (leave interruption, relief recalls) and update permanent guard pairing rotations.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (isAdmin || isSupervisor) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Button(
+                                            onClick = { showDutyOverrideDialog = true },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Icon(Icons.Default.Bolt, null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Duty Override", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { showPairReassignDialog = true },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Icon(Icons.Default.GroupAdd, null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Reassign Pair", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                } else {
-                    items(targetOperationalShifts) { shift ->
-                        Column {
-                            RosterShiftCard(shift)
-                            if (isAdmin || isSupervisor) TextButton(onClick = { shiftForReassignment = shift }) { Text("Reassign This Shift") }
+
+                    // Section 1: Active Duty Overrides & Leave Interruptions
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Active Duty Overrides (${uiState.dutyOverrides.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (uiState.dutyOverridesLoading) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            }
+                        }
+                    }
+
+                    if (uiState.dutyOverrides.isEmpty() && !uiState.dutyOverridesLoading) {
+                        item {
+                            SmartEmptyState(
+                                icon = Icons.Default.EventBusy,
+                                title = "No Duty Overrides",
+                                message = "No emergency duty overrides or leave interruptions recorded for this station."
+                            )
+                        }
+                    } else {
+                        items(uiState.dutyOverrides) { override ->
+                            DutyOverrideCard(
+                                override = override,
+                                canSettle = isAdmin || isSupervisor,
+                                onSettleCompensation = {
+                                    viewModel.settleDutyOverrideCompensation(override.id)
+                                }
+                            )
+                        }
+                    }
+
+                    // Section 2: Guard Pair Reassignments
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Pair Reassignment History (${uiState.pairReassignments.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (uiState.pairReassignmentsLoading) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            }
+                        }
+                    }
+
+                    if (uiState.pairReassignments.isEmpty() && !uiState.pairReassignmentsLoading) {
+                        item {
+                            SmartEmptyState(
+                                icon = Icons.Default.PeopleOutline,
+                                title = "No Pair Reassignments",
+                                message = "No guard pair reassignments recorded."
+                            )
+                        }
+                    } else {
+                        items(uiState.pairReassignments) { audit ->
+                            PairReassignmentAuditCard(audit = audit)
                         }
                     }
                 }
             }
         }
     }
-}
 
     if (showConfirmRosterApproval) {
         val stationName = uiState.stations.firstOrNull { it.id == selectedApprovalStation }?.name ?: "selected station"
@@ -846,6 +969,35 @@ fun RosterManagementScreen(
             saving = uiState.dutyReassignmentSaving,
             onDismiss = { shiftForReassignment = null },
             onSubmit = { request -> viewModel.reassignSingleShift(shift.id, request) { shiftForReassignment = null } }
+        )
+    }
+
+    if (showDutyOverrideDialog) {
+        DutyOverrideDialog(
+            guards = uiState.users.filter { it.role.equals("GUARD", true) },
+            stations = uiState.stations,
+            defaultStationId = selectedApprovalStation,
+            saving = uiState.isCreatingDutyOverride,
+            onDismiss = { showDutyOverrideDialog = false },
+            onSubmit = { req ->
+                viewModel.createDutyOverride(req) {
+                    showDutyOverrideDialog = false
+                }
+            }
+        )
+    }
+
+    if (showPairReassignDialog) {
+        ReassignPairDialog(
+            guards = uiState.users.filter { it.role.equals("GUARD", true) },
+            guardPairs = uiState.guardPairs,
+            saving = uiState.isReassigningPair,
+            onDismiss = { showPairReassignDialog = false },
+            onSubmit = { req ->
+                viewModel.reassignGuardPair(req) {
+                    showPairReassignDialog = false
+                }
+            }
         )
     }
 }
@@ -1483,3 +1635,455 @@ fun OperationalShiftBlock(
         }
     }
 }
+
+@Composable
+fun DutyOverrideCard(
+    override: DutyOverride,
+    canSettle: Boolean,
+    onSettleCompensation: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = override.guardName ?: "Guard",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${override.stationName ?: "Station"} • ${override.date} (${override.shiftType})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                SmartStatusChip(
+                    status = override.overrideTypeDisplay ?: override.overrideType
+                )
+            }
+
+            if (override.reason.isNotBlank()) {
+                Text(
+                    text = "Reason: ${override.reason}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Compensation: %.1fd owed".format(override.compensationDaysOwed),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (override.compensationSettled) StatusSuccess else MaterialTheme.colorScheme.primary
+                    )
+                    if (override.authorizedByName != null) {
+                        Text(
+                            text = "Auth by: ${override.authorizedByName}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                if (override.compensationSettled) {
+                    Surface(
+                        color = StatusSuccess.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = "SETTLED",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = StatusSuccess,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                } else if (canSettle && override.compensationDaysOwed > 0) {
+                    OutlinedButton(
+                        onClick = onSettleCompensation,
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Default.Check, null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Settle Compensation", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PairReassignmentAuditCard(audit: GuardPairReassignmentAudit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = audit.guardName ?: "Guard",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = audit.effectiveDate,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${audit.oldPairDisplay ?: "Unassigned"}  ➜  ${audit.newPairDisplay ?: "New Pair"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    if (audit.stationName != null) {
+                        Text(
+                            text = audit.stationName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (audit.reason.isNotBlank()) {
+                Text(
+                    text = "Reason: ${audit.reason}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            if (audit.authorizedByName != null) {
+                Text(
+                    text = "Authorized by: ${audit.authorizedByName}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun DutyOverrideDialog(
+    guards: List<User>,
+    stations: List<Station>,
+    defaultStationId: String?,
+    saving: Boolean,
+    onDismiss: () -> Unit,
+    onSubmit: (CreateDutyOverrideRequest) -> Unit
+) {
+    val today = remember {
+        SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("Africa/Harare")
+        }.format(Date())
+    }
+    var selectedGuardId by remember { mutableStateOf(guards.firstOrNull()?.id ?: "") }
+    var selectedStationId by remember { mutableStateOf(defaultStationId ?: stations.firstOrNull()?.id ?: "") }
+    var date by remember { mutableStateOf(today) }
+    var shiftType by remember { mutableStateOf("DAY") }
+    var overrideType by remember { mutableStateOf("LEAVE_INTERRUPTION") }
+    var reason by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Record Duty Override") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Override guard duty for emergency recall, leave interruption, or immediate station coverage. An authoritative relief shift will be generated and compensation tracked.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Text("Select Guard:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                if (guards.isEmpty()) {
+                    Text("No guards available.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                } else {
+                    guards.forEach { g ->
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (selectedGuardId == g.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(selected = selectedGuardId == g.id, onClick = { selectedGuardId = g.id })
+                                Text(
+                                    text = "${g.fullName ?: g.username} (${g.employeeNumber ?: "G"})",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (stations.isNotEmpty()) {
+                    Text("Select Station:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    stations.forEach { st ->
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (selectedStationId == st.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(selected = selectedStationId == st.id, onClick = { selectedStationId = st.id })
+                                Text(text = st.name, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = date,
+                    onValueChange = { date = it },
+                    label = { Text("Date (YYYY-MM-DD)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Text("Shift Type:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("DAY", "NIGHT").forEach { st ->
+                        FilterChip(
+                            selected = shiftType == st,
+                            onClick = { shiftType = st },
+                            label = { Text(st) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Text("Override Type:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                listOf(
+                    "LEAVE_INTERRUPTION" to "Leave Interruption",
+                    "EMERGENCY_RECALL" to "Emergency Recall",
+                    "COVERAGE_DEFICIT" to "Coverage Deficit"
+                ).forEach { (code, label) ->
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (overrideType == code) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = overrideType == code, onClick = { overrideType = code })
+                            Text(text = label, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it },
+                    label = { Text("Reason (Required)") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !saving && selectedGuardId.isNotBlank() && date.isNotBlank() && reason.isNotBlank(),
+                onClick = {
+                    onSubmit(
+                        CreateDutyOverrideRequest(
+                            guard = selectedGuardId,
+                            date = date.trim(),
+                            shiftType = shiftType,
+                            overrideType = overrideType,
+                            reason = reason.trim(),
+                            station = selectedStationId.ifBlank { null }
+                        )
+                    )
+                }
+            ) {
+                Text(if (saving) "Recording..." else "Record Override")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+fun ReassignPairDialog(
+    guards: List<User>,
+    guardPairs: List<GuardPair>,
+    saving: Boolean,
+    onDismiss: () -> Unit,
+    onSubmit: (ReassignGuardPairRequest) -> Unit
+) {
+    val today = remember {
+        SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("Africa/Harare")
+        }.format(Date())
+    }
+    var selectedGuardId by remember { mutableStateOf(guards.firstOrNull()?.id ?: "") }
+    var selectedPairId by remember { mutableStateOf(guardPairs.firstOrNull()?.id ?: "") }
+    var effectiveDate by remember { mutableStateOf(today) }
+    var reason by remember { mutableStateOf("") }
+    var slot by remember { mutableStateOf("A") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Reassign Guard Pair") },
+        text = {
+            Column(
+                modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Transfer a security guard to a different rotational operational pair. This updates authoritative pair assignments for future roster schedules.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Text("Select Guard:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                guards.forEach { g ->
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (selectedGuardId == g.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = selectedGuardId == g.id, onClick = { selectedGuardId = g.id })
+                            Text(
+                                text = "${g.fullName ?: g.username} (${g.employeeNumber ?: "G"})",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+
+                Text("Target Guard Pair:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                if (guardPairs.isEmpty()) {
+                    Text("No guard pairs configured.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                } else {
+                    guardPairs.forEach { pair ->
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (selectedPairId == pair.id) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(selected = selectedPairId == pair.id, onClick = { selectedPairId = pair.id })
+                                val desc = if (!pair.guardAName.isNullOrBlank() && !pair.guardBName.isNullOrBlank()) {
+                                    "${pair.guardAName} & ${pair.guardBName}"
+                                } else {
+                                    "Order ${pair.order ?: pair.rotationOrder ?: 1}"
+                                }
+                                Text(
+                                    text = "${pair.stationName ?: "Station"}: $desc",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Text("Pair Slot:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("A" to "Slot A", "B" to "Slot B").forEach { (s, label) ->
+                        FilterChip(
+                            selected = slot == s,
+                            onClick = { slot = s },
+                            label = { Text(label) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                OutlinedTextField(
+                    value = effectiveDate,
+                    onValueChange = { effectiveDate = it },
+                    label = { Text("Effective Date (YYYY-MM-DD)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it },
+                    label = { Text("Reason (Required)") },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !saving && selectedGuardId.isNotBlank() && selectedPairId.isNotBlank() && reason.isNotBlank(),
+                onClick = {
+                    onSubmit(
+                        ReassignGuardPairRequest(
+                            guard = selectedGuardId,
+                            newPair = selectedPairId,
+                            effectiveDate = effectiveDate.trim(),
+                            reason = reason.trim(),
+                            slot = slot
+                        )
+                    )
+                }
+            ) {
+                Text(if (saving) "Reassigning..." else "Confirm Reassignment")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+

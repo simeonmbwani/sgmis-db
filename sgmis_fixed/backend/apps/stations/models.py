@@ -191,3 +191,46 @@ class GuardPair(models.Model):
         elif self.guard_b_id == user.id:
             return self.guard_a
         return None
+
+
+class GuardPairReassignmentAudit(models.Model):
+    """
+    Historical audit record of guard pair reassignments.
+    Preserves old pair, new pair, effective date, station, authorizer, reason, and audit reference.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    station = models.ForeignKey(Station, on_delete=models.CASCADE, related_name="pair_reassignment_audits")
+    guard = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="pair_reassignments",
+    )
+    old_pair = models.ForeignKey(
+        GuardPair,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reassignments_from",
+    )
+    new_pair = models.ForeignKey(
+        GuardPair,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reassignments_to",
+    )
+    effective_date = models.DateField(db_index=True)
+    reason = models.TextField(help_text="Mandatory operational justification for pair reassignment")
+    authorized_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="authorized_pair_reassignments",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"PairReassignment: {self.guard.username} at {self.station.name} on {self.effective_date}"
+

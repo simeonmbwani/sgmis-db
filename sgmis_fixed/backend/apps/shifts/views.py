@@ -2594,3 +2594,181 @@ class PublicHolidayDutyRecordViewSet(viewsets.ModelViewSet):
         except (DjangoValidationError, DRFValidationError) as exc:
             detail = exc.messages if hasattr(exc, "messages") else str(exc)
             return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class DutyOverrideViewSet(viewsets.ModelViewSet):
+    """
+    Controlled operational workflow for duty overrides and leave interruptions.
+    Supervisor calls off-duty / on-leave guard with mandatory justification,
+    creates relief shift, and logs compensation entitlement.
+    """
+    from .models import DutyOverride, DutyOverrideType, DutyOverrideStatus
+    from .serializers import DutyOverrideSerializer
+    queryset = DutyOverride.objects.select_related("guard", "station", "authorized_by", "original_leave").all()
+    serializer_class = DutyOverrideSerializer
+    permission_classes = [IsSupervisorOrAdmin]
+
+    def get_queryset(self):
+        from .models import DutyOverride
+        user = self.request.user
+        qs = DutyOverride.objects.select_related("guard", "station", "authorized_by", "original_leave").all()
+        if user.role == UserRole.SUPERVISOR and user.station:
+            qs = qs.filter(station=user.station)
+        elif user.role == UserRole.GUARD:
+            qs = qs.filter(guard=user)
+
+        guard_id = self.request.query_params.get("guard")
+        if guard_id:
+            qs = qs.filter(guard_id=guard_id)
+
+        date_param = self.request.query_params.get("date")
+        if date_param:
+            qs = qs.filter(date=date_param)
+
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            qs = qs.filter(status=status_param.upper())
+
+        return qs
+
+    def perform_create(self, serializer):
+        from .models import DutyOverrideType, DutyOverrideStatus
+        user = self.request.user
+        guard = serializer.validated_data.get("guard")
+        date = serializer.validated_data.get("date")
+        shift_type = serializer.validated_data.get("shift_type", ShiftType.DAY)
+        station = serializer.validated_data.get("station") or (user.station if user.role == UserRole.SUPERVISOR else guard.station)
+        override_type = serializer.validated_data.get("override_type", DutyOverrideType.LEAVE_INTERRUPTION)
+        reason = serializer.validated_data.get("reason", "").strip()
+
+        if not reason:
+            raise DRFValidationError({"reason": "Mandatory operational justification required for duty override."})
+
+        if user.role == UserRole.SUPERVISOR:
+            if not user.station or station.id != user.station.id:
+                raise DRFPermissionDenied("Station isolation: Cannot create duty overrides for another station.")
+            if guard.station_id != user.station.id:
+                raise DRFPermissionDenied("Station isolation: Cannot override duty for guards outside your station.")
+
+        from apps.leave.models import LeaveApplication, LeaveStatus, PublicHolidayCompensationLedger
+        orig_leave = LeaveApplication.objects.filter(
+            guard=guard,
+            status=LeaveStatus.APPROVED,
+            start_date__lte=date,
+            end_date__gte=date,
+        ).first()
+
+        orig_off_shift = Shift.objects.filter(
+            guard=guard,
+            date=date,
+            shift_type=ShiftType.OFF,
+        ).first()
+
+        days_interrupted = 1.0
+        compensation_owed = 1.0
+
+        override = serializer.save(
+            authorized_by=user,
+            station=station,
+            original_leave=orig_leave,
+            original_off_shift=orig_off_shift,
+            days_interrupted=days_interrupted,
+            compensation_days_owed=compensation_owed,
+            status=DutyOverrideStatus.ACTIVE,
+        )
+
+        import datetime as dt
+        if shift_type == ShiftType.NIGHT:
+            s_time = dt.time(18, 0)
+            e_time = dt.time(6, 0)
+        else:
+            s_time = dt.time(6, 0)
+            e_time = dt.time(18, 0)
+
+        existing_shift = Shift.objects.filter(guard=guard, date=date, shift_type=shift_type).first()
+        if existing_shift:
+            existing_shift.assignment_type = AssignmentType.RELIEF
+            existing_shift.station = station
+            existing_shift.is_override = True
+            existing_shift.override_reason = f"Duty override ({override_type}): {reason}"
+            existing_shift.save()
+            override.shift_created = existing_shift
+        else:
+            new_shift = Shift.objects.create(
+                guard=guard,
+                station=station,
+                date=date,
+                start_time=s_time,
+                end_time=e_time,
+                shift_type=shift_type,
+                assignment_type=AssignmentType.RELIEF,
+                is_override=True,
+                override_reason=f"Duty override ({override_type}): {reason}",
+            )
+            override.shift_created = new_shift
+
+        override.save(update_fields=["shift_created"])
+
+
+        PublicHolidayCompensationLedger.objects.create(
+            guard=guard,
+            duty_override=override,
+            entry_type="EARNED",
+            days=compensation_owed,
+            notes=f"Duty override compensation earned for {date}: {reason}",
+            created_by=user,
+        )
+
+        from apps.core.models import SecurityAuditEvent
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=user,
+            actor_username=user.username,
+            target_model="DutyOverride",
+            target_id=str(override.id),
+            details={
+                "action": "DUTY_OVERRIDE_CREATED",
+                "guard": guard.username,
+                "date": date.isoformat(),
+                "override_type": override_type,
+                "reason": reason,
+            },
+        )
+
+    @action(detail=True, methods=["post"], url_path="settle_compensation")
+    def settle_compensation(self, request, pk=None):
+        from .serializers import DutyOverrideSerializer
+        override = self.get_object()
+        if override.compensation_settled:
+            return Response({"detail": "Compensation has already been settled for this override."}, status=status.HTTP_400_BAD_REQUEST)
+
+        override.compensation_settled = True
+        override.save(update_fields=["compensation_settled"])
+
+        from apps.leave.models import PublicHolidayCompensationLedger
+        PublicHolidayCompensationLedger.objects.create(
+            guard=override.guard,
+            duty_override=override,
+            entry_type="TAKEN",
+            days=override.compensation_days_owed,
+            notes=f"Duty override compensation taken/settled for override on {override.date}.",
+            created_by=request.user,
+        )
+
+        return Response({
+            "message": f"Compensation of {override.compensation_days_owed} days settled for {override.guard.username}.",
+            "override": DutyOverrideSerializer(override).data,
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel(self, request, pk=None):
+        from .models import DutyOverrideStatus
+        from .serializers import DutyOverrideSerializer
+        override = self.get_object()
+        override.status = DutyOverrideStatus.CANCELLED
+        override.save(update_fields=["status"])
+        return Response({
+            "message": "Duty override cancelled.",
+            "override": DutyOverrideSerializer(override).data,
+        }, status=status.HTTP_200_OK)
+

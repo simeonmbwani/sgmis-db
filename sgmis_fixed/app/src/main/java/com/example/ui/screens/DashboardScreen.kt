@@ -30,6 +30,7 @@ import com.example.ui.navigation.NavRoutes
 import com.example.ui.theme.GoldAccent
 import com.example.ui.theme.StatusSuccess
 import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
 import com.example.ui.viewmodel.SgmisUiState
 import com.example.ui.viewmodel.SgmisViewModel
 import androidx.compose.foundation.lazy.LazyColumn
@@ -2062,30 +2063,46 @@ private fun SupervisorCommandConsole(
         }
     }
 
-    // Live Metrics derived from server datasets
-    val guardsClockedIn = stationAttendance.count { it.clockIn != null && it.clockOut == null }
+    LaunchedEffect(Unit) {
+        viewModel.fetchSupervisorDashboard()
+    }
+    val supervisorDashboard = uiState.supervisorDashboard
+
+    // Live Metrics derived from authoritative backend dashboard with local fallbacks
+    val guardsClockedIn = supervisorDashboard?.guardsOnPost ?: stationAttendance.count { it.clockIn != null && it.clockOut == null }
     val guardsExpected = todayStationShifts.size
+    val guardsAvailable = supervisorDashboard?.guardsAvailable ?: (guardsExpected - guardsClockedIn).coerceAtLeast(0)
+    val guardsOnLeave = supervisorDashboard?.guardsOnLeave ?: uiState.leaveApplications.count { it.status == "PENDING" }
     val activeVisitorsCount = stationVisitors.count {
         !it.occurrenceText.contains("Time Out:", ignoreCase = true) && !it.occurrenceText.contains("CHECKED OUT", ignoreCase = true)
     }
-    val openIncidentsCount = stationIncidents.count { it.status != "RESOLVED" }
+    val openIncidentsCount = supervisorDashboard?.openIncidents ?: stationIncidents.count { it.status != "RESOLVED" }
     val criticalIncidentsCount = stationIncidents.count {
         it.status != "RESOLVED" && it.priority.uppercase() in listOf("HIGH", "CRITICAL", "URGENT")
     }
-    val activePatrolsCount = stationPatrols.count { it.status == "IN_PROGRESS" }
-    val pendingLeaveCount = uiState.leaveApplications.count { it.status == "PENDING" }
+    val activePatrolsCount = supervisorDashboard?.activePatrols ?: stationPatrols.count { it.status == "IN_PROGRESS" }
+    val pendingLeaveCount = guardsOnLeave
+    val attendanceRate = supervisorDashboard?.attendanceRate ?: if (guardsExpected > 0) (guardsClockedIn.toDouble() / guardsExpected * 100) else 100.0
 
     // 1. Station Command Header
     SupervisorStationHeader(
-        stationName = stationName,
+        stationName = supervisorDashboard?.station?.name ?: stationName,
         hasStation = hasStation,
         user = user,
         todayFormatted = todayFormatted,
         activeShiftBadge = activeShiftBadge,
         geofenceText = geofenceText,
-        onRefresh = { viewModel.refreshAuthoritativeState() },
+        onRefresh = {
+            viewModel.fetchSupervisorDashboard()
+            viewModel.refreshAuthoritativeState()
+        },
         onViewProfile = { onNavigate(NavRoutes.PROFILE) }
     )
+
+    // Live Operational Telemetry Strip
+    if (supervisorDashboard?.liveOps?.isNotEmpty() == true) {
+        SmartLiveOpsStrip(items = supervisorDashboard.liveOps)
+    }
 
     // Unassigned Station Warning Banner
     if (!hasStation) {
@@ -2121,6 +2138,8 @@ private fun SupervisorCommandConsole(
         pendingLeaveCount = pendingLeaveCount,
         escortDutiesCount = uiState.escortDuties.size,
         examDutiesCount = uiState.examDuties.size,
+        guardsAvailable = guardsAvailable,
+        attendanceRate = attendanceRate,
         onNavigate = onNavigate
     )
 
@@ -2396,6 +2415,8 @@ private fun SupervisorMetricsGrid(
     pendingLeaveCount: Int,
     escortDutiesCount: Int = 0,
     examDutiesCount: Int = 0,
+    guardsAvailable: Int? = null,
+    attendanceRate: Double? = null,
     onNavigate: (String) -> Unit
 ) {
     val guardsValue = if (!hasStation) "—" else if (guardsExpected > 0) "$guardsClockedIn / $guardsExpected" else "$guardsClockedIn"
@@ -2404,6 +2425,8 @@ private fun SupervisorMetricsGrid(
     val incidentsValue = if (!hasStation) "—" else "$openIncidentsCount"
     val patrolsValue = if (!hasStation) "—" else if (activePatrolsCount > 0) "$activePatrolsCount Active" else "0"
     val leaveValue = if (!hasStation) "—" else "$pendingLeaveCount"
+    val availableValue = if (!hasStation) "—" else "${guardsAvailable ?: 0}"
+    val attendanceValue = if (!hasStation) "—" else "${String.format(java.util.Locale.US, "%.0f%%", attendanceRate ?: 100.0)}"
 
     Column(
         modifier = Modifier
@@ -2427,14 +2450,14 @@ private fun SupervisorMetricsGrid(
                 modifier = Modifier.weight(1f)
             )
             SupervisorMetricTile(
-                title = "OB Entries",
-                value = obValue,
-                subtitle = if (!hasStation) "Station Required" else "Today's logs",
-                icon = Icons.AutoMirrored.Filled.MenuBook,
+                title = "Guards Available",
+                value = availableValue,
+                subtitle = if (!hasStation) "Station Required" else "Ready for duty",
+                icon = Icons.Default.People,
                 iconTint = MaterialTheme.colorScheme.primary,
                 iconContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                testTag = "metric_ob_entries",
-                onClick = { onNavigate(NavRoutes.OCCURRENCE_BOOK) },
+                testTag = "metric_guards_available",
+                onClick = { onNavigate(NavRoutes.ROSTER_MANAGEMENT) },
                 modifier = Modifier.weight(1f)
             )
         }
@@ -2444,33 +2467,16 @@ private fun SupervisorMetricsGrid(
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             SupervisorMetricTile(
-                title = "Visitors Inside",
-                value = visitorsValue,
-                subtitle = if (!hasStation) "Station Required" else "Gate register",
-                icon = Icons.Default.Badge,
-                iconTint = MaterialTheme.colorScheme.secondary,
-                iconContainerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f),
-                testTag = "metric_visitors_inside",
-                onClick = { onNavigate(NavRoutes.VISITOR_BOOK) },
+                title = "Guards on Leave",
+                value = leaveValue,
+                subtitle = if (!hasStation) "Station Required" else "On Leave / Off",
+                icon = Icons.AutoMirrored.Filled.EventNote,
+                iconTint = MaterialTheme.colorScheme.tertiary,
+                iconContainerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f),
+                testTag = "metric_pending_leave",
+                onClick = { onNavigate(NavRoutes.LEAVE) },
                 modifier = Modifier.weight(1f)
             )
-            SupervisorMetricTile(
-                title = "Open Incidents",
-                value = incidentsValue,
-                subtitle = if (!hasStation) "Station Required" else if (criticalIncidentsCount > 0) "$criticalIncidentsCount high priority" else "Security status",
-                icon = Icons.Default.Warning,
-                iconTint = if (openIncidentsCount > 0) MaterialTheme.colorScheme.error else StatusSuccess,
-                iconContainerColor = if (openIncidentsCount > 0) MaterialTheme.colorScheme.error.copy(alpha = 0.15f) else StatusSuccess.copy(alpha = 0.15f),
-                testTag = "metric_open_incidents",
-                onClick = { onNavigate(NavRoutes.INCIDENTS) },
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
             SupervisorMetricTile(
                 title = "Active Patrols",
                 value = patrolsValue,
@@ -2482,15 +2488,60 @@ private fun SupervisorMetricsGrid(
                 onClick = { onNavigate(NavRoutes.PATROL) },
                 modifier = Modifier.weight(1f)
             )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             SupervisorMetricTile(
-                title = "Pending Leave",
-                value = leaveValue,
-                subtitle = if (!hasStation) "Station Required" else "Awaiting review",
-                icon = Icons.AutoMirrored.Filled.EventNote,
-                iconTint = MaterialTheme.colorScheme.tertiary,
-                iconContainerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f),
-                testTag = "metric_pending_leave",
-                onClick = { onNavigate(NavRoutes.LEAVE) },
+                title = "Open Incidents",
+                value = incidentsValue,
+                subtitle = if (!hasStation) "Station Required" else if (criticalIncidentsCount > 0) "$criticalIncidentsCount high priority" else "Security status",
+                icon = Icons.Default.Warning,
+                iconTint = if (openIncidentsCount > 0) MaterialTheme.colorScheme.error else StatusSuccess,
+                iconContainerColor = if (openIncidentsCount > 0) MaterialTheme.colorScheme.error.copy(alpha = 0.15f) else StatusSuccess.copy(alpha = 0.15f),
+                testTag = "metric_open_incidents",
+                onClick = { onNavigate(NavRoutes.INCIDENTS) },
+                modifier = Modifier.weight(1f)
+            )
+            SupervisorMetricTile(
+                title = "Attendance Rate",
+                value = attendanceValue,
+                subtitle = if (!hasStation) "Station Required" else "Compliance rate",
+                icon = Icons.Default.CheckCircle,
+                iconTint = StatusSuccess,
+                iconContainerColor = StatusSuccess.copy(alpha = 0.15f),
+                testTag = "metric_attendance_rate",
+                onClick = { onNavigate(NavRoutes.ATTENDANCE_MANAGEMENT) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            SupervisorMetricTile(
+                title = "OB Entries",
+                value = obValue,
+                subtitle = if (!hasStation) "Station Required" else "Today's logs",
+                icon = Icons.AutoMirrored.Filled.MenuBook,
+                iconTint = MaterialTheme.colorScheme.primary,
+                iconContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                testTag = "metric_ob_entries",
+                onClick = { onNavigate(NavRoutes.OCCURRENCE_BOOK) },
+                modifier = Modifier.weight(1f)
+            )
+            SupervisorMetricTile(
+                title = "Visitors Inside",
+                value = visitorsValue,
+                subtitle = if (!hasStation) "Station Required" else "Gate register",
+                icon = Icons.Default.Badge,
+                iconTint = MaterialTheme.colorScheme.secondary,
+                iconContainerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f),
+                testTag = "metric_visitors_inside",
+                onClick = { onNavigate(NavRoutes.VISITOR_BOOK) },
                 modifier = Modifier.weight(1f)
             )
         }
@@ -4135,11 +4186,13 @@ private fun SupervisorHandoverCard(
 private fun SupervisorActionGrid(onNavigate: (String) -> Unit) {
     val items = listOf(
         BlueprintAction("Attendance Console", "Real-time clock-in monitoring", Icons.Default.HowToReg, NavRoutes.ATTENDANCE_MANAGEMENT, "nav_attendance_management"),
+        BlueprintAction("Station Patrols", "Monitor & assign patrols", Icons.AutoMirrored.Filled.DirectionsWalk, NavRoutes.PATROL, "nav_patrols"),
         BlueprintAction("Duty Roster Engine", "Automated rotation & shifts", Icons.Default.CalendarMonth, NavRoutes.ROSTER_MANAGEMENT, "nav_roster"),
         BlueprintAction("Occurrence Book", "Station OB review & entries", Icons.AutoMirrored.Filled.MenuBook, NavRoutes.OCCURRENCE_BOOK, "nav_ob"),
         BlueprintAction("Visitor Register", "Station visitor logs & passes", Icons.Default.Badge, NavRoutes.VISITOR_BOOK, "nav_visitors"),
         BlueprintAction("Incident Reports", "Station incident management", Icons.Default.Warning, NavRoutes.INCIDENTS, "nav_incidents"),
         BlueprintAction("Leave Manager", "Approve & track guard leaves", Icons.AutoMirrored.Filled.EventNote, NavRoutes.LEAVE, "nav_leave"),
+        BlueprintAction("Organization Policy", "Standard operating procedures", Icons.Default.Policy, NavRoutes.ORGANIZATION_POLICY, "nav_policy"),
         BlueprintAction("Personnel & Guards", "Staff & station assignments", Icons.Default.People, NavRoutes.USER_MANAGEMENT, "nav_users"),
         BlueprintAction("Operations Reports", "Filter & analyze station records", Icons.Default.Assessment, NavRoutes.REPORTS, "nav_reports"),
         BlueprintAction("Notifications", "Operational alerts & notices", Icons.Default.Notifications, NavRoutes.NOTIFICATIONS, "nav_notifications"),
@@ -4180,15 +4233,21 @@ private fun AdministratorNationalControlCenter(
     todayFormatted: String,
     onNavigate: (String) -> Unit
 ) {
-    LaunchedEffect(Unit) { viewModel.fetchRecordAdjustments() }
+    LaunchedEffect(Unit) {
+        viewModel.fetchAdminDashboard()
+        viewModel.fetchRecordAdjustments()
+    }
+    val adminDash = uiState.adminDashboard
+    val totalGuards = adminDash?.totalGuards ?: uiState.users.count { it.role == "GUARD" }
     val totalStations = uiState.stations.size
-    val activeStations = uiState.stations.size
-    val guardsOnDuty = uiState.attendanceRecords.count { it.clockIn != null && it.clockOut == null }
-    val guardsOnLeave = uiState.leaveApplications.count {
+    val activeStations = adminDash?.totalStations ?: uiState.stations.size
+    val guardsOnDuty = adminDash?.activeDuties ?: uiState.attendanceRecords.count { it.clockIn != null && it.clockOut == null }
+    val guardsOnLeave = adminDash?.guardsOnLeave ?: uiState.leaveApplications.count {
         it.status.uppercase() == "APPROVED" && (todayStr.isEmpty() || (it.startDate <= todayStr && it.endDate >= todayStr))
     }
-    val activePatrols = uiState.patrolLogs.count { it.status == "IN_PROGRESS" }
-    val openIncidents = uiState.incidents.count { it.status != "RESOLVED" }
+    val activePatrols = adminDash?.activePatrols ?: uiState.patrolLogs.count { it.status == "IN_PROGRESS" }
+    val openIncidents = adminDash?.openIncidents ?: uiState.incidents.count { it.status != "RESOLVED" }
+    val attendanceRate = adminDash?.attendanceRate ?: 0.0
     val pendingLeave = uiState.leaveApplications.count { it.status == "PENDING" }
     val stationConflicts = uiState.conflictReport?.totalConflicts ?: 0
 
@@ -4196,9 +4255,17 @@ private fun AdministratorNationalControlCenter(
     AdministratorNationalHeader(
         user = user,
         todayFormatted = todayFormatted,
-        onRefresh = { viewModel.refreshAuthoritativeState() },
+        onRefresh = {
+            viewModel.fetchAdminDashboard()
+            viewModel.refreshAuthoritativeState()
+        },
         onViewProfile = { onNavigate(NavRoutes.PROFILE) }
     )
+
+    // Live Operational Telemetry Strip
+    if (adminDash?.liveOps?.isNotEmpty() == true) {
+        SmartLiveOpsStrip(items = adminDash.liveOps)
+    }
 
     // 2. Section A: National Actionable Telemetry Metrics Grid
     Text(
@@ -4214,6 +4281,9 @@ private fun AdministratorNationalControlCenter(
         openIncidents = openIncidents,
         pendingLeave = pendingLeave,
         stationConflicts = stationConflicts,
+        totalGuards = totalGuards,
+        attendanceRate = attendanceRate,
+        activeStations = activeStations,
         onNavigate = onNavigate
     )
 
@@ -4392,6 +4462,9 @@ private fun NationalMetricsGrid(
     openIncidents: Int,
     pendingLeave: Int,
     stationConflicts: Int,
+    totalGuards: Int? = null,
+    attendanceRate: Double? = null,
+    activeStations: Int? = null,
     onNavigate: (String) -> Unit
 ) {
     Card(
@@ -4467,6 +4540,37 @@ private fun NationalMetricsGrid(
                     color = if (stationConflicts > 0) MaterialTheme.colorScheme.error else StatusSuccess,
                     icon = Icons.Default.CalendarMonth,
                     onClick = { onNavigate(NavRoutes.ROSTER_MANAGEMENT) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // Row 3: Total Staff, Attendance Rate, Active Stations
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                NationalMetricCard(
+                    title = "Total Staff",
+                    value = "${totalGuards ?: "—"}",
+                    subtitle = "Registered",
+                    color = MaterialTheme.colorScheme.primary,
+                    icon = Icons.Default.People,
+                    onClick = { onNavigate(NavRoutes.USER_MANAGEMENT) },
+                    modifier = Modifier.weight(1f)
+                )
+                NationalMetricCard(
+                    title = "Attendance Rate",
+                    value = "${String.format(java.util.Locale.US, "%.0f%%", attendanceRate ?: 100.0)}",
+                    subtitle = "Compliance",
+                    color = StatusSuccess,
+                    icon = Icons.Default.CheckCircle,
+                    onClick = { onNavigate(NavRoutes.ATTENDANCE_MANAGEMENT) },
+                    modifier = Modifier.weight(1f)
+                )
+                NationalMetricCard(
+                    title = "Active Stations",
+                    value = "${activeStations ?: "—"}",
+                    subtitle = "Nationwide",
+                    color = MaterialTheme.colorScheme.secondary,
+                    icon = Icons.Default.Business,
+                    onClick = { onNavigate(NavRoutes.STATION_MANAGEMENT) },
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -4940,28 +5044,66 @@ private fun NationalRosterOversightCard(
 
 @Composable
 private fun NationalAdministrationGrid(onNavigate: (String) -> Unit, pendingAdjustments: Int) {
-    val adminItems = listOf(
-        BlueprintAction("Attendance Console", "National clock-in monitoring", Icons.Default.HowToReg, NavRoutes.ATTENDANCE_MANAGEMENT, "nav_attendance_management"),
-        BlueprintAction("Duty Roster Engine", "National schedule generation", Icons.Default.CalendarMonth, NavRoutes.ROSTER_MANAGEMENT, "nav_roster"),
+    val orgItems = listOf(
+        BlueprintAction("Organization Policy", "Standard operating procedures & rules", Icons.Default.Policy, NavRoutes.ORGANIZATION_POLICY, "nav_admin_policy"),
+        BlueprintAction("Stations & Pairs", "Posts, checkpoints & pairs", Icons.Default.Business, NavRoutes.STATION_MANAGEMENT, "nav_stations")
+    )
+
+    val personnelItems = listOf(
         BlueprintAction("Personnel & Accounts", "All staff, roles & credentials", Icons.Default.People, NavRoutes.USER_MANAGEMENT, "nav_users"),
-        BlueprintAction("Stations & Pairs", "Posts, checkpoints & pairs", Icons.Default.Business, NavRoutes.STATION_MANAGEMENT, "nav_stations"),
+        BlueprintAction("Attendance Console", "National clock-in monitoring", Icons.Default.HowToReg, NavRoutes.ATTENDANCE_MANAGEMENT, "nav_attendance_management")
+    )
+
+    val dutyItems = listOf(
+        BlueprintAction("Duty Roster Engine", "National schedule generation", Icons.Default.CalendarMonth, NavRoutes.ROSTER_MANAGEMENT, "nav_roster"),
+        BlueprintAction("Leave & Duty Master Control", "Authoritative balances and overrides", Icons.Default.Tune, NavRoutes.ADMIN_MASTER_TOOLS, "nav_admin_master_tools"),
+        BlueprintAction("Master Record Adjustments", "$pendingAdjustments pending · Review & adjust", Icons.Default.EditNote, NavRoutes.RECORD_ADJUSTMENTS, "nav_record_adjustments"),
+        BlueprintAction("Leave Management", "System-wide leave requests", Icons.AutoMirrored.Filled.EventNote, NavRoutes.LEAVE, "nav_leave")
+    )
+
+    val opsItems = listOf(
+        BlueprintAction("Patrol Monitoring", "National patrol and checkpoint activity", Icons.AutoMirrored.Filled.DirectionsWalk, NavRoutes.PATROL, "nav_admin_patrol_monitoring"),
+        BlueprintAction("Incident Reports", "System-wide incidents & SOS alerts", Icons.Default.Warning, NavRoutes.INCIDENTS, "nav_incidents"),
         BlueprintAction("Occurrence Book", "Global OB records", Icons.AutoMirrored.Filled.MenuBook, NavRoutes.OCCURRENCE_BOOK, "nav_ob"),
-        BlueprintAction("Incident Reports", "System-wide incidents", Icons.Default.Warning, NavRoutes.INCIDENTS, "nav_incidents"),
-        BlueprintAction("Patrol Monitoring", "Read-only national patrol and checkpoint activity", Icons.AutoMirrored.Filled.DirectionsWalk, NavRoutes.PATROL, "nav_admin_patrol_monitoring"),
-        BlueprintAction("Executive Reports", "National security analytics", Icons.Default.Assessment, NavRoutes.REPORTS, "nav_reports"),
-        BlueprintAction("Leave Management", "System-wide leave requests", Icons.AutoMirrored.Filled.EventNote, NavRoutes.LEAVE, "nav_leave"),
-        BlueprintAction("Master Record Adjustments", "$pendingAdjustments pending · Review and reconcile personnel records", Icons.Default.EditNote, NavRoutes.RECORD_ADJUSTMENTS, "nav_record_adjustments"),
-        BlueprintAction("Administrative History", "Read-only audit and adjustment history", Icons.Default.History, NavRoutes.ADMIN_HISTORY, "nav_admin_history"),
-        BlueprintAction("Leave & Duty Master Control", "Opening balances and future reassignment", Icons.Default.Tune, NavRoutes.ADMIN_MASTER_TOOLS, "nav_admin_master_tools"),
-        BlueprintAction("Escort Duties", "National escort assignments", Icons.Default.DirectionsCar, NavRoutes.ESCORT_DUTIES, "nav_escort_duties"),
-        BlueprintAction("Exam Duties", "National exam assignments", Icons.Default.School, NavRoutes.EXAM_DUTIES, "nav_exam_duties"),
         BlueprintAction("Visitor Register", "National visitor records", Icons.Default.Badge, NavRoutes.VISITOR_BOOK, "nav_visitors"),
+        BlueprintAction("Escort Duties", "National escort assignments", Icons.Default.DirectionsCar, NavRoutes.ESCORT_DUTIES, "nav_escort_duties"),
+        BlueprintAction("Exam Duties", "National exam assignments", Icons.Default.School, NavRoutes.EXAM_DUTIES, "nav_exam_duties")
+    )
+
+    val recordsItems = listOf(
+        BlueprintAction("Administrative History", "Audit trails and adjustment history", Icons.Default.History, NavRoutes.ADMIN_HISTORY, "nav_admin_history"),
+        BlueprintAction("Executive Reports", "National security analytics", Icons.Default.Assessment, NavRoutes.REPORTS, "nav_reports"),
         BlueprintAction("Notifications", "Operational alerts and messages", Icons.Default.Notifications, NavRoutes.NOTIFICATIONS, "nav_notifications"),
         BlueprintAction("Settings & About", "Theme, app version & preferences", Icons.Default.Settings, NavRoutes.SETTINGS, "nav_settings")
     )
 
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        // ORGANIZATION
+        SmartSectionHeader(title = "Organization", subtitle = "Central configuration and operational policies")
+        renderActionGrid(orgItems, onNavigate)
+
+        // PERSONNEL
+        SmartSectionHeader(title = "Personnel", subtitle = "Staff credentials and operational attendance")
+        renderActionGrid(personnelItems, onNavigate)
+
+        // DUTY & ROSTER
+        SmartSectionHeader(title = "Duty & Roster", subtitle = "Shift rosters, master controls, and leave")
+        renderActionGrid(dutyItems, onNavigate)
+
+        // OPERATIONS
+        SmartSectionHeader(title = "Operations", subtitle = "Patrols, incident responses, and gate controls")
+        renderActionGrid(opsItems, onNavigate)
+
+        // RECORDS & SYSTEM
+        SmartSectionHeader(title = "Records & System", subtitle = "Authoritative audit logs and executive reports")
+        renderActionGrid(recordsItems, onNavigate)
+    }
+}
+
+@Composable
+private fun renderActionGrid(items: List<BlueprintAction>, onNavigate: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        for (pair in adminItems.chunked(2)) {
+        for (pair in items.chunked(2)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)

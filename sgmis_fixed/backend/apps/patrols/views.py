@@ -62,16 +62,48 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
         station_id = self.request.query_params.get("station")
 
         if user.role == UserRole.GUARD:
-            return qs.filter(guard=user)
+            qs = qs.filter(guard=user)
         elif user.role == UserRole.SUPERVISOR:
             if user.station:
-                return qs.filter(station=user.station)
-            return qs.none()
+                qs = qs.filter(station=user.station)
+            else:
+                return qs.none()
         elif user.role == UserRole.ADMINISTRATOR:
             if station_id:
-                return qs.filter(station_id=station_id)
-            return qs
+                qs = qs.filter(station_id=station_id)
+
+        search = self.request.query_params.get("search")
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(guard__username__icontains=search) |
+                Q(guard__first_name__icontains=search) |
+                Q(guard__last_name__icontains=search) |
+                Q(name__icontains=search) |
+                Q(notes__icontains=search)
+            )
+
+        status_param = self.request.query_params.get("status")
+        if status_param and status_param.upper() != "ALL":
+            qs = qs.filter(status=status_param.upper())
+
+        guard_param = self.request.query_params.get("guard")
+        if guard_param:
+            qs = qs.filter(guard_id=guard_param)
+
+        date_param = self.request.query_params.get("date")
+        if date_param:
+            qs = qs.filter(start_time__date=date_param)
+
+        archived = self.request.query_params.get("archived")
+        if archived is not None:
+            if archived.lower() in ["true", "1"]:
+                qs = qs.filter(status__in=[PatrolStatus.COMPLETED, PatrolStatus.APPROVED, PatrolStatus.FAILED, PatrolStatus.EXPIRED, PatrolStatus.CANCELLED])
+            elif archived.lower() in ["false", "0"]:
+                qs = qs.filter(status__in=[PatrolStatus.ASSIGNED, PatrolStatus.IN_PROGRESS, PatrolStatus.ACTIVE])
+
         return qs
+
 
     def get_object(self):
         queryset = PatrolLog.objects.all().select_related("guard", "station")
@@ -771,12 +803,55 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+        # GPS Location verification at finish
+        lat_val = request.data.get("latitude")
+        lon_val = request.data.get("longitude")
+        gps_coords = request.data.get("gps_coords") or request.data.get("gps")
+        parsed_lat = None
+        parsed_lon = None
+        if lat_val is not None and lon_val is not None:
+            try:
+                parsed_lat = float(lat_val)
+                parsed_lon = float(lon_val)
+            except (ValueError, TypeError):
+                pass
+        elif gps_coords and "," in str(gps_coords):
+            try:
+                parts = str(gps_coords).split(",")
+                parsed_lat = float(parts[0].strip())
+                parsed_lon = float(parts[1].strip())
+            except (ValueError, TypeError):
+                pass
+
+        if parsed_lat is not None and parsed_lon is not None:
+            if parsed_lat == 0.0 and parsed_lon == 0.0:
+                return Response(
+                    {"detail": "GPS required: Accurate GPS fix required to complete patrol."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if patrol.station.latitude != 0.0 or patrol.station.longitude != 0.0:
+                if not is_within_geofence(parsed_lat, parsed_lon, patrol.station.latitude, patrol.station.longitude, radius_meters=patrol.station.geofence_radius_meters, buffer_meters=50.0):
+                    return Response(
+                        {"detail": "Outside station boundary: Location must be verified within station perimeter."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+        require_gps_flag = request.data.get("require_gps", False)
+        has_checkpoint_gps = patrol.scans.filter(gps_coords__isnull=False).exclude(gps_coords="").exclude(gps_coords="0.0,0.0").exists()
+        has_finish_gps = (parsed_lat is not None and parsed_lon is not None and not (parsed_lat == 0.0 and parsed_lon == 0.0))
+        if require_gps_flag and not (has_checkpoint_gps or has_finish_gps):
+            return Response(
+                {"detail": "GPS required: Verified GPS location evidence is mandatory for patrol completion."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         patrol.status = PatrolStatus.COMPLETED
         patrol.end_time = now
         notes = request.data.get("notes")
         if notes:
             patrol.notes = notes
         patrol.save()
+
 
         return Response(self.get_serializer(patrol).data, status=status.HTTP_200_OK)
 

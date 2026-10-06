@@ -46,6 +46,7 @@ object NavRoutes {
     const val RECORD_ADJUSTMENTS = "record_adjustments"
     const val ADMIN_HISTORY = "admin_history"
     const val ADMIN_MASTER_TOOLS = "admin_master_tools"
+    const val ORGANIZATION_POLICY = "organization_policy"
 }
 
 /**
@@ -133,7 +134,8 @@ object RoleRouter {
                     NavRoutes.NOTIFICATIONS,
                     NavRoutes.SETTINGS,
                     NavRoutes.PROFILE,
-                    NavRoutes.ABOUT
+                    NavRoutes.ABOUT,
+                    NavRoutes.ORGANIZATION_POLICY
                 )
             }
         }

@@ -28,6 +28,16 @@ class HolidayCompensationStatus(models.TextChoices):
     REJECTED = "REJECTED", "Rejected"
     CANCELLED = "CANCELLED", "Cancelled"
 
+class DutyOverrideType(models.TextChoices):
+    LEAVE_INTERRUPTION = "LEAVE_INTERRUPTION", "Leave Interruption for Duty"
+    OFF_DAY_CALL_IN = "OFF_DAY_CALL_IN", "Scheduled Off-Day Call-In"
+    EMERGENCY_REINFORCEMENT = "EMERGENCY_REINFORCEMENT", "Emergency Station Reinforcement"
+
+class DutyOverrideStatus(models.TextChoices):
+    ACTIVE = "ACTIVE", "Active"
+    COMPLETED = "COMPLETED", "Completed"
+    CANCELLED = "CANCELLED", "Cancelled"
+
 class ExaminationPeriod(models.Model):
     """
     Authorized examination period (typically ~2 weeks) during which
@@ -254,7 +264,12 @@ class Shift(models.Model):
         # Normal shifts are mutually exclusive with approved leave, exam duty, and escort missions on the same date.
         if self.guard_id and self.date and self.shift_type != ShiftType.OFF and self.assignment_type != AssignmentType.TIME_OFF:
             from apps.leave.models import LeaveApplication, LeaveStatus
-            if LeaveApplication.objects.filter(guard_id=self.guard_id, status=LeaveStatus.APPROVED, start_date__lte=self.date, end_date__gte=self.date).exists():
+            has_active_override = DutyOverride.objects.filter(
+                guard_id=self.guard_id,
+                date=self.date,
+                status=DutyOverrideStatus.ACTIVE,
+            ).exists()
+            if not has_active_override and LeaveApplication.objects.filter(guard_id=self.guard_id, status=LeaveStatus.APPROVED, start_date__lte=self.date, end_date__gte=self.date).exists():
                 raise ValidationError(f"The selected guard is on approved leave on {self.date} and cannot be assigned to a shift.")
 
             from apps.exams.models import ExamDuty, ExamStatus
@@ -490,3 +505,85 @@ class PublicHolidayDutyRecord(models.Model):
 
         if errors:
             raise ValidationError(errors)
+
+
+class DutyOverride(models.Model):
+    """
+    Formal operational duty override / leave interruption record.
+    Authorizes a guard who is ON LEAVE or OFF DUTY to perform duty.
+    Establishes an auditable chain:
+    Leave -> Interrupted -> Worked -> Compensation Owed -> Compensation Taken.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    guard = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="duty_overrides",
+    )
+    station = models.ForeignKey(
+        "stations.Station",
+        on_delete=models.CASCADE,
+        related_name="duty_overrides",
+    )
+    override_type = models.CharField(
+        max_length=30,
+        choices=DutyOverrideType.choices,
+        default=DutyOverrideType.LEAVE_INTERRUPTION,
+        db_index=True,
+    )
+    date = models.DateField(db_index=True)
+    shift_type = models.CharField(
+        max_length=10,
+        choices=ShiftType.choices,
+        default=ShiftType.DAY,
+    )
+    original_leave = models.ForeignKey(
+        "leave.LeaveApplication",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="duty_overrides",
+    )
+    original_off_shift = models.ForeignKey(
+        Shift,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="off_day_overrides",
+    )
+    reason = models.TextField(help_text="Mandatory operational justification for duty override / interruption")
+    authorized_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="authorized_duty_overrides",
+    )
+    shift_created = models.ForeignKey(
+        Shift,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="originating_duty_override",
+    )
+    days_interrupted = models.DecimalField(max_digits=4, decimal_places=1, default=1.0)
+    compensation_days_owed = models.DecimalField(max_digits=4, decimal_places=1, default=1.0)
+    compensation_settled = models.BooleanField(default=False)
+    status = models.CharField(
+        max_length=20,
+        choices=DutyOverrideStatus.choices,
+        default=DutyOverrideStatus.ACTIVE,
+        db_index=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at"]
+        indexes = [
+            models.Index(fields=["guard", "date"]),
+            models.Index(fields=["station", "date"]),
+            models.Index(fields=["status"]),
+        ]
+
+    def __str__(self):
+        return f"DutyOverride [{self.override_type}] {self.guard.username} @ {self.station.name} on {self.date} ({self.status})"
+

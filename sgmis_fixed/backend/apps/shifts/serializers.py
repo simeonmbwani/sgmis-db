@@ -14,6 +14,8 @@ from .models import (
     PublicHolidayDutyRecord,
     HolidayCompensationStatus,
 )
+from apps.stations.models import Station
+
 
 class ShiftSerializer(serializers.ModelSerializer):
     station_name = serializers.CharField(source="station.name", read_only=True)
@@ -602,3 +604,57 @@ class RecordHolidayDutyRequestSerializer(serializers.Serializer):
 
 class ReviewHolidayCompensationRequestSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class DutyOverrideSerializer(serializers.ModelSerializer):
+    guard_name = serializers.CharField(source="guard.get_full_name", read_only=True)
+    guard_employee_number = serializers.CharField(source="guard.employee_number", read_only=True)
+    station = serializers.PrimaryKeyRelatedField(queryset=Station.objects.all(), required=False)
+    station_name = serializers.CharField(source="station.name", read_only=True)
+    authorized_by_name = serializers.CharField(source="authorized_by.get_full_name", read_only=True)
+    override_type_display = serializers.CharField(source="get_override_type_display", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+
+
+    class Meta:
+        from .models import DutyOverride
+        model = DutyOverride
+        fields = [
+            "id",
+            "guard",
+            "guard_name",
+            "guard_employee_number",
+            "station",
+            "station_name",
+            "override_type",
+            "override_type_display",
+            "date",
+            "shift_type",
+            "original_leave",
+            "original_off_shift",
+            "reason",
+            "authorized_by",
+            "authorized_by_name",
+            "shift_created",
+            "days_interrupted",
+            "compensation_days_owed",
+            "compensation_settled",
+            "status",
+            "status_display",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "guard_name",
+            "guard_employee_number",
+            "station_name",
+            "authorized_by",
+            "authorized_by_name",
+            "override_type_display",
+            "status_display",
+            "shift_created",
+            "created_at",
+            "updated_at",
+        ]
+

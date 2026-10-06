@@ -1,4 +1,6 @@
 from django.utils import timezone
+from django.db import models
+from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -758,6 +760,379 @@ def administrative_history(request):
             },
         })
 
+    # 6. Guard Pair Reassignment Audits
+    from apps.stations.models import GuardPairReassignmentAudit
+    for item in GuardPairReassignmentAudit.objects.select_related(
+        "station", "guard", "old_pair", "new_pair", "authorized_by"
+    ).order_by("-created_at")[:300]:
+        actor_user = item.authorized_by
+        actor_emp = (actor_user.employee_number or "") if actor_user else ""
+        actor_name = (actor_user.get_full_name() or actor_user.username) if actor_user else "Supervisor"
+        actor_label = f"{actor_name} ({actor_emp})" if actor_emp else actor_name
+
+        guard_name = item.guard.get_full_name() or item.guard.username
+        guard_emp = item.guard.employee_number or ""
+        station_name = item.station.name if item.station else ""
+
+        entries.append({
+            "id": str(item.id),
+            "kind": "PAIR_REASSIGNMENT",
+            "timestamp": item.created_at.isoformat(),
+            "actor": actor_label,
+            "target_model": "GuardPair",
+            "target_id": str(item.new_pair_id or item.old_pair_id or item.id),
+            "action": "PAIR_REASSIGNMENT",
+            "reason": item.reason,
+            "old_value": str(item.old_pair) if item.old_pair else "Unassigned",
+            "new_value": str(item.new_pair) if item.new_pair else "Unassigned",
+            "details": {
+                "field": "guard_pair",
+                "employee": f"{guard_name} ({guard_emp})" if guard_emp else guard_name,
+                "employee_number": guard_emp,
+                "station": station_name,
+                "effective_date": item.effective_date.isoformat(),
+                "admin_employee_number": actor_emp,
+            },
+        })
+
+    # 7. Duty Overrides / Leave Interruptions
+    from apps.shifts.models import DutyOverride
+    for item in DutyOverride.objects.select_related(
+        "station", "guard", "authorized_by", "original_leave"
+    ).order_by("-created_at")[:300]:
+        actor_user = item.authorized_by
+        actor_emp = (actor_user.employee_number or "") if actor_user else ""
+        actor_name = (actor_user.get_full_name() or actor_user.username) if actor_user else "Supervisor"
+        actor_label = f"{actor_name} ({actor_emp})" if actor_emp else actor_name
+
+        guard_name = item.guard.get_full_name() or item.guard.username
+        guard_emp = item.guard.employee_number or ""
+        station_name = item.station.name if item.station else ""
+
+        entries.append({
+            "id": str(item.id),
+            "kind": "DUTY_OVERRIDE",
+            "timestamp": item.created_at.isoformat(),
+            "actor": actor_label,
+            "target_model": "DutyOverride",
+            "target_id": str(item.id),
+            "action": f"{item.override_type} ({item.status})",
+            "reason": item.reason,
+            "old_value": "On Leave" if item.original_leave else "Scheduled Off",
+            "new_value": f"{item.shift_type} Shift (Owed: {item.compensation_days_owed}d)",
+            "details": {
+                "field": "duty_override",
+                "employee": f"{guard_name} ({guard_emp})" if guard_emp else guard_name,
+                "employee_number": guard_emp,
+                "station": station_name,
+                "date": item.date.isoformat(),
+                "override_type": item.override_type,
+                "compensation_settled": item.compensation_settled,
+                "admin_employee_number": actor_emp,
+            },
+        })
+
+    # Optional server-side filtering
+    search = request.query_params.get("search", "").strip().lower()
+    kind = request.query_params.get("kind") or request.query_params.get("action_type")
+    station_param = request.query_params.get("station", "").strip().lower()
+
+    if search:
+        entries = [
+            e for e in entries
+            if search in e.get("actor", "").lower()
+            or search in e.get("action", "").lower()
+            or search in e.get("reason", "").lower()
+            or search in str(e.get("details", {})).lower()
+        ]
+
+    if kind:
+        kind_clean = kind.strip().upper()
+        entries = [e for e in entries if e.get("kind", "").upper() == kind_clean or kind_clean in e.get("action", "").upper()]
+
+    if station_param:
+        entries = [
+            e for e in entries
+            if station_param in str(e.get("details", {}).get("station", "")).lower()
+        ]
+
     entries.sort(key=lambda row: row["timestamp"], reverse=True)
     return Response(entries[:500])
+
+
+class OrganizationPolicyViewSet(viewsets.ModelViewSet):
+    """
+    Authoritative organization policies.
+    Viewable by all authenticated personnel.
+    Manageable by administrators only.
+    """
+    from .models import OrganizationPolicy
+    from .serializers import OrganizationPolicySerializer
+    queryset = OrganizationPolicy.objects.all()
+    serializer_class = OrganizationPolicySerializer
+
+    def get_permissions(self):
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsAdministrator()]
+        return [IsAuthenticated()]
+
+    def get_queryset(self):
+        from .models import OrganizationPolicy
+        qs = OrganizationPolicy.objects.all()
+        category = self.request.query_params.get("category")
+        if category:
+            qs = qs.filter(category=category.upper())
+        search = self.request.query_params.get("search")
+        if search:
+            qs = qs.filter(
+                models.Q(title__icontains=search) |
+                models.Q(summary__icontains=search) |
+                models.Q(content__icontains=search)
+            )
+        is_active = self.request.query_params.get("is_active")
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active.lower() in ["true", "1"])
+        return qs
+
+    def perform_create(self, serializer):
+        policy = serializer.save(updated_by=self.request.user)
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=self.request.user,
+            actor_username=self.request.user.username,
+            target_model="OrganizationPolicy",
+            target_id=str(policy.id),
+            details={"action": "POLICY_CREATED", "title": policy.title, "category": policy.category},
+        )
+
+    def perform_update(self, serializer):
+        policy = serializer.save(updated_by=self.request.user)
+        SecurityAuditEvent.objects.create(
+            event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+            actor=self.request.user,
+            actor_username=self.request.user.username,
+            target_model="OrganizationPolicy",
+            target_id=str(policy.id),
+            details={"action": "POLICY_UPDATED", "title": policy.title, "category": policy.category, "version": policy.version},
+        )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def supervisor_dashboard(request):
+    """
+    Station Command dashboard for station supervisors.
+    Authoritative real-time KPIs and telemetry for the supervisor's assigned station.
+    """
+    user = request.user
+    if user.role not in [UserRole.SUPERVISOR, UserRole.ADMINISTRATOR]:
+        return Response({"detail": "Access restricted to supervisors and administrators."}, status=403)
+
+    station = user.station
+    if user.role == UserRole.ADMINISTRATOR:
+        station_id = request.query_params.get("station")
+        if station_id:
+            station = Station.objects.filter(id=station_id).first()
+        elif not station:
+            station = Station.objects.filter(is_active=True).first()
+
+    if not station:
+        return Response({
+            "station": None,
+            "supervisor": {
+                "id": str(user.id),
+                "name": user.get_full_name() or user.username,
+                "employee_number": user.employee_number or "",
+                "role": user.role,
+            },
+            "operational_status": "NO_STATION_ASSIGNED",
+            "guards_on_post": 0,
+            "guards_available": 0,
+            "guards_on_leave": 0,
+            "active_patrols": 0,
+            "open_incidents": 0,
+            "today_pending_duties": 0,
+            "attendance_rate": 0.0,
+            "live_ops": [],
+        })
+
+    today = timezone.localdate()
+
+    station_guards = User.objects.filter(station=station, role=UserRole.GUARD, is_active=True)
+
+    active_shifts = Shift.objects.filter(
+        station=station,
+        date=today,
+    ).exclude(shift_type="OFF")
+
+    today_attendance = Attendance.objects.filter(
+        shift__station=station,
+        shift__date=today,
+        clock_in__isnull=False,
+    )
+    clocked_in_guard_ids = set(today_attendance.filter(clock_out__isnull=True).values_list("guard_id", flat=True))
+    guards_on_post = len(clocked_in_guard_ids)
+
+    approved_leave_guard_ids = set(
+        LeaveApplication.objects.filter(
+            guard__station=station,
+            status=LeaveStatus.APPROVED,
+            start_date__lte=today,
+            end_date__gte=today,
+        ).values_list("guard_id", flat=True)
+    )
+    guards_on_leave = len(approved_leave_guard_ids)
+
+    all_guard_ids = set(station_guards.values_list("id", flat=True))
+    unavailable_ids = clocked_in_guard_ids | approved_leave_guard_ids
+    guards_available = max(0, len(all_guard_ids - unavailable_ids))
+
+    active_patrols = PatrolLog.objects.filter(
+        station=station,
+        status__in=[PatrolStatus.IN_PROGRESS, PatrolStatus.ACTIVE],
+    ).count()
+
+    open_incidents = IncidentReport.objects.filter(
+        station=station,
+        is_archived=False,
+        status__in=[IncidentStatus.REPORTED, IncidentStatus.ACKNOWLEDGED, IncidentStatus.INVESTIGATING],
+    ).count()
+
+    scheduled_shift_count = active_shifts.count()
+    clocked_in_count = today_attendance.count()
+    today_pending_duties = max(0, scheduled_shift_count - clocked_in_count)
+
+    attendance_rate = round((clocked_in_count / scheduled_shift_count * 100.0), 1) if scheduled_shift_count > 0 else 100.0
+
+    live_ops = []
+    for p in PatrolLog.objects.filter(station=station).order_by("-start_time")[:3]:
+        live_ops.append({
+            "id": str(p.id),
+            "type": "PATROL",
+            "title": f"Patrol {p.name}",
+            "status": p.status,
+            "guard_name": p.guard.get_full_name() or p.guard.username,
+            "timestamp": p.start_time.isoformat() if p.start_time else "",
+        })
+    for inc in IncidentReport.objects.filter(station=station, is_archived=False).order_by("-created_at")[:3]:
+        live_ops.append({
+            "id": str(inc.id),
+            "type": "INCIDENT",
+            "title": inc.title,
+            "status": inc.status,
+            "guard_name": inc.reporting_guard.get_full_name() if inc.reporting_guard else "Station",
+            "timestamp": inc.created_at.isoformat(),
+        })
+
+    return Response({
+        "station": {
+            "id": str(station.id),
+            "name": station.name,
+            "code": station.code,
+            "latitude": station.latitude,
+            "longitude": station.longitude,
+            "geofence_radius_meters": station.geofence_radius_meters,
+        },
+        "supervisor": {
+            "id": str(user.id),
+            "name": user.get_full_name() or user.username,
+            "employee_number": user.employee_number or "",
+            "role": user.role,
+        },
+        "operational_status": "NORMAL" if open_incidents == 0 else "ATTENTION_REQUIRED",
+        "guards_on_post": guards_on_post,
+        "guards_available": guards_available,
+        "guards_on_leave": guards_on_leave,
+        "active_patrols": active_patrols,
+        "open_incidents": open_incidents,
+        "today_pending_duties": today_pending_duties,
+        "attendance_rate": attendance_rate,
+        "live_ops": live_ops,
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAdministrator])
+def admin_dashboard(request):
+    """
+    National Command Center dashboard for Superusers / Administrators.
+    Authoritative countrywide KPIs and operational telemetry.
+    """
+    user = request.user
+    today = timezone.localdate()
+
+    total_guards = User.objects.filter(role=UserRole.GUARD, is_active=True).count()
+    total_stations = Station.objects.filter(is_active=True).count()
+
+    active_attendance = Attendance.objects.filter(
+        shift__date=today,
+        clock_in__isnull=False,
+        clock_out__isnull=True,
+    )
+    active_duties = active_attendance.count()
+
+    active_patrols = PatrolLog.objects.filter(
+        status__in=[PatrolStatus.IN_PROGRESS, PatrolStatus.ACTIVE],
+    ).count()
+
+    open_incidents = IncidentReport.objects.filter(
+        is_archived=False,
+        status__in=[IncidentStatus.REPORTED, IncidentStatus.ACKNOWLEDGED, IncidentStatus.INVESTIGATING],
+    ).count()
+
+    critical_incidents = IncidentReport.objects.filter(
+        is_archived=False,
+        priority=IncidentPriority.CRITICAL,
+        status__in=[IncidentStatus.REPORTED, IncidentStatus.ACKNOWLEDGED, IncidentStatus.INVESTIGATING],
+    ).count()
+
+    guards_on_leave = LeaveApplication.objects.filter(
+        status=LeaveStatus.APPROVED,
+        start_date__lte=today,
+        end_date__gte=today,
+    ).values("guard_id").distinct().count()
+
+    scheduled_today = Shift.objects.filter(date=today).exclude(shift_type="OFF").count()
+    attended_today = Attendance.objects.filter(shift__date=today, clock_in__isnull=False).count()
+    attendance_rate = round((attended_today / scheduled_today * 100.0), 1) if scheduled_today > 0 else 100.0
+
+    live_ops = []
+    for inc in IncidentReport.objects.filter(is_archived=False).order_by("-created_at")[:5]:
+        live_ops.append({
+            "id": str(inc.id),
+            "type": "INCIDENT",
+            "title": f"[{inc.station.name if inc.station else 'HQ'}] {inc.title}",
+            "status": inc.status,
+            "priority": inc.priority,
+            "timestamp": inc.created_at.isoformat(),
+        })
+    for p in PatrolLog.objects.filter(status__in=[PatrolStatus.IN_PROGRESS, PatrolStatus.ACTIVE]).order_by("-start_time")[:5]:
+        live_ops.append({
+            "id": str(p.id),
+            "type": "PATROL",
+            "title": f"[{p.station.name}] {p.name}",
+            "status": p.status,
+            "guard_name": p.guard.get_full_name() or p.guard.username,
+            "timestamp": p.start_time.isoformat() if p.start_time else "",
+        })
+
+    return Response({
+        "administrator": {
+            "id": str(user.id),
+            "name": user.get_full_name() or user.username,
+            "employee_number": user.employee_number or "",
+            "role": user.role,
+        },
+        "system_status": "NORMAL" if critical_incidents == 0 else "ATTENTION_REQUIRED",
+        "total_guards": total_guards,
+        "total_stations": total_stations,
+        "active_duties": active_duties,
+        "active_patrols": active_patrols,
+        "open_incidents": open_incidents,
+        "critical_incidents": critical_incidents,
+        "guards_on_leave": guards_on_leave,
+        "attendance_rate": attendance_rate,
+        "live_ops": live_ops,
+    })
+
 

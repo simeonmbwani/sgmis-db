@@ -137,3 +137,39 @@ class RecordAdjustmentRequest(models.Model):
     def __str__(self):
         return f"Adjustment [{self.field_name}] for {self.guard.username} ({self.status})"
 
+
+class OrganizationPolicy(models.Model):
+    class Category(models.TextChoices):
+        LEAVE = "LEAVE", "Leave Management Policy"
+        ROSTER = "ROSTER", "Roster & Shift Rotation Policy"
+        DUTY = "DUTY", "Operational Duty & Relief Policy"
+        PATROL = "PATROL", "Patrol & Geofence Verification Policy"
+        ATTENDANCE = "ATTENDANCE", "Attendance & Clock-In Policy"
+        COMPENSATION = "COMPENSATION", "Public Holiday & Duty Compensation Policy"
+        GEOFENCE = "GEOFENCE", "Station Perimeter & Geofence Policy"
+        GENERAL = "GENERAL", "General Security Operations Policy"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    category = models.CharField(max_length=64, choices=Category.choices, db_index=True)
+    title = models.CharField(max_length=150)
+    summary = models.CharField(max_length=255, blank=True, default="")
+    content = models.TextField()
+    version = models.CharField(max_length=30, default="1.0")
+    is_active = models.BooleanField(default=True, db_index=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="updated_policies",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["category", "title"]
+
+    def __str__(self):
+        return f"[{self.category}] {self.title} (v{self.version})"
+
+

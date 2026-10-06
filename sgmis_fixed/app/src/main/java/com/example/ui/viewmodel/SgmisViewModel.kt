@@ -121,9 +121,30 @@ data class SgmisUiState(
     val isGeneratingOtp: Boolean = false,
     val isReviewingHolidayDuty: Boolean = false,
 
+    // Redesign: Supervisor & Admin Dashboards
+    val supervisorDashboard: SupervisorDashboardResponse? = null,
+    val supervisorDashboardLoading: Boolean = false,
+    val adminDashboard: AdminDashboardResponse? = null,
+    val adminDashboardLoading: Boolean = false,
+
+    // Organization Policies
+    val organizationPolicies: List<OrganizationPolicy> = emptyList(),
+    val policiesLoading: Boolean = false,
+
+    // Duty Overrides
+    val dutyOverrides: List<DutyOverride> = emptyList(),
+    val dutyOverridesLoading: Boolean = false,
+    val isCreatingDutyOverride: Boolean = false,
+
+    // Pair Reassignments
+    val pairReassignments: List<GuardPairReassignmentAudit> = emptyList(),
+    val pairReassignmentsLoading: Boolean = false,
+    val isReassigningPair: Boolean = false,
+
     // Telemetry & Settings
     val telemetry: TelemetryOverview = TelemetryOverview()
 ) {
+
     val appRole: AppRole get() = currentUser?.appRole ?: AppRole.GUARD
     val isGuard: Boolean get() = appRole == AppRole.GUARD
     val isSupervisor: Boolean get() = appRole == AppRole.SUPERVISOR
@@ -227,16 +248,21 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
 
     fun selectRecordAdjustment(row: RecordAdjustmentRequest?) { _uiState.update { it.copy(selectedRecordAdjustment = row) } }
 
-    fun fetchAdministrativeHistory() {
+    fun fetchAdministrativeHistory(
+        search: String? = null,
+        kind: String? = null,
+        station: String? = null
+    ) {
         if (!adminOnly()) return
         viewModelScope.launch {
             _uiState.update { it.copy(administrativeHistoryLoading = true) }
-            repository.fetchAdministrativeHistory().onSuccess { rows ->
+            repository.fetchAdministrativeHistory(search, kind, station).onSuccess { rows ->
                 _uiState.update { it.copy(administrativeHistory = rows, administrativeHistoryLoading = false, errorMessage = null) }
             }.onFailure { e -> _uiState.update { it.copy(administrativeHistoryLoading = false, errorMessage = e.message ?: "Unable to load administrative history. Please try again.") } }
             repository.fetchLeaveAdjustments().onSuccess { rows -> _uiState.update { it.copy(leaveAdjustmentHistory = rows) } }
         }
     }
+
 
     fun setOpeningBalance(request: SetOpeningBalanceRequest, onSuccess: () -> Unit = {}) {
         if (!adminOnly()) return
@@ -903,9 +929,15 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         }
     }
 
-    fun fetchPatrolLogs() {
+    fun fetchPatrolLogs(
+        search: String? = null,
+        status: String? = null,
+        guard: String? = null,
+        date: String? = null,
+        archived: Boolean? = null
+    ) {
         viewModelScope.launch {
-            val res = repository.fetchPatrolLogs()
+            val res = repository.fetchPatrolLogs(search, status, guard, date, archived)
             res.onSuccess { logs ->
                 val active = logs.firstOrNull { it.status == "IN_PROGRESS" || it.status == "ACTIVE" }
                 val assigned = logs.filter { it.status == "ASSIGNED" }
@@ -919,6 +951,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                         errorMessage = null
                     )
                 }
+
             }.onFailure { err ->
                 if (_uiState.value.patrolLogs.isEmpty()) {
                     _uiState.update { it.copy(errorMessage = err.message ?: "Unable to load station patrols. Please try again.") }
@@ -2134,7 +2167,138 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             fetchUnreadMessageCount()
         }
     }
+
+    // --- Redesign: Supervisor & Admin Dashboards ---
+    fun fetchSupervisorDashboard(stationId: String? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(supervisorDashboardLoading = true) }
+            val res = repository.fetchSupervisorDashboard(stationId)
+            res.onSuccess { data ->
+                _uiState.update { it.copy(supervisorDashboard = data, supervisorDashboardLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(supervisorDashboardLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun fetchAdminDashboard() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(adminDashboardLoading = true) }
+            val res = repository.fetchAdminDashboard()
+            res.onSuccess { data ->
+                _uiState.update { it.copy(adminDashboard = data, adminDashboardLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(adminDashboardLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun fetchOrganizationPolicies(category: String? = null, search: String? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(policiesLoading = true) }
+            val res = repository.fetchOrganizationPolicies(category, search)
+            res.onSuccess { list ->
+                _uiState.update { it.copy(organizationPolicies = list, policiesLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(policiesLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun updateOrganizationPolicy(id: String, updates: Map<String, Any>, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.updateOrganizationPolicy(id, updates)
+            res.onSuccess {
+                _uiState.update { it.copy(isLoading = false, successMessage = "Policy updated successfully.") }
+                fetchOrganizationPolicies()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun fetchDutyOverrides(guardId: String? = null, date: String? = null, status: String? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(dutyOverridesLoading = true) }
+            val res = repository.fetchDutyOverrides(guardId, date, status)
+            res.onSuccess { list ->
+                _uiState.update { it.copy(dutyOverrides = list, dutyOverridesLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(dutyOverridesLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun createDutyOverride(request: CreateDutyOverrideRequest, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isCreatingDutyOverride = true, errorMessage = null) }
+            val res = repository.createDutyOverride(request)
+            res.onSuccess { override ->
+                _uiState.update {
+                    it.copy(
+                        isCreatingDutyOverride = false,
+                        dutyOverrides = listOf(override) + it.dutyOverrides,
+                        successMessage = "Duty override recorded. Relief shift created and compensation logged."
+                    )
+                }
+                fetchDutyOverrides()
+                fetchSupervisorDashboard()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isCreatingDutyOverride = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun settleDutyOverrideCompensation(id: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val res = repository.settleDutyOverrideCompensation(id)
+            res.onSuccess {
+                _uiState.update { it.copy(isLoading = false, successMessage = "Compensation settled.") }
+                fetchDutyOverrides()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun reassignGuardPair(request: ReassignGuardPairRequest, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isReassigningPair = true, errorMessage = null) }
+            val res = repository.reassignGuardPair(request)
+            res.onSuccess { response ->
+                _uiState.update {
+                    it.copy(
+                        isReassigningPair = false,
+                        successMessage = response.message.ifBlank { "Guard pair reassigned successfully." }
+                    )
+                }
+                fetchGuardPairs()
+                fetchPairReassignments()
+                onSuccess()
+            }.onFailure { err ->
+                _uiState.update { it.copy(isReassigningPair = false, errorMessage = err.message) }
+            }
+        }
+    }
+
+    fun fetchPairReassignments(stationId: String? = null, guardId: String? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(pairReassignmentsLoading = true) }
+            val res = repository.fetchPairReassignments(stationId, guardId)
+            res.onSuccess { list ->
+                _uiState.update { it.copy(pairReassignments = list, pairReassignmentsLoading = false) }
+            }.onFailure { err ->
+                _uiState.update { it.copy(pairReassignmentsLoading = false, errorMessage = err.message) }
+            }
+        }
+    }
 }
+
 
 class SgmisViewModelFactory(private val repository: SgmisRepository) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {

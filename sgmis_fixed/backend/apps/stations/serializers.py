@@ -91,3 +91,44 @@ class GuardPairSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(serializer_error)
 
         return attrs
+
+
+class GuardPairReassignmentAuditSerializer(serializers.ModelSerializer):
+    guard_name = serializers.CharField(source="guard.get_full_name", read_only=True)
+    guard_employee_number = serializers.CharField(source="guard.employee_number", read_only=True)
+    station_name = serializers.CharField(source="station.name", read_only=True)
+    authorized_by_name = serializers.CharField(source="authorized_by.get_full_name", read_only=True)
+    old_pair_display = serializers.CharField(source="old_pair.__str__", read_only=True)
+    new_pair_display = serializers.CharField(source="new_pair.__str__", read_only=True)
+
+    class Meta:
+        from .models import GuardPairReassignmentAudit
+        model = GuardPairReassignmentAudit
+        fields = [
+            "id",
+            "station",
+            "station_name",
+            "guard",
+            "guard_name",
+            "guard_employee_number",
+            "old_pair",
+            "old_pair_display",
+            "new_pair",
+            "new_pair_display",
+            "effective_date",
+            "reason",
+            "authorized_by",
+            "authorized_by_name",
+            "created_at",
+        ]
+        read_only_fields = [
+            "id",
+            "guard_name",
+            "guard_employee_number",
+            "station_name",
+            "authorized_by_name",
+            "old_pair_display",
+            "new_pair_display",
+            "created_at",
+        ]
+

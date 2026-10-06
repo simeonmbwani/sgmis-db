@@ -9,11 +9,13 @@ from .views import (
     DutyRosterViewSet,
     PublicHolidayViewSet,
     PublicHolidayDutyRecordViewSet,
+    DutyOverrideViewSet,
 )
 
 router = DefaultRouter()
 router.register(r"shifts", ShiftViewSet, basename="shift")
 router.register(r"duty-rosters", DutyRosterViewSet, basename="duty-roster")
+router.register(r"duty-overrides", DutyOverrideViewSet, basename="duty-override")
 router.register(r"public-holidays", PublicHolidayViewSet, basename="public-holiday")
 router.register(r"holiday-duties", PublicHolidayDutyRecordViewSet, basename="holiday-duty")
 router.register(r"attendance", AttendanceViewSet, basename="attendance")
@@ -24,3 +26,4 @@ router.register(r"temporary-assignments", TemporaryAssignmentAuditViewSet, basen
 urlpatterns = [
     path("", include(router.urls)),
 ]
+

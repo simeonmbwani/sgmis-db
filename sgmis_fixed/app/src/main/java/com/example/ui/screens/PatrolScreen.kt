@@ -27,6 +27,7 @@ import com.example.data.model.Checkpoint
 import com.example.data.model.PatrolLog
 import com.example.ui.theme.StatusSuccess
 import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
 import com.example.ui.viewmodel.SgmisViewModel
 import kotlinx.coroutines.launch
 
@@ -46,6 +47,9 @@ fun PatrolScreen(
     var showAssignPatrolDialog by remember { mutableStateOf(false) }
     var patrolToReject by remember { mutableStateOf<PatrolLog?>(null) }
     var rejectReasonText by remember { mutableStateOf("") }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedFilter by remember { mutableStateOf("All") }
+    var showCheckpointsSection by remember { mutableStateOf(false) }
 
     val currentUser = uiState.currentUser
     val isSupervisor = currentUser?.isSupervisor == true || uiState.appRole == com.example.data.model.AppRole.SUPERVISOR || currentUser?.role == "SUPERVISOR" || currentUser?.role == "STATION_SUPERVISOR"
@@ -54,6 +58,22 @@ fun PatrolScreen(
 
     var elapsedSeconds by remember { mutableIntStateOf(0) }
     var scannedCheckpointIds by remember { mutableStateOf(setOf<String>()) }
+
+    LaunchedEffect(searchQuery, selectedFilter) {
+        if (!isGuard) {
+            val apiStatus = when (selectedFilter) {
+                "Active" -> "IN_PROGRESS"
+                "Pending" -> "ASSIGNED"
+                "Completed" -> "COMPLETED"
+                "Failed" -> "FAILED"
+                else -> null
+            }
+            viewModel.fetchPatrolLogs(
+                search = searchQuery.takeIf { it.isNotBlank() },
+                status = apiStatus
+            )
+        }
+    }
 
     LaunchedEffect(activePatrol?.id) {
         elapsedSeconds = 0
@@ -496,100 +516,104 @@ fun PatrolScreen(
                     }
                 }
             } else {
-                // SUPERVISOR / ADMIN VIEW
-                Card(
+                // SUPERVISOR / ADMIN STATION PATROLS DASHBOARD
+                val filterOptions = listOf("All", "Active", "Pending", "Completed", "Failed")
+
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    shape = RoundedCornerShape(16.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                    // Search Bar
+                    SmartSearchBar(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        placeholder = "Search patrols or guards"
+                    )
+
+                    // Filters & Actions Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        androidx.compose.foundation.lazy.LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Text(
-                                text = "SUPERVISOR PATROL CONTROLS",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Button(
-                                onClick = { showAssignPatrolDialog = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                            ) {
-                                Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Assign Patrol")
+                            items(filterOptions) { filter ->
+                                SmartFilterChip(
+                                    text = filter,
+                                    selected = selectedFilter == filter,
+                                    onClick = { selectedFilter = filter }
+                                )
                             }
                         }
 
-                        val completedAwaitingApproval = uiState.patrolLogs.filter { it.status == "COMPLETED" && !it.isApproved }
-                        if (completedAwaitingApproval.isNotEmpty()) {
-                            Text(
-                                text = "Completed Patrols Pending Review (${completedAwaitingApproval.size}):",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
+                        if (isSupervisor) {
+                            Button(
+                                onClick = { showAssignPatrolDialog = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                modifier = Modifier
+                                    .padding(start = 8.dp)
+                                    .testTag("assign_patrol_button")
+                            ) {
+                                Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Assign", fontSize = 12.sp)
+                            }
+                        }
+                    }
+
+                    // Checkpoints Toggle Button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Station Patrol Records (${uiState.patrolLogs.size})",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        TextButton(onClick = { showCheckpointsSection = !showCheckpointsSection }) {
+                            Icon(
+                                if (showCheckpointsSection) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
                             )
-                            completedAwaitingApproval.forEach { patrol ->
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                    shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                if (showCheckpointsSection) "Hide Checkpoints" else "View Checkpoints (${orderedCheckpoints.size})",
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+
+                    // Collapsible Station Inspection Checkpoints
+                    if (showCheckpointsSection) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = "Inspection Checkpoints Sequence (${orderedCheckpoints.size})",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (orderedCheckpoints.isEmpty()) {
+                                    Text("No checkpoints registered for this station.", style = MaterialTheme.typography.bodySmall)
+                                } else {
+                                    orderedCheckpoints.forEach { cp ->
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text(patrol.name, fontWeight = FontWeight.Bold)
-                                            if (patrol.anomaliesCount > 0) {
-                                                Surface(color = MaterialTheme.colorScheme.error, shape = RoundedCornerShape(4.dp)) {
-                                                    Text(
-                                                        text = "${patrol.anomaliesCount} ANOMALIES",
-                                                        color = Color.White,
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        fontWeight = FontWeight.Bold,
-                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                    )
-                                                }
-                                            } else {
-                                                Surface(color = StatusSuccess, shape = RoundedCornerShape(4.dp)) {
-                                                    Text(
-                                                        text = "CLEAN AUDIT",
-                                                        color = Color.White,
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        fontWeight = FontWeight.Bold,
-                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        Text(
-                                            text = "Guard: ${patrol.guardName} • Station: ${patrol.stationName} • Scans: ${patrol.scansCount}",
-                                            style = MaterialTheme.typography.bodySmall
-                                        )
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            Button(
-                                                onClick = { viewModel.approvePatrol(patrol.id) },
-                                                colors = ButtonDefaults.buttonColors(containerColor = StatusSuccess),
-                                                modifier = Modifier.weight(1f)
-                                            ) {
-                                                Text("Approve")
-                                            }
-                                            OutlinedButton(
-                                                onClick = {
-                                                    patrolToReject = patrol
-                                                    rejectReasonText = ""
-                                                },
-                                                modifier = Modifier.weight(1f)
-                                            ) {
-                                                Text("Reject", color = MaterialTheme.colorScheme.error)
+                                            Text("${cp.order}. ${cp.name} (${cp.code})", style = MaterialTheme.typography.bodySmall)
+                                            if (!cp.nfcUid.isNullOrBlank()) {
+                                                Text("NFC: ${cp.nfcUid}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
                                             }
                                         }
                                     }
@@ -597,61 +621,121 @@ fun PatrolScreen(
                             }
                         }
                     }
-                }
-            }
 
-            // Station Checkpoints Header
-            Text(
-                text = "Station Inspection Checkpoints (${orderedCheckpoints.size})",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+                    // Patrols List
+                    if (uiState.isLoading) {
+                        SmartLoadingState(message = "Loading station patrol records...")
+                    } else if (uiState.patrolLogs.isEmpty()) {
+                        SmartEmptyState(
+                            title = "No active patrols",
+                            message = if (searchQuery.isNotBlank() || selectedFilter != "All")
+                                "No patrol logs match current search filters."
+                            else
+                                "No patrols recorded for this station."
+                        )
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            contentPadding = PaddingValues(bottom = 80.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(uiState.patrolLogs, key = { it.id }) { patrol ->
+                                val displayStatus = if (patrol.status == "COMPLETED" && !patrol.isApproved) "PENDING REVIEW" else patrol.status
 
-            if (orderedCheckpoints.isEmpty()) {
-                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text("No inspection checkpoints registered for this station.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(bottom = 88.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(orderedCheckpoints) { cp ->
-                        val isScanned = scannedCheckpointIds.contains(cp.id)
-                        val isNext = nextRequiredCheckpoint?.id == cp.id
-                        CheckpointItemCard(
-                            checkpoint = cp,
-                            patrolActive = activePatrol != null && !uiState.isLoading,
-                            isScanned = isScanned,
-                            isNextRequired = isNext,
-                            onScan = { method ->
-                                if (activePatrol != null) {
-                                    // Sequence validation
-                                    if (nextRequiredCheckpoint != null && nextRequiredCheckpoint.id != cp.id) {
-                                        viewModel.postSecurityAlert("Sequence Violation: Checkpoint ${nextRequiredCheckpoint.order} (${nextRequiredCheckpoint.name}) must be inspected before ${cp.name}.")
-                                        return@CheckpointItemCard
-                                    }
+                                SmartCard(modifier = Modifier.fillMaxWidth()) {
+                                    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = patrol.name,
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            SmartStatusChip(
+                                                status = displayStatus
+                                            )
+                                        }
 
-                                    scannedCheckpointIds = scannedCheckpointIds + cp.id
-                                    coroutineScope.launch {
-                                        val loc = com.example.util.LocationHelper.getDeviceLocation(context)
-                                        val gpsStr = if (loc != null) "${loc.first},${loc.second}" else ""
-                                        val noteStr = "Physical checkpoint verified via $method (GPS: $gpsStr)"
-                                        viewModel.scanCheckpoint(
-                                            patrolId = activePatrol.id,
-                                            checkpointId = cp.id,
-                                            gps = gpsStr,
-                                            notes = noteStr,
-                                            checkpointCode = cp.code,
-                                            checkpointOrder = cp.order,
-                                            verificationMethod = method,
-                                            accuracy = if (loc != null) 10.0 else null
+                                        Text(
+                                            text = "Guard: ${patrol.guardName} • Station: ${patrol.stationName}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = "Progress: ${patrol.scansCount} / $totalCheckpoints Checkpoints",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = "GPS Verified",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = StatusSuccess,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+
+                                        if (patrol.startTime != null) {
+                                            Text(
+                                                text = "Started: ${patrol.startTime.take(16).replace("T", " ")}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                        if (patrol.anomaliesCount > 0) {
+                                            Surface(
+                                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
+                                                shape = RoundedCornerShape(6.dp),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text(
+                                                    text = "${patrol.anomaliesCount} Anomaly Detected during patrol",
+                                                    color = MaterialTheme.colorScheme.error,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                )
+                                            }
+                                        }
+
+                                        // Approval & Rejection for completed patrols
+                                        if (patrol.status == "COMPLETED" && !patrol.isApproved && isSupervisor) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Button(
+                                                    onClick = { viewModel.approvePatrol(patrol.id) },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = StatusSuccess),
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Text("Approve")
+                                                }
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        patrolToReject = patrol
+                                                        rejectReasonText = ""
+                                                    },
+                                                    modifier = Modifier.weight(1f)
+                                                ) {
+                                                    Text("Reject", color = MaterialTheme.colorScheme.error)
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
-                        )
+                        }
                     }
                 }
             }

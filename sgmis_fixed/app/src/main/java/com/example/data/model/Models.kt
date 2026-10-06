@@ -1475,3 +1475,145 @@ data class SwapPairDutiesRequest(
     @Json(name = "station_id") val stationId: String? = null,
     val reason: String
 )
+
+@JsonClass(generateAdapter = true)
+data class StationSummary(
+    val id: String,
+    val name: String,
+    val code: String,
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
+    @Json(name = "geofence_radius_meters") val geofenceRadiusMeters: Double = 100.0
+)
+
+@JsonClass(generateAdapter = true)
+data class UserIdentitySummary(
+    val id: String,
+    val name: String,
+    @Json(name = "employee_number") val employeeNumber: String? = null,
+    val role: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class LiveOpsItem(
+    val id: String,
+    val type: String,
+    val title: String,
+    val status: String,
+    val priority: String? = null,
+    @Json(name = "guard_name") val guardName: String? = null,
+    val timestamp: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SupervisorDashboardResponse(
+    val station: StationSummary? = null,
+    val supervisor: UserIdentitySummary? = null,
+    @Json(name = "operational_status") val operationalStatus: String = "NORMAL",
+    @Json(name = "guards_on_post") val guardsOnPost: Int = 0,
+    @Json(name = "guards_available") val guardsAvailable: Int = 0,
+    @Json(name = "guards_on_leave") val guardsOnLeave: Int = 0,
+    @Json(name = "active_patrols") val activePatrols: Int = 0,
+    @Json(name = "open_incidents") val openIncidents: Int = 0,
+    @Json(name = "today_pending_duties") val todayPendingDuties: Int = 0,
+    @Json(name = "attendance_rate") val attendanceRate: Double = 0.0,
+    @Json(name = "live_ops") val liveOps: List<LiveOpsItem> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class AdminDashboardResponse(
+    val administrator: UserIdentitySummary? = null,
+    @Json(name = "system_status") val systemStatus: String = "NORMAL",
+    @Json(name = "total_guards") val totalGuards: Int = 0,
+    @Json(name = "total_stations") val totalStations: Int = 0,
+    @Json(name = "active_duties") val activeDuties: Int = 0,
+    @Json(name = "active_patrols") val activePatrols: Int = 0,
+    @Json(name = "open_incidents") val openIncidents: Int = 0,
+    @Json(name = "critical_incidents") val criticalIncidents: Int = 0,
+    @Json(name = "guards_on_leave") val guardsOnLeave: Int = 0,
+    @Json(name = "attendance_rate") val attendanceRate: Double = 0.0,
+    @Json(name = "live_ops") val liveOps: List<LiveOpsItem> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class OrganizationPolicy(
+    val id: String,
+    val category: String,
+    @Json(name = "category_display") val categoryDisplay: String? = null,
+    val title: String,
+    val summary: String = "",
+    val content: String = "",
+    val version: String = "1.0",
+    @Json(name = "is_active") val isActive: Boolean = true,
+    @Json(name = "updated_by_name") val updatedByName: String? = null,
+    @Json(name = "created_at") val createdAt: String? = null,
+    @Json(name = "updated_at") val updatedAt: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class DutyOverride(
+    val id: String,
+    val guard: String,
+    @Json(name = "guard_name") val guardName: String? = null,
+    @Json(name = "guard_employee_number") val guardEmployeeNumber: String? = null,
+    val station: String,
+    @Json(name = "station_name") val stationName: String? = null,
+    @Json(name = "override_type") val overrideType: String = "LEAVE_INTERRUPTION",
+    @Json(name = "override_type_display") val overrideTypeDisplay: String? = null,
+    val date: String,
+    @Json(name = "shift_type") val shiftType: String = "DAY",
+    @Json(name = "original_leave") val originalLeave: String? = null,
+    val reason: String = "",
+    @Json(name = "authorized_by_name") val authorizedByName: String? = null,
+    @Json(name = "days_interrupted") val daysInterrupted: Double = 1.0,
+    @Json(name = "compensation_days_owed") val compensationDaysOwed: Double = 1.0,
+    @Json(name = "compensation_settled") val compensationSettled: Boolean = false,
+    val status: String = "ACTIVE",
+    @Json(name = "status_display") val statusDisplay: String? = null,
+    @Json(name = "created_at") val createdAt: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class CreateDutyOverrideRequest(
+    val guard: String,
+    val date: String,
+    @Json(name = "shift_type") val shiftType: String = "DAY",
+    @Json(name = "override_type") val overrideType: String = "LEAVE_INTERRUPTION",
+    val reason: String,
+    val station: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class GuardPairReassignmentAudit(
+    val id: String,
+    val station: String,
+    @Json(name = "station_name") val stationName: String? = null,
+    val guard: String,
+    @Json(name = "guard_name") val guardName: String? = null,
+    @Json(name = "guard_employee_number") val guardEmployeeNumber: String? = null,
+    @Json(name = "old_pair") val oldPair: String? = null,
+    @Json(name = "old_pair_display") val oldPairDisplay: String? = null,
+    @Json(name = "new_pair") val newPair: String? = null,
+    @Json(name = "new_pair_display") val newPairDisplay: String? = null,
+    @Json(name = "effective_date") val effectiveDate: String,
+    val reason: String,
+    @Json(name = "authorized_by_name") val authorizedByName: String? = null,
+    @Json(name = "created_at") val createdAt: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ReassignGuardPairRequest(
+    val guard: String,
+    @Json(name = "new_pair") val newPair: String,
+    @Json(name = "effective_date") val effectiveDate: String,
+    val reason: String,
+    val slot: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class ReassignGuardPairResponse(
+    val message: String = "",
+    val pair: GuardPair? = null,
+    val audit: GuardPairReassignmentAudit? = null
+)
+

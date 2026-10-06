@@ -217,6 +217,9 @@ fun SgmisApp(viewModel: SgmisViewModel) {
             composable("attendance_management") {
                 AttendanceManagementScreen(viewModel = viewModel) { navController.popBackStack() }
             }
+            composable(NavRoutes.ORGANIZATION_POLICY) {
+                OrganizationPolicyScreen(viewModel = viewModel) { navController.popBackStack() }
+            }
         }
 
         // App Lock Overlay: Non-destructive 3-minute inactivity protection

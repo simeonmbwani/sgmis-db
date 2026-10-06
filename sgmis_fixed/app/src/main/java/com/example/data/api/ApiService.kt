@@ -49,7 +49,12 @@ interface ApiService {
     suspend fun rejectRecordAdjustment(@Path("id") id: String, @Body request: RejectRecordAdjustmentRequest): Response<RecordAdjustmentResponse>
 
     @GET("core/admin-history/")
-    suspend fun getAdministrativeHistory(): Response<List<AdministrativeHistoryEntry>>
+    suspend fun getAdministrativeHistory(
+        @Query("search") search: String? = null,
+        @Query("kind") kind: String? = null,
+        @Query("station") station: String? = null
+    ): Response<List<AdministrativeHistoryEntry>>
+
 
     // --- User Management (Supervisor / Administrator) ---
     @GET("accounts/users/")
@@ -242,7 +247,14 @@ interface ApiService {
     suspend fun createCheckpoint(@Body request: CreateCheckpointRequest): Response<Checkpoint>
 
     @GET("patrols/logs/")
-    suspend fun getPatrolLogs(): Response<List<PatrolLog>>
+    suspend fun getPatrolLogs(
+        @Query("search") search: String? = null,
+        @Query("status") status: String? = null,
+        @Query("guard") guard: String? = null,
+        @Query("date") date: String? = null,
+        @Query("archived") archived: Boolean? = null
+    ): Response<List<PatrolLog>>
+
 
     @POST("patrols/logs/")
     suspend fun startPatrol(@Body request: StartPatrolRequest = StartPatrolRequest()): Response<PatrolLog>
@@ -457,4 +469,46 @@ interface ApiService {
 
     @POST("notifications/messages/{id}/mark_read/")
     suspend fun markMessageRead(@Path("id") id: String): Response<DirectMessage>
+
+    // --- Redesign: Dashboards, Policies, Duty Overrides & Pair Reassignments ---
+    @GET("core/dashboard/supervisor/")
+    suspend fun getSupervisorDashboard(@Query("station") stationId: String? = null): Response<SupervisorDashboardResponse>
+
+    @GET("core/dashboard/admin/")
+    suspend fun getAdminDashboard(): Response<AdminDashboardResponse>
+
+    @GET("core/policies/")
+    suspend fun getOrganizationPolicies(
+        @Query("category") category: String? = null,
+        @Query("search") search: String? = null
+    ): Response<List<OrganizationPolicy>>
+
+    @PATCH("core/policies/{id}/")
+    suspend fun updateOrganizationPolicy(
+        @Path("id") id: String,
+        @Body updates: Map<String, Any>
+    ): Response<OrganizationPolicy>
+
+    @GET("shifts/duty-overrides/")
+    suspend fun getDutyOverrides(
+        @Query("guard") guardId: String? = null,
+        @Query("date") date: String? = null,
+        @Query("status") status: String? = null
+    ): Response<List<DutyOverride>>
+
+    @POST("shifts/duty-overrides/")
+    suspend fun createDutyOverride(@Body request: CreateDutyOverrideRequest): Response<DutyOverride>
+
+    @POST("shifts/duty-overrides/{id}/settle_compensation/")
+    suspend fun settleDutyOverrideCompensation(@Path("id") id: String): Response<Map<String, Any>>
+
+    @POST("stations/pairs/reassign_guard/")
+    suspend fun reassignGuardPair(@Body request: ReassignGuardPairRequest): Response<ReassignGuardPairResponse>
+
+    @GET("stations/pair-reassignments/")
+    suspend fun getPairReassignments(
+        @Query("station") stationId: String? = null,
+        @Query("guard") guardId: String? = null
+    ): Response<List<GuardPairReassignmentAudit>>
 }
+
