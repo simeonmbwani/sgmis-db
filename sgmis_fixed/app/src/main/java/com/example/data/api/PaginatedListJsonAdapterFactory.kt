@@ -20,11 +20,20 @@ class PaginatedListJsonAdapterFactory : JsonAdapter.Factory {
         annotations: Set<Annotation>,
         moshi: Moshi
     ): JsonAdapter<*>? {
+        if (annotations.isNotEmpty()) {
+            return null
+        }
         val rawType = Types.getRawType(type)
         if (rawType != List::class.java && rawType != Collection::class.java) {
             return null
         }
+        if (type !is java.lang.reflect.ParameterizedType) {
+            return null
+        }
         val elementType = Types.collectionElementType(type, List::class.java)
+        if (elementType is java.lang.reflect.TypeVariable<*>) {
+            return null
+        }
         val elementAdapter = moshi.adapter<Any>(elementType)
         return PaginatedListAdapter(elementAdapter)
     }

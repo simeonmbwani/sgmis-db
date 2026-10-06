@@ -25,7 +25,18 @@ fun AdministrativeHistoryScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
 
     LaunchedEffect(Unit) {
         if (state.currentUser?.appRole != AppRole.ADMINISTRATOR) onBack()
-        else viewModel.fetchAdministrativeHistory()
+        else {
+            viewModel.clearMessages()
+            viewModel.fetchAdministrativeHistory()
+        }
+    }
+
+    // Auto-dismiss transient messages
+    LaunchedEffect(state.successMessage, state.errorMessage) {
+        if (state.successMessage != null || state.errorMessage != null) {
+            kotlinx.coroutines.delay(3500)
+            viewModel.clearMessages()
+        }
     }
 
     val filteredList = remember(state.administrativeHistory, selectedFilter) {
@@ -37,7 +48,12 @@ fun AdministrativeHistoryScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
         TopAppBar(
             title = { Text("Administrative Audit History", fontWeight = FontWeight.Bold) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-            actions = { IconButton(onClick = { viewModel.fetchAdministrativeHistory() }) { Icon(Icons.Default.Refresh, "Refresh") } }
+            actions = {
+                IconButton(onClick = {
+                    viewModel.clearMessages()
+                    viewModel.fetchAdministrativeHistory()
+                }) { Icon(Icons.Default.Refresh, "Refresh") }
+            }
         )
     }) { padding ->
         Column(
@@ -86,7 +102,20 @@ fun AdministrativeHistoryScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
             }
 
             if (state.administrativeHistoryLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            if (state.errorMessage != null) Text(state.errorMessage!!, color = MaterialTheme.colorScheme.error)
+            if (state.errorMessage != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        state.errorMessage!!,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
 
             if (filteredList.isEmpty() && !state.administrativeHistoryLoading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

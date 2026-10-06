@@ -192,10 +192,10 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     fun fetchRecordAdjustments() {
         if (_uiState.value.currentUser?.appRole == AppRole.GUARD) return
         viewModelScope.launch {
-            _uiState.update { it.copy(adjustmentsLoading = true, errorMessage = null) }
+            _uiState.update { it.copy(adjustmentsLoading = true) }
             repository.fetchRecordAdjustments().onSuccess { rows ->
-                _uiState.update { it.copy(recordAdjustments = rows, adjustmentsLoading = false) }
-            }.onFailure { e -> _uiState.update { it.copy(adjustmentsLoading = false, errorMessage = e.message) } }
+                _uiState.update { it.copy(recordAdjustments = rows, adjustmentsLoading = false, errorMessage = null) }
+            }.onFailure { e -> _uiState.update { it.copy(adjustmentsLoading = false, errorMessage = e.message ?: "Unable to load record adjustments. Please try again.") } }
         }
     }
 
@@ -232,8 +232,8 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
         viewModelScope.launch {
             _uiState.update { it.copy(administrativeHistoryLoading = true) }
             repository.fetchAdministrativeHistory().onSuccess { rows ->
-                _uiState.update { it.copy(administrativeHistory = rows, administrativeHistoryLoading = false) }
-            }.onFailure { e -> _uiState.update { it.copy(administrativeHistoryLoading = false, errorMessage = e.message) } }
+                _uiState.update { it.copy(administrativeHistory = rows, administrativeHistoryLoading = false, errorMessage = null) }
+            }.onFailure { e -> _uiState.update { it.copy(administrativeHistoryLoading = false, errorMessage = e.message ?: "Unable to load administrative history. Please try again.") } }
             repository.fetchLeaveAdjustments().onSuccess { rows -> _uiState.update { it.copy(leaveAdjustmentHistory = rows) } }
         }
     }
@@ -893,7 +893,13 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
     fun fetchCheckpoints() {
         viewModelScope.launch {
             val res = repository.fetchCheckpoints()
-            res.onSuccess { cps -> _uiState.update { it.copy(checkpoints = cps) } }
+            res.onSuccess { cps ->
+                _uiState.update { it.copy(checkpoints = cps, errorMessage = null) }
+            }.onFailure { err ->
+                if (_uiState.value.checkpoints.isEmpty()) {
+                    _uiState.update { it.copy(errorMessage = err.message ?: "Unable to load station checkpoints. Please try again.") }
+                }
+            }
         }
     }
 
@@ -909,8 +915,13 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                         patrolLogs = logs,
                         activePatrol = active,
                         assignedPatrols = assigned,
-                        unsyncedPatrolEventsCount = unsyncedCount
+                        unsyncedPatrolEventsCount = unsyncedCount,
+                        errorMessage = null
                     )
+                }
+            }.onFailure { err ->
+                if (_uiState.value.patrolLogs.isEmpty()) {
+                    _uiState.update { it.copy(errorMessage = err.message ?: "Unable to load station patrols. Please try again.") }
                 }
             }
         }
@@ -1162,9 +1173,9 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             _uiState.update { it.copy(leaveLoading = true) }
             val res = repository.fetchAllLeaveBalances(stationId)
             res.onSuccess { list ->
-                _uiState.update { it.copy(stationLeaveBalances = list, leaveLoading = false) }
+                _uiState.update { it.copy(stationLeaveBalances = list, leaveLoading = false, errorMessage = null) }
             }.onFailure { err ->
-                _uiState.update { it.copy(leaveLoading = false, errorMessage = err.message) }
+                _uiState.update { it.copy(leaveLoading = false, errorMessage = err.message ?: "Unable to load station leave balances. Please try again.") }
             }
         }
     }
@@ -1174,9 +1185,9 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
             _uiState.update { it.copy(leaveLoading = true) }
             val res = repository.fetchLeaveAccrualRecords()
             res.onSuccess { list ->
-                _uiState.update { it.copy(leaveAccrualRecords = list, leaveLoading = false) }
+                _uiState.update { it.copy(leaveAccrualRecords = list, leaveLoading = false, errorMessage = null) }
             }.onFailure { err ->
-                _uiState.update { it.copy(leaveLoading = false, errorMessage = err.message) }
+                _uiState.update { it.copy(leaveLoading = false, errorMessage = err.message ?: "Unable to load leave accrual records. Please try again.") }
             }
         }
     }

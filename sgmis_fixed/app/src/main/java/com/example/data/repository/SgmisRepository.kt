@@ -37,14 +37,31 @@ class SgmisRepository(
         }
 
     // --- Error Parser Helper ---
-    private fun sanitizeException(e: Throwable, fallback: String = "Server communication error"): Exception {
+    private fun sanitizeException(e: Throwable, fallback: String = "Unable to complete request. Please try again."): Exception {
         val msg = e.message ?: ""
         Log.e("SgmisRepository", "Request failed", e)
-        if (msg.contains("setLenient", ignoreCase = true) || msg.contains("malformed JSON", ignoreCase = true) || msg.contains("Expected BEGIN_", ignoreCase = true)) {
+        if (msg.contains("setLenient", ignoreCase = true) ||
+            msg.contains("malformed JSON", ignoreCase = true) ||
+            msg.contains("Expected BEGIN_", ignoreCase = true) ||
+            e is com.squareup.moshi.JsonDataException ||
+            e is com.squareup.moshi.JsonEncodingException
+        ) {
             return Exception("Unable to process the server response. Please try again.")
+        }
+        if (e is retrofit2.HttpException) {
+            return when (e.code()) {
+                401 -> Exception("Session expired. Please log in again.")
+                403 -> Exception("You are not authorised to perform this action.")
+                404 -> Exception("Requested record or resource was not found.")
+                in 500..599 -> Exception("Server error. Please try again shortly.")
+                else -> Exception(fallback)
+            }
         }
         if (e is java.net.SocketTimeoutException) {
             return Exception("The request timed out. Please try again.")
+        }
+        if (e is java.net.UnknownHostException || e is java.net.ConnectException) {
+            return Exception("Server is currently unreachable. Please check your network connection.")
         }
         if (e is java.io.IOException) {
             return Exception("Unable to connect. Please check your connection and try again.")
@@ -595,7 +612,7 @@ class SgmisRepository(
                     )
                 })
             } else {
-                val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch station checkpoints")
+                val err = parseDrfError(response.errorBody()?.string(), "Unable to load station checkpoints. Please try again.")
                 Result.failure(Exception(err))
             }
         } catch (e: Exception) {
@@ -618,7 +635,7 @@ class SgmisRepository(
                     )
                 })
             } else {
-                Result.failure(sanitizeException(e))
+                Result.failure(sanitizeException(e, "Unable to load station checkpoints. Please try again."))
             }
         }
     }
@@ -702,7 +719,7 @@ class SgmisRepository(
                         )
                     })
                 } else {
-                    val err = parseDrfError(response.errorBody()?.string(), "Failed to fetch patrol history")
+                    val err = parseDrfError(response.errorBody()?.string(), "Unable to load station patrols. Please try again.")
                     Result.failure(Exception(err))
                 }
             }
@@ -734,7 +751,7 @@ class SgmisRepository(
                     )
                 })
             } else {
-                Result.failure(sanitizeException(e))
+                Result.failure(sanitizeException(e, "Unable to load station patrols. Please try again."))
             }
         }
     }

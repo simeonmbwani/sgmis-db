@@ -13,6 +13,7 @@ router = DefaultRouter()
 router.register(r"balances", LeaveBalanceViewSet, basename="leave_balance")
 router.register(r"applications", LeaveApplicationViewSet, basename="leave_application")
 router.register(r"accruals", LeaveAccrualRecordViewSet, basename="leave_accrual")
+router.register(r"accrual-records", LeaveAccrualRecordViewSet, basename="leave_accrual_record")
 router.register(r"compensation-ledger", PublicHolidayCompensationLedgerViewSet, basename="compensation_ledger")
 router.register(r"adjustments", LeaveAdjustmentRecordViewSet, basename="leave_adjustment")
 

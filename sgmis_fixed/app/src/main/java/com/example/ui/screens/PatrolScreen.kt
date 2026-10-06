@@ -86,6 +86,7 @@ fun PatrolScreen(
     }
 
     LaunchedEffect(Unit) {
+        viewModel.clearMessages()
         viewModel.fetchCheckpoints()
         viewModel.fetchPatrolLogs()
     }
@@ -121,6 +122,7 @@ fun PatrolScreen(
                     }
                     IconButton(
                         onClick = {
+                            viewModel.clearMessages()
                             viewModel.fetchCheckpoints()
                             viewModel.fetchPatrolLogs()
                         },

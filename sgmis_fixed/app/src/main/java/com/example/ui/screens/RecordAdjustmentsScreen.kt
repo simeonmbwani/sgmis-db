@@ -37,15 +37,29 @@ fun RecordAdjustmentsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
 
     LaunchedEffect(role) {
         if (role == AppRole.GUARD) onBack()
+        viewModel.clearMessages()
         viewModel.fetchRecordAdjustments()
         if (canRequest) viewModel.fetchUsers(role = "GUARD")
+    }
+
+    // Auto-dismiss transient messages
+    LaunchedEffect(state.successMessage, state.errorMessage) {
+        if (state.successMessage != null || state.errorMessage != null) {
+            kotlinx.coroutines.delay(3500)
+            viewModel.clearMessages()
+        }
     }
 
     Scaffold(topBar = {
         TopAppBar(
             title = { Text("Master Record Adjustments", fontWeight = FontWeight.Bold) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-            actions = { IconButton(onClick = { viewModel.fetchRecordAdjustments() }) { Icon(Icons.Default.Refresh, "Refresh") } }
+            actions = {
+                IconButton(onClick = {
+                    viewModel.clearMessages()
+                    viewModel.fetchRecordAdjustments()
+                }) { Icon(Icons.Default.Refresh, "Refresh") }
+            }
         )
     }, floatingActionButton = {
         if (canRequest) ExtendedFloatingActionButton(
@@ -62,7 +76,36 @@ fun RecordAdjustmentsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
             )
             Spacer(Modifier.height(12.dp))
             if (state.adjustmentsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            if (state.errorMessage != null) Text(state.errorMessage!!, color = MaterialTheme.colorScheme.error)
+            if (state.errorMessage != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        state.errorMessage!!,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+            if (state.successMessage != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        state.successMessage!!,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+            }
             if (state.recordAdjustments.isEmpty() && !state.adjustmentsLoading) {
                 Text("No adjustment records found.", modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.outline)
             }

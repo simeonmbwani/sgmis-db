@@ -49,6 +49,7 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
     val admin = state.currentUser?.appRole == AppRole.ADMINISTRATOR
 
     fun reloadAll() {
+        viewModel.clearMessages()
         viewModel.fetchUsers(role = "GUARD")
         viewModel.fetchStations()
         viewModel.fetchGuardPairs()
@@ -60,6 +61,14 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
     LaunchedEffect(Unit) {
         if (!admin) onBack() else {
             reloadAll()
+        }
+    }
+
+    // Auto-dismiss transient messages
+    LaunchedEffect(state.successMessage, state.errorMessage) {
+        if (state.successMessage != null || state.errorMessage != null) {
+            kotlinx.coroutines.delay(3500)
+            viewModel.clearMessages()
         }
     }
 
