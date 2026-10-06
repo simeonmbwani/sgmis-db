@@ -1365,6 +1365,45 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
                 pair = GuardPair.objects.create(guard_a=guard, guard_b=pair_guard, station=target_station, rotation_order=max_order + 1)
             update_fields["pair"] = pair
 
+        roster_position = request.data.get("roster_position") or request.data.get("rotation_order")
+        if roster_position is not None:
+            try:
+                target_order = int(roster_position)
+                if target_order not in [1, 2, 3]:
+                    return Response({"detail": "roster_position must be 1, 2, or 3."}, status=status.HTTP_400_BAD_REQUEST)
+                from apps.stations.models import GuardPair
+                target_station = update_fields.get("station", guard.station)
+                pair = update_fields.get("pair") or GuardPair.objects.filter(
+                    (Q(guard_a=guard) | Q(guard_b=guard)),
+                    station=target_station,
+                    is_active=True
+                ).first()
+                if pair:
+                    other_pair = GuardPair.objects.filter(
+                        station=target_station,
+                        rotation_order=target_order,
+                        is_active=True
+                    ).exclude(id=pair.id).first()
+                    if other_pair:
+                        other_pair.rotation_order = pair.rotation_order
+                        other_pair.save()
+                    pair.rotation_order = target_order
+                    pair.save()
+                    update_fields["pair"] = pair
+            except (ValueError, TypeError):
+                return Response({"detail": "Invalid roster_position format."}, status=status.HTTP_400_BAD_REQUEST)
+
+        assignment_type = request.data.get("assignment_type")
+        if assignment_type:
+            norm_assign = assignment_type.strip().upper()
+            if norm_assign not in ["NORMAL", "EXAM", "ESCORT"]:
+                return Response({"detail": "Invalid assignment_type. Must be NORMAL, EXAM, or ESCORT."}, status=status.HTTP_400_BAD_REQUEST)
+            update_fields["assignment_type"] = norm_assign
+
+        duty_location = request.data.get("duty_location")
+        if duty_location:
+            update_fields["duty_location"] = duty_location.strip()
+
         updated_count = 0
         if update_fields and future_shifts.exists():
             updated_count = future_shifts.update(**update_fields)
@@ -1388,6 +1427,10 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
             details={
                 "action": "SHIFT_DUTY_REASSIGNMENT",
                 "guard": guard.username,
+                "employee": guard.get_full_name() or guard.username,
+                "employee_number": guard.employee_number or "",
+                "station": guard.station.name if guard.station else "",
+                "admin_employee_number": request.user.employee_number or "",
                 "effective_date": effective_date.isoformat(),
                 "updated_shifts_count": updated_count,
                 "reason": reason,

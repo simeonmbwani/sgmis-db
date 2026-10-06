@@ -223,7 +223,12 @@ def apply_record_adjustment(adjustment, approved_value, actor):
     elif field in ["shift", "shift_type"]:
         norm = approved_value.strip().upper()
         if norm in ["DAY", "NIGHT"]:
-            Shift.objects.filter(guard=guard, date__gte=effective_date).update(shift_type=norm)
+            from datetime import time
+            start = time(7, 0) if norm == "DAY" else time(18, 0)
+            end = time(18, 0) if norm == "DAY" else time(7, 0)
+            Shift.objects.filter(guard=guard, date__gte=effective_date).update(
+                shift_type=norm, start_time=start, end_time=end
+            )
     elif field in ["pair", "pair_guard"]:
         from apps.stations.models import GuardPair
         pair_guard = User.objects.filter(
@@ -237,6 +242,29 @@ def apply_record_adjustment(adjustment, approved_value, actor):
                 max_order = GuardPair.objects.filter(station=guard.station).aggregate(Max("rotation_order"))["rotation_order__max"] or 0
                 pair = GuardPair.objects.create(guard_a=guard, guard_b=pair_guard, station=guard.station, rotation_order=max_order + 1)
             Shift.objects.filter(guard=guard, date__gte=effective_date).update(pair=pair)
+    elif field in ["roster_position", "rotation_order"]:
+        try:
+            target_order = int(approved_value)
+            if target_order in [1, 2, 3]:
+                from apps.stations.models import GuardPair
+                pair = GuardPair.objects.filter(
+                    (Q(guard_a=guard) | Q(guard_b=guard)),
+                    station=guard.station,
+                    is_active=True
+                ).first()
+                if pair:
+                    other_pair = GuardPair.objects.filter(
+                        station=guard.station,
+                        rotation_order=target_order,
+                        is_active=True
+                    ).exclude(id=pair.id).first()
+                    if other_pair:
+                        other_pair.rotation_order = pair.rotation_order
+                        other_pair.save()
+                    pair.rotation_order = target_order
+                    pair.save()
+        except (ValueError, TypeError):
+            pass
     elif field == "vacation_balance":
         bal, _ = LeaveBalance.objects.get_or_create(guard=guard, year=effective_date.year)
         prev = bal.vacation_days
@@ -279,6 +307,40 @@ def apply_record_adjustment(adjustment, approved_value, actor):
             reason=reason,
             authorized_by=actor,
         )
+    elif field in ["annual_balance", "annual_days"]:
+        bal, _ = LeaveBalance.objects.get_or_create(guard=guard, year=effective_date.year)
+        prev = bal.annual_days
+        val = int(approved_value)
+        bal.annual_days = val
+        bal.save()
+        LeaveAdjustmentRecord.objects.create(
+            guard=guard,
+            adjustment_type=AdjustmentType.MANUAL_ADJUSTMENT,
+            leave_type="ANNUAL",
+            previous_balance=prev,
+            new_balance=val,
+            effective_date=effective_date,
+            source=reason,
+            reason=reason,
+            authorized_by=actor,
+        )
+    elif field in ["sick_balance", "sick_days"]:
+        bal, _ = LeaveBalance.objects.get_or_create(guard=guard, year=effective_date.year)
+        prev = bal.sick_days
+        val = int(approved_value)
+        bal.sick_days = val
+        bal.save()
+        LeaveAdjustmentRecord.objects.create(
+            guard=guard,
+            adjustment_type=AdjustmentType.MANUAL_ADJUSTMENT,
+            leave_type="SICK",
+            previous_balance=prev,
+            new_balance=val,
+            effective_date=effective_date,
+            source=reason,
+            reason=reason,
+            authorized_by=actor,
+        )
     elif field == "compensation_days":
         val = Decimal(str(approved_value))
         rem = PublicHolidayCompensationLedger.get_remaining_for_guard(guard)
@@ -291,6 +353,13 @@ def apply_record_adjustment(adjustment, approved_value, actor):
                 notes=f"Administrative reconciliation: {reason}",
                 created_by=actor,
             )
+    elif field in ["assignment_type", "duty_assignment"]:
+        norm = approved_value.strip().upper()
+        if norm in ["NORMAL", "EXAM", "ESCORT"]:
+            Shift.objects.filter(guard=guard, date__gte=effective_date).update(assignment_type=norm)
+    elif field in ["duty_state", "attendance_status"]:
+        norm = approved_value.strip().upper()
+        Shift.objects.filter(guard=guard, date=effective_date).update(attendance_status=norm)
 
 
 class RecordAdjustmentRequestViewSet(viewsets.ModelViewSet):
@@ -344,19 +413,40 @@ class RecordAdjustmentRequestViewSet(viewsets.ModelViewSet):
                     elif upcoming.pair:
                         partner = upcoming.pair.get_partner_for(guard)
                         old_val = (partner.employee_number or partner.username) if partner else ""
+            elif field_name in ["roster_position", "rotation_order"]:
+                from apps.stations.models import GuardPair
+                gp = GuardPair.objects.filter(
+                    (Q(guard_a=guard) | Q(guard_b=guard)),
+                    station=guard.station,
+                    is_active=True
+                ).first()
+                old_val = str(gp.rotation_order) if gp else "1"
             elif field_name == "vacation_balance":
                 b = LeaveBalance.objects.filter(guard=guard).first()
                 old_val = str(b.vacation_days) if b else "0.0"
             elif field_name == "casual_balance":
                 b = LeaveBalance.objects.filter(guard=guard).first()
                 old_val = str(b.casual_days) if b else "0.0"
+            elif field_name in ["annual_balance", "annual_days"]:
+                b = LeaveBalance.objects.filter(guard=guard).first()
+                old_val = str(b.annual_days) if b else "21"
+            elif field_name in ["sick_balance", "sick_days"]:
+                b = LeaveBalance.objects.filter(guard=guard).first()
+                old_val = str(b.sick_days) if b else "14"
             elif field_name == "compensation_days":
                 old_val = str(PublicHolidayCompensationLedger.get_remaining_for_guard(guard))
+            elif field_name in ["assignment_type", "duty_assignment"]:
+                upcoming = Shift.objects.filter(guard=guard, date__gte=serializer.validated_data["effective_date"]).order_by("date").first()
+                old_val = upcoming.assignment_type if upcoming else "NORMAL"
+            elif field_name in ["duty_state", "attendance_status"]:
+                upcoming = Shift.objects.filter(guard=guard, date=serializer.validated_data["effective_date"]).first()
+                old_val = upcoming.attendance_status if upcoming else "NOT_CLOCKED_IN"
 
         is_admin = user.role == UserRole.ADMINISTRATOR or user.is_superuser
+        req_status = self.request.data.get("status")
         initial_status = (
             AdjustmentStatus.APPROVED
-            if (is_admin and self.request.data.get("status") == "APPROVED")
+            if (is_admin and (req_status == "APPROVED" or req_status is None))
             else AdjustmentStatus.PENDING
         )
 
@@ -370,6 +460,7 @@ class RecordAdjustmentRequestViewSet(viewsets.ModelViewSet):
         )
 
         if initial_status == AdjustmentStatus.APPROVED:
+            prev_guard_emp = getattr(guard, "employee_number", "") or ""
             apply_record_adjustment(req_obj, req_obj.requested_value, user)
             SecurityAuditEvent.objects.create(
                 event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
@@ -378,10 +469,17 @@ class RecordAdjustmentRequestViewSet(viewsets.ModelViewSet):
                 target_model="User",
                 target_id=str(guard.id),
                 details={
+                    "adjustment_id": str(req_obj.id),
                     "field": field_name,
                     "old_value": old_val,
                     "new_value": req_obj.requested_value,
-                    "status": "APPROVED_DIRECT",
+                    "reason": req_obj.reason,
+                    "employee": guard.get_full_name() or guard.username,
+                    "employee_number": prev_guard_emp,
+                    "station": guard.station.name if guard.station else "",
+                    "admin_employee_number": user.employee_number or "",
+                    "action": "APPROVED_DIRECT",
+                    "status": "APPROVED",
                 }
             )
         else:
@@ -434,7 +532,13 @@ class RecordAdjustmentRequestViewSet(viewsets.ModelViewSet):
                 "field": adjustment.field_name,
                 "old_value": adjustment.old_value,
                 "new_value": approved_value,
+                "reason": adjustment.reason,
+                "employee": adjustment.guard.get_full_name() or adjustment.guard.username,
+                "employee_number": adjustment.guard.employee_number or "",
+                "station": adjustment.guard.station.name if adjustment.guard.station else "",
+                "admin_employee_number": request.user.employee_number or "",
                 "action": "APPROVED",
+                "status": "APPROVED",
             }
         )
 
@@ -473,8 +577,16 @@ class RecordAdjustmentRequestViewSet(viewsets.ModelViewSet):
             details={
                 "adjustment_id": str(adjustment.id),
                 "field": adjustment.field_name,
+                "old_value": adjustment.old_value,
+                "requested_value": adjustment.requested_value,
+                "reason": adjustment.reason,
                 "rejection_reason": rejection_reason,
+                "employee": adjustment.guard.get_full_name() or adjustment.guard.username,
+                "employee_number": adjustment.guard.employee_number or "",
+                "station": adjustment.guard.station.name if adjustment.guard.station else "",
+                "admin_employee_number": request.user.employee_number or "",
                 "action": "REJECTED",
+                "status": "REJECTED",
             }
         )
 
@@ -487,52 +599,165 @@ class RecordAdjustmentRequestViewSet(viewsets.ModelViewSet):
 @api_view(["GET"])
 @permission_classes([IsAdministrator])
 def administrative_history(request):
-    """Read-only administrator history sourced from existing audit records."""
+    """Read-only administrator history sourced from authoritative audit records."""
     entries = []
+    
+    # 1. Record Adjustment Requests
     for item in RecordAdjustmentRequest.objects.select_related(
-        "guard", "requested_by", "reviewed_by"
+        "guard", "guard__station", "requested_by", "reviewed_by"
     ).order_by("-created_at")[:300]:
+        actor_user = item.reviewed_by if (item.status in ["APPROVED", "REJECTED"] and item.reviewed_by) else item.requested_by
+        actor_emp = (actor_user.employee_number or "") if actor_user else ""
+        actor_name = (actor_user.get_full_name() or actor_user.username) if actor_user else "System"
+        actor_label = f"{actor_name} ({actor_emp})" if actor_emp else actor_name
+
+        guard_name = item.guard.get_full_name() or item.guard.username
+        guard_emp = item.guard.employee_number or ""
+        station_name = item.guard.station.name if item.guard.station else ""
+
         entries.append({
-            "id": str(item.id), "kind": "RECORD_ADJUSTMENT",
-            "timestamp": item.reviewed_at.isoformat() if item.reviewed_at else item.created_at.isoformat(),
-            "actor": (item.reviewed_by.get_full_name() or item.reviewed_by.username) if item.reviewed_by else (item.requested_by.get_full_name() or item.requested_by.username) if item.requested_by else "",
-            "target_model": "User", "target_id": str(item.guard_id),
-            "action": item.status, "reason": item.rejection_reason or item.reason,
+            "id": str(item.id),
+            "kind": "RECORD_ADJUSTMENT",
+            "timestamp": (item.reviewed_at or item.created_at).isoformat(),
+            "actor": actor_label,
+            "target_model": "User",
+            "target_id": str(item.guard_id),
+            "action": f"{item.status} ({item.field_name})",
+            "reason": item.rejection_reason or item.reason,
             "old_value": item.old_value,
             "new_value": item.approved_value if item.status == "APPROVED" else item.requested_value,
-            "details": {"field": item.field_name, "employee": item.guard.get_full_name() or item.guard.username,
-                        "requested_by": item.requested_by.get_full_name() if item.requested_by else "",
-                        "status": item.status, "request_id": str(item.id)},
+            "details": {
+                "field": item.field_name,
+                "employee": f"{guard_name} ({guard_emp})" if guard_emp else guard_name,
+                "employee_number": guard_emp,
+                "station": station_name,
+                "requested_by": item.requested_by.get_full_name() if item.requested_by else "",
+                "status": item.status,
+                "request_id": str(item.id),
+                "admin_employee_number": actor_emp,
+            },
         })
-    for item in LeaveAdjustmentRecord.objects.select_related("guard", "authorized_by").order_by("-created_at")[:300]:
+
+    # 2. Leave Adjustment Records
+    for item in LeaveAdjustmentRecord.objects.select_related(
+        "guard", "guard__station", "authorized_by"
+    ).order_by("-created_at")[:300]:
+        actor_user = item.authorized_by
+        actor_emp = (actor_user.employee_number or "") if actor_user else ""
+        actor_name = (actor_user.get_full_name() or actor_user.username) if actor_user else "System"
+        actor_label = f"{actor_name} ({actor_emp})" if actor_emp else actor_name
+
+        guard_name = item.guard.get_full_name() or item.guard.username
+        guard_emp = item.guard.employee_number or ""
+        station_name = item.guard.station.name if item.guard.station else ""
+
         entries.append({
-            "id": str(item.id), "kind": "LEAVE_ADJUSTMENT", "timestamp": item.created_at.isoformat(),
-            "actor": (item.authorized_by.get_full_name() or item.authorized_by.username) if item.authorized_by else "",
-            "target_model": "LeaveBalance", "target_id": str(item.guard_id),
-            "action": item.adjustment_type, "reason": item.reason,
-            "old_value": str(item.previous_balance), "new_value": str(item.new_balance),
-            "details": {"employee": item.guard.get_full_name() or item.guard.username,
-                        "leave_type": item.leave_type, "effective_date": item.effective_date.isoformat(),
-                        "source": item.source},
+            "id": str(item.id),
+            "kind": "LEAVE_ADJUSTMENT",
+            "timestamp": item.created_at.isoformat(),
+            "actor": actor_label,
+            "target_model": "LeaveBalance",
+            "target_id": str(item.guard_id),
+            "action": f"{item.adjustment_type} ({item.leave_type})",
+            "reason": item.reason,
+            "old_value": str(item.previous_balance),
+            "new_value": str(item.new_balance),
+            "details": {
+                "field": f"{item.leave_type.lower()}_balance",
+                "employee": f"{guard_name} ({guard_emp})" if guard_emp else guard_name,
+                "employee_number": guard_emp,
+                "station": station_name,
+                "leave_type": item.leave_type,
+                "effective_date": item.effective_date.isoformat(),
+                "source": item.source,
+                "admin_employee_number": actor_emp,
+            },
         })
+
+    # 3. Security Audit Events
     for item in SecurityAuditEvent.objects.select_related("actor").order_by("-timestamp")[:300]:
+        actor_user = item.actor
+        actor_emp = (actor_user.employee_number or "") if actor_user else ""
+        actor_name = item.actor_username or ((actor_user.get_full_name() or actor_user.username) if actor_user else "System")
+        actor_label = f"{actor_name} ({actor_emp})" if actor_emp else actor_name
+
+        details = dict(item.details or {})
+        if actor_emp and "admin_employee_number" not in details:
+            details["admin_employee_number"] = actor_emp
+
         entries.append({
-            "id": str(item.id), "kind": "SECURITY_AUDIT", "timestamp": item.timestamp.isoformat(),
-            "actor": item.actor_username or ((item.actor.get_full_name() or item.actor.username) if item.actor else ""),
-            "target_model": item.target_model, "target_id": item.target_id,
-            "action": item.details.get("action", item.event_type),
-            "reason": item.details.get("reason") or item.details.get("rejection_reason", ""),
-            "old_value": item.details.get("old_value"), "new_value": item.details.get("new_value"),
-            "details": item.details,
+            "id": str(item.id),
+            "kind": "SECURITY_AUDIT",
+            "timestamp": item.timestamp.isoformat(),
+            "actor": actor_label,
+            "target_model": item.target_model,
+            "target_id": item.target_id,
+            "action": details.get("action", item.event_type),
+            "reason": details.get("reason") or details.get("rejection_reason", ""),
+            "old_value": str(details.get("old_value")) if details.get("old_value") is not None else None,
+            "new_value": str(details.get("new_value")) if details.get("new_value") is not None else None,
+            "details": details,
         })
-    for item in SupervisorOverrideAudit.objects.select_related("supervisor").order_by("-created_at")[:300]:
+
+    # 4. Supervisor Override Audits
+    for item in SupervisorOverrideAudit.objects.select_related(
+        "supervisor", "supervisor__station"
+    ).order_by("-created_at")[:300]:
+        sup = item.supervisor
+        sup_emp = (sup.employee_number or "") if sup else ""
+        sup_name = (sup.get_full_name() or sup.username) if sup else "Supervisor"
+        sup_label = f"{sup_name} ({sup_emp})" if sup_emp else sup_name
+
+        station_name = sup.station.name if (sup and sup.station) else ""
+
         entries.append({
-            "id": str(item.id), "kind": "SUPERVISOR_OVERRIDE", "timestamp": item.created_at.isoformat(),
-            "actor": item.supervisor.get_full_name() or item.supervisor.username,
-            "target_model": item.target_model, "target_id": item.target_id,
-            "action": item.action_type, "reason": item.reason,
-            "details": {"admin_notified": item.admin_notified},
+            "id": str(item.id),
+            "kind": "SUPERVISOR_OVERRIDE",
+            "timestamp": item.created_at.isoformat(),
+            "actor": sup_label,
+            "target_model": item.target_model,
+            "target_id": item.target_id,
+            "action": item.action_type,
+            "reason": item.reason,
+            "details": {
+                "admin_notified": item.admin_notified,
+                "station": station_name,
+                "admin_employee_number": sup_emp,
+            },
         })
+
+    # 5. Public Holiday Compensation Ledger entries
+    for item in PublicHolidayCompensationLedger.objects.filter(
+        created_by__isnull=False
+    ).select_related("guard", "guard__station", "created_by").order_by("-created_at")[:300]:
+        actor_user = item.created_by
+        actor_emp = (actor_user.employee_number or "") if actor_user else ""
+        actor_name = (actor_user.get_full_name() or actor_user.username) if actor_user else "System"
+        actor_label = f"{actor_name} ({actor_emp})" if actor_emp else actor_name
+
+        guard_name = item.guard.get_full_name() or item.guard.username
+        guard_emp = item.guard.employee_number or ""
+        station_name = item.guard.station.name if item.guard.station else ""
+
+        entries.append({
+            "id": str(item.id),
+            "kind": "COMPENSATION_LEDGER",
+            "timestamp": item.created_at.isoformat(),
+            "actor": actor_label,
+            "target_model": "PublicHolidayCompensationLedger",
+            "target_id": str(item.id),
+            "action": f"COMPENSATION_{item.entry_type}",
+            "reason": item.notes,
+            "new_value": f"{item.days} days",
+            "details": {
+                "field": "compensation_days",
+                "employee": f"{guard_name} ({guard_emp})" if guard_emp else guard_name,
+                "employee_number": guard_emp,
+                "station": station_name,
+                "admin_employee_number": actor_emp,
+            },
+        })
+
     entries.sort(key=lambda row: row["timestamp"], reverse=True)
     return Response(entries[:500])
 

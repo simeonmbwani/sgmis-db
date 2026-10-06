@@ -702,7 +702,8 @@ data class CreateRecordAdjustmentRequest(
     @Json(name = "effective_date") val effectiveDate: String,
     val reason: String,
     val notes: String? = null,
-    @Json(name = "old_value") val oldValue: String? = null
+    @Json(name = "old_value") val oldValue: String? = null,
+    @Json(name = "status") val status: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -818,7 +819,9 @@ data class ReassignDutyRequest(
     @Json(name = "station_id") val stationId: String? = null,
     @Json(name = "start_time") val startTime: String? = null,
     @Json(name = "end_time") val endTime: String? = null,
-    @Json(name = "pair_guard_id") val pairGuardId: String? = null
+    @Json(name = "pair_guard_id") val pairGuardId: String? = null,
+    @Json(name = "roster_position") val rosterPosition: Int? = null,
+    @Json(name = "assignment_type") val assignmentType: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -853,7 +856,8 @@ data class SetOpeningBalanceRequest(
     val reason: String,
     val source: String? = null,
     @Json(name = "vacation_balance") val vacationBalance: Double? = null,
-    @Json(name = "casual_balance") val casualBalance: Double? = null
+    @Json(name = "casual_balance") val casualBalance: Double? = null,
+    @Json(name = "compensation_balance") val compensationBalance: Double? = null
 )
 
 @JsonClass(generateAdapter = true)

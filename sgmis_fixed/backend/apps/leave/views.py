@@ -279,6 +279,20 @@ class LeaveBalanceViewSet(viewsets.ReadOnlyModelViewSet):
             )
             records_created.append(rec)
 
+        if "compensation_balance" in request.data:
+            from apps.leave.models import PublicHolidayCompensationLedger, CompensationLedgerEntryType
+            comp_val = Decimal(str(request.data["compensation_balance"]))
+            rem = PublicHolidayCompensationLedger.get_remaining_for_guard(guard)
+            diff = comp_val - rem
+            if diff != Decimal("0.0"):
+                PublicHolidayCompensationLedger.objects.create(
+                    guard=guard,
+                    entry_type=CompensationLedgerEntryType.EARNED if diff > 0 else CompensationLedgerEntryType.USED,
+                    days=abs(diff),
+                    notes=f"Opening compensation balance adjustment: {reason}",
+                    created_by=request.user,
+                )
+
         balance.save()
 
         return Response({

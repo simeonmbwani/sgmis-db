@@ -59,10 +59,19 @@ class RecordAdjustmentRequestSerializer(serializers.ModelSerializer):
             "pair",
             "pair_guard",
             "roster_position",
+            "rotation_order",
             "vacation_balance",
             "casual_balance",
+            "annual_balance",
+            "annual_days",
+            "sick_balance",
+            "sick_days",
             "special_balance",
             "compensation_days",
+            "assignment_type",
+            "duty_assignment",
+            "duty_state",
+            "attendance_status",
         ]
         val_clean = value.strip().lower()
         if val_clean not in allowed_fields:
