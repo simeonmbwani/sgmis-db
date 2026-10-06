@@ -308,16 +308,65 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
                     }
                 }, status=status.HTTP_409_CONFLICT)
 
-            # 2. Approved leave conflict check
-            from apps.leave.models import LeaveApplication, LeaveStatus
-            on_leave = LeaveApplication.objects.filter(
+            # Target shift type calculation
+            target_shift_type = shift.shift_type
+            new_shift_type = request.data.get("shift_type")
+            if new_shift_type:
+                st_norm = str(new_shift_type).strip().upper()
+                if st_norm in [ShiftType.DAY, ShiftType.NIGHT, ShiftType.OFF]:
+                    target_shift_type = st_norm
+
+            # 2. Approved leave check (supports emergency recall / leave interruption with audit & compensation)
+            from apps.leave.models import LeaveApplication, LeaveStatus, PublicHolidayCompensationLedger
+            from .models import DutyOverride, DutyOverrideStatus, DutyOverrideType
+
+            leave_app = LeaveApplication.objects.filter(
                 guard=guard,
                 status=LeaveStatus.APPROVED,
                 start_date__lte=shift.date,
                 end_date__gte=shift.date,
-            ).exists()
-            if on_leave:
-                return Response({"detail": "The selected guard is on approved leave on this date and cannot be assigned to a shift."}, status=status.HTTP_409_CONFLICT)
+            ).first()
+
+            duty_override = None
+            if leave_app:
+                allow_override = (
+                    request.data.get("allow_leave_interruption")
+                    or request.data.get("is_override")
+                    or request.data.get("override")
+                    or request.data.get("recall")
+                )
+                if not allow_override:
+                    return Response({
+                        "detail": "The selected guard is on approved leave on this date and cannot be assigned to a normal shift.",
+                        "on_leave": True,
+                    }, status=status.HTTP_409_CONFLICT)
+
+                from apps.core.models import OrganizationPolicy
+                comp_days = OrganizationPolicy.get_operational_value("LEAVE_INTERRUPTION_COMPENSATION", default=1.0)
+
+                duty_override, _ = DutyOverride.objects.update_or_create(
+                    guard=guard,
+                    date=shift.date,
+                    defaults={
+                        "station": station,
+                        "override_type": DutyOverrideType.LEAVE_INTERRUPTION,
+                        "shift_type": target_shift_type if target_shift_type in [ShiftType.DAY, ShiftType.NIGHT] else ShiftType.DAY,
+                        "original_leave": leave_app,
+                        "reason": f"Duty reassignment: {reason}",
+                        "authorized_by": request.user,
+                        "days_interrupted": comp_days,
+                        "compensation_days_owed": comp_days,
+                        "status": DutyOverrideStatus.ACTIVE,
+                    }
+                )
+                PublicHolidayCompensationLedger.objects.create(
+                    guard=guard,
+                    duty_override=duty_override,
+                    entry_type="EARNED",
+                    days=comp_days,
+                    notes=f"Reassignment leave interruption compensation for {shift.date}: {reason}",
+                    created_by=request.user,
+                )
 
             # 3. Exam duty conflict check
             from apps.exams.models import ExamDuty, ExamStatus
@@ -339,14 +388,6 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
             ).exists()
             if on_escort:
                 return Response({"detail": "The selected guard is assigned to escort duty on this date and cannot be assigned to a normal shift."}, status=status.HTTP_409_CONFLICT)
-
-            # Target shift type calculation
-            target_shift_type = shift.shift_type
-            new_shift_type = request.data.get("shift_type")
-            if new_shift_type:
-                st_norm = str(new_shift_type).strip().upper()
-                if st_norm in [ShiftType.DAY, ShiftType.NIGHT, ShiftType.OFF]:
-                    target_shift_type = st_norm
 
             # 5. Destination station pair / 2-guard limit check (Part B)
             if target_shift_type in [ShiftType.DAY, ShiftType.NIGHT]:
@@ -414,6 +455,9 @@ class ShiftViewSet(viewsets.ReadOnlyModelViewSet):
             if shift.pair and guard.id not in (shift.pair.guard_a_id, shift.pair.guard_b_id):
                 shift.pair = None
             shift.save()
+            if duty_override:
+                duty_override.shift_created = shift
+                duty_override.save(update_fields=["shift_created"])
 
             details = {
                 "action": "SINGLE_SHIFT_REASSIGNED", "date": shift.date.isoformat(),
@@ -1544,8 +1588,8 @@ class AttendanceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Station Scoping
-        if request.user.station and shift.station != request.user.station:
+        # Station Scoping (allows authorized override shifts across stations)
+        if request.user.station and shift.station != request.user.station and not shift.is_override:
             return Response(
                 {"detail": f"Station mismatch: You are assigned to {request.user.station.name}, but this shift is at {shift.station.name}."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -1599,7 +1643,10 @@ class AttendanceViewSet(viewsets.ModelViewSet):
             )
 
         # Geofence Validation
-        if not is_within_geofence(float(lat), float(lon), shift.station.latitude, shift.station.longitude, radius_meters=shift.station.geofence_radius_meters):
+        from apps.core.models import OrganizationPolicy
+        policy_geofence = OrganizationPolicy.get_operational_value("STATION_GEOFENCE_RADIUS", default=200.0)
+        station_radius = shift.station.geofence_radius_meters if (shift.station and shift.station.geofence_radius_meters > 0) else policy_geofence
+        if not is_within_geofence(float(lat), float(lon), shift.station.latitude, shift.station.longitude, radius_meters=station_radius):
             return Response(
                 {"detail": f"Geofence violation: Clock-in rejected. You are outside the authorized station perimeter for {shift.station.name}."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -2650,6 +2697,11 @@ class DutyOverrideViewSet(viewsets.ModelViewSet):
             if guard.station_id != user.station.id:
                 raise DRFPermissionDenied("Station isolation: Cannot override duty for guards outside your station.")
 
+        from .models import DutyOverride, DutyOverrideType, DutyOverrideStatus
+        existing_active = DutyOverride.objects.filter(guard=guard, date=date, status=DutyOverrideStatus.ACTIVE).first()
+        if existing_active:
+            raise DRFValidationError({"detail": f"An active duty override already exists for guard {guard.username} on {date}."})
+
         from apps.leave.models import LeaveApplication, LeaveStatus, PublicHolidayCompensationLedger
         orig_leave = LeaveApplication.objects.filter(
             guard=guard,
@@ -2664,8 +2716,9 @@ class DutyOverrideViewSet(viewsets.ModelViewSet):
             shift_type=ShiftType.OFF,
         ).first()
 
-        days_interrupted = 1.0
-        compensation_owed = 1.0
+        from apps.core.models import OrganizationPolicy
+        compensation_owed = OrganizationPolicy.get_operational_value("LEAVE_INTERRUPTION_COMPENSATION", default=1.0)
+        days_interrupted = compensation_owed
 
         override = serializer.save(
             authorized_by=user,
@@ -2676,6 +2729,10 @@ class DutyOverrideViewSet(viewsets.ModelViewSet):
             compensation_days_owed=compensation_owed,
             status=DutyOverrideStatus.ACTIVE,
         )
+
+        # Clean up any existing scheduled TIME_OFF / OFF shift on this date to prevent duplicate shifts
+        Shift.objects.filter(guard=guard, date=date, shift_type=ShiftType.OFF).delete()
+        Shift.objects.filter(guard=guard, date=date, assignment_type=AssignmentType.TIME_OFF).delete()
 
         import datetime as dt
         if shift_type == ShiftType.NIGHT:

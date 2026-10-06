@@ -1519,7 +1519,11 @@ def resolve_next_guard_duty(guard, reference_date=None):
         end_date__gte=target_date,
     ).values("start_date", "end_date"))
 
+    from .models import DutyOverride, DutyOverrideStatus
+
     def is_date_on_leave(d):
+        if DutyOverride.objects.filter(guard=guard, date=d, status=DutyOverrideStatus.ACTIVE).exists():
+            return False
         return any(l["start_date"] <= d <= l["end_date"] for l in approved_leaves)
 
     # 1. Check today's shift if evaluating today
@@ -1645,6 +1649,14 @@ def resolve_guard_duty(guard, date=None, current_time=None):
 
     base_result["next_duty"] = resolve_next_guard_duty(guard, reference_date=target_date)
 
+    # 0. Active Duty Override Check
+    from .models import DutyOverride, DutyOverrideStatus, DutyOverrideType
+    active_override = DutyOverride.objects.filter(
+        guard=guard,
+        date=target_date,
+        status=DutyOverrideStatus.ACTIVE,
+    ).select_related("station", "shift_created", "original_leave").first()
+
     # 1. Approved Leave Check (strictly checking start_date <= date <= end_date)
     leave_app = LeaveApplication.objects.filter(
         guard=guard,
@@ -1654,19 +1666,30 @@ def resolve_guard_duty(guard, date=None, current_time=None):
     ).first()
 
     if leave_app:
-        base_result.update({
-            "duty_state": "ON_LEAVE",
-            "leave_type": leave_app.leave_type,
-            "attendance_status": "ON_LEAVE",
-            "is_on_duty": False,
-            "is_off_duty": True,
-            "is_eligible_for_duty": False,
-            "is_on_leave": True,
-            "clock_in_enabled": False,
-            "clock_out_enabled": False,
-            "leave_app": leave_app,
-        })
-        return base_result
+        if active_override:
+            # Leave is interrupted by authoritative duty override on this date
+            base_result["leave_app"] = leave_app
+            base_result["duty_override"] = active_override
+            base_result["is_on_leave"] = False
+            base_result["leave_interrupted"] = True
+            # Proceed to scheduled shift / override evaluation
+        else:
+            base_result.update({
+                "duty_state": "ON_LEAVE",
+                "leave_type": leave_app.leave_type,
+                "attendance_status": "ON_LEAVE",
+                "is_on_duty": False,
+                "is_off_duty": True,
+                "is_eligible_for_duty": False,
+                "is_on_leave": True,
+                "clock_in_enabled": False,
+                "clock_out_enabled": False,
+                "leave_app": leave_app,
+            })
+            return base_result
+    elif active_override:
+        base_result["duty_override"] = active_override
+        base_result["is_on_leave"] = False
 
     # 2. Examination Duty Check
     exam_duty = ExamDuty.objects.filter(
@@ -1712,9 +1735,12 @@ def resolve_guard_duty(guard, date=None, current_time=None):
         return base_result
 
     # 4. Scheduled Shift Check
-    # Check for overnight shift from yesterday if early morning (< 07:00)
     shift = None
-    if target_date == now_tz.date() and eval_dt.time() < time(7, 0):
+    if active_override and active_override.shift_created:
+        shift = active_override.shift_created
+
+    # Check for overnight shift from yesterday if early morning (< 07:00)
+    if not shift and target_date == now_tz.date() and eval_dt.time() < time(7, 0):
         yesterday = target_date - timedelta(days=1)
         overnight = Shift.objects.filter(
             guard=guard,
@@ -1731,7 +1757,7 @@ def resolve_guard_duty(guard, date=None, current_time=None):
             Shift.objects.filter(guard=guard, date=target_date).select_related("station", "pair")
         )
         # Prioritize active working duty shifts (DAY / NIGHT) over OFF / TIME_OFF
-        shift = next((s for s in shifts_today if s.shift_type in [ShiftType.DAY, ShiftType.NIGHT] and s.assignment_type != AssignmentType.TIME_OFF), None)
+        shift = next((s for s in shifts_today if s.is_override or (s.shift_type in [ShiftType.DAY, ShiftType.NIGHT] and s.assignment_type != AssignmentType.TIME_OFF)), None)
         if not shift:
             shift = next((s for s in shifts_today if s.shift_type != ShiftType.OFF and s.assignment_type != AssignmentType.TIME_OFF), None)
         if not shift and shifts_today:
@@ -1741,9 +1767,9 @@ def resolve_guard_duty(guard, date=None, current_time=None):
         return base_result
 
     base_result["shift"] = shift
-    base_result["station"] = shift.station
+    base_result["station"] = shift.station or (active_override.station if active_override else None)
 
-    if shift.shift_type == ShiftType.OFF or shift.assignment_type == AssignmentType.TIME_OFF:
+    if not active_override and (shift.shift_type == ShiftType.OFF or shift.assignment_type == AssignmentType.TIME_OFF):
         base_result.update({
             "duty_state": "TIME_OFF",
             "attendance_status": "OFF_DUTY",
@@ -1803,11 +1829,13 @@ def resolve_guard_duty(guard, date=None, current_time=None):
         )
 
     reporting_open_dt = sched_start_dt - timedelta(minutes=30)
+    is_reassigned = bool(active_override or getattr(shift, "is_override", False) or getattr(shift, "assignment_type", None) == AssignmentType.RELIEF)
+    default_eligible_state = "REASSIGNED" if is_reassigned else "ELIGIBLE_FOR_DUTY"
 
     if eval_dt < reporting_open_dt:
         # Before reporting window opens: Scheduled, recognized as eligible, but clock-in not yet open
         base_result.update({
-            "duty_state": "ELIGIBLE_FOR_DUTY",
+            "duty_state": default_eligible_state,
             "is_on_duty": False,
             "is_off_duty": False,
             "is_eligible_for_duty": True,
@@ -1817,7 +1845,7 @@ def resolve_guard_duty(guard, date=None, current_time=None):
     elif reporting_open_dt <= eval_dt <= sched_end_dt:
         # Inside active duty / reporting window: Clock-in unlocked
         base_result.update({
-            "duty_state": "ELIGIBLE_FOR_DUTY",
+            "duty_state": default_eligible_state,
             "is_on_duty": False,
             "is_off_duty": False,
             "is_eligible_for_duty": True,

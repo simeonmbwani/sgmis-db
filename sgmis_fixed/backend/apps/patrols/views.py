@@ -468,7 +468,8 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
                 else:
                     c_lat = checkpoint.latitude
                     c_lon = checkpoint.longitude
-                    radius = 100.0
+                    from apps.core.models import OrganizationPolicy
+                    radius = OrganizationPolicy.get_operational_value("PATROL_PROXIMITY_RADIUS", default=100.0)
                     buffer_m = 50.0
 
                     if is_within_geofence(parsed_lat, parsed_lon, c_lat, c_lon, radius_meters=radius, buffer_meters=buffer_m):
@@ -777,7 +778,8 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
 
         # Minimum elapsed patrol duration enforcement (physical inspection cannot be instantaneous)
         elapsed_seconds = (now - patrol.start_time).total_seconds()
-        MIN_PATROL_DURATION_SECONDS = 60
+        from apps.core.models import OrganizationPolicy
+        MIN_PATROL_DURATION_SECONDS = OrganizationPolicy.get_operational_value("PATROL_SCAN_INTERVAL", default=60)
         if elapsed_seconds < MIN_PATROL_DURATION_SECONDS:
             return Response(
                 {

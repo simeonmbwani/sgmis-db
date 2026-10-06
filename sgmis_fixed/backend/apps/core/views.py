@@ -981,6 +981,15 @@ def supervisor_dashboard(request):
             end_date__gte=today,
         ).values_list("guard_id", flat=True)
     )
+    from apps.shifts.models import DutyOverride, DutyOverrideStatus
+    active_override_guard_ids = set(
+        DutyOverride.objects.filter(
+            station=station,
+            date=today,
+            status=DutyOverrideStatus.ACTIVE,
+        ).values_list("guard_id", flat=True)
+    )
+    approved_leave_guard_ids = approved_leave_guard_ids - active_override_guard_ids
     guards_on_leave = len(approved_leave_guard_ids)
 
     all_guard_ids = set(station_guards.values_list("id", flat=True))
@@ -1090,6 +1099,9 @@ def admin_dashboard(request):
         status=LeaveStatus.APPROVED,
         start_date__lte=today,
         end_date__gte=today,
+    ).exclude(
+        guard__duty_overrides__date=today,
+        guard__duty_overrides__status="ACTIVE",
     ).values("guard_id").distinct().count()
 
     scheduled_today = Shift.objects.filter(date=today).exclude(shift_type="OFF").count()

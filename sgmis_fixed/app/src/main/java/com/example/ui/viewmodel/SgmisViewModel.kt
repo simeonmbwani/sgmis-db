@@ -157,6 +157,7 @@ data class SgmisUiState(
             "ON_DUTY" -> GuardDutyState.ON_DUTY
             "ON_LEAVE" -> GuardDutyState.ON_LEAVE
             "TIME_OFF" -> GuardDutyState.TIME_OFF
+            "REASSIGNED" -> GuardDutyState.REASSIGNED
             "ELIGIBLE_FOR_DUTY" -> GuardDutyState.ELIGIBLE_FOR_DUTY
             "EARLY_EXIT_PENDING" -> GuardDutyState.EARLY_EXIT_PENDING
             "EXAM" -> GuardDutyState.EXAM
@@ -167,7 +168,8 @@ data class SgmisUiState(
 
     val isOnDuty: Boolean get() = guardDutyState == GuardDutyState.ON_DUTY
     val isOffDuty: Boolean get() = guardDutyState.isOffDuty
-    val isEligibleForDuty: Boolean get() = guardDutyState == GuardDutyState.ELIGIBLE_FOR_DUTY
+    val isEligibleForDuty: Boolean get() = guardDutyState.isEligibleForDuty
+    val isReassigned: Boolean get() = guardDutyState.isReassigned
     val isOnLeave: Boolean get() = guardDutyState == GuardDutyState.ON_LEAVE
     val isExamDuty: Boolean get() = guardDutyState == GuardDutyState.EXAM
     val isEscortDuty: Boolean get() = guardDutyState == GuardDutyState.ESCORT

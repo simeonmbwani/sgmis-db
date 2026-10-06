@@ -40,7 +40,7 @@ fun OrganizationPolicyScreen(
         viewModel.fetchOrganizationPolicies()
     }
 
-    val categories = listOf("ALL", "LEAVE", "DUTY", "ROSTER", "PATROL", "ATTENDANCE", "COMPENSATION", "GEOFENCE", "GENERAL")
+    val categories = listOf("ALL", "LEAVE", "DUTY", "ROSTER", "PATROL", "ATTENDANCE", "COMPENSATION", "GEOFENCE", "SECURITY", "GENERAL")
 
     val filteredPolicies = remember(uiState.organizationPolicies, searchQuery, selectedCategory) {
         uiState.organizationPolicies.filter { policy ->

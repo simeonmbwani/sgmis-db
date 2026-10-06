@@ -30,6 +30,7 @@ enum class AppRole(val serverKey: String) {
 enum class GuardDutyState {
     OFF_DUTY,          // No shift today, or shift already completed/clocked out
     ELIGIBLE_FOR_DUTY, // Scheduled shift today, within report window (not yet clocked in)
+    REASSIGNED,        // Recalled from leave/off or reassigned to relief coverage (eligible for clock-in)
     ON_DUTY,           // Formally clocked in on authoritative shift, actively on post
     TIME_OFF,          // Scheduled off-duty day
     ON_LEAVE,          // Approved leave
@@ -39,13 +40,15 @@ enum class GuardDutyState {
 
     val isOnDuty: Boolean get() = this == ON_DUTY
     val isOffDuty: Boolean get() = this == OFF_DUTY || this == TIME_OFF || this == ON_LEAVE
-    val isEligibleForDuty: Boolean get() = this == ELIGIBLE_FOR_DUTY
+    val isEligibleForDuty: Boolean get() = this == ELIGIBLE_FOR_DUTY || this == REASSIGNED
     val isOnLeave: Boolean get() = this == ON_LEAVE
     val isSpecialDuty: Boolean get() = this == EXAM || this == ESCORT
+    val isReassigned: Boolean get() = this == REASSIGNED
 
     val label: String get() = when (this) {
         OFF_DUTY -> "Off Duty"
         ELIGIBLE_FOR_DUTY -> "Eligible for Duty"
+        REASSIGNED -> "Reassigned Duty"
         ON_DUTY -> "On Duty"
         TIME_OFF -> "Time Off"
         ON_LEAVE -> "On Approved Leave"
@@ -58,6 +61,7 @@ enum class GuardDutyState {
         fun fromShift(shift: Shift?): GuardDutyState {
             if (shift == null) return OFF_DUTY
             val raw = shift.rawDutyState?.trim()?.uppercase()
+            if (raw == "REASSIGNED") return REASSIGNED
             if (raw == "ON_LEAVE") return ON_LEAVE
             if (raw == "TIME_OFF") return TIME_OFF
             if (raw == "ON_DUTY") return ON_DUTY
@@ -66,17 +70,19 @@ enum class GuardDutyState {
             if (raw == "EARLY_EXIT_PENDING") return EARLY_EXIT_PENDING
             if (raw == "EXAM") return EXAM
             if (raw == "ESCORT") return ESCORT
+            if (shift.isOverride) return REASSIGNED
 
             val shiftTypeUpper = shift.shiftType.uppercase()
             val assignmentTypeUpper = shift.assignmentType.uppercase()
             if (assignmentTypeUpper == "EXAM") return EXAM
             if (assignmentTypeUpper == "ESCORT") return ESCORT
+            if (assignmentTypeUpper == "RELIEF" && shift.isOverride) return REASSIGNED
             if (shiftTypeUpper == "OFF" || assignmentTypeUpper == "TIME_OFF") {
                 return OFF_DUTY
             }
             return when (shift.attendanceStatus.trim().uppercase()) {
                 "CLOCKED_IN" -> ON_DUTY
-                "NOT_CLOCKED_IN" -> ELIGIBLE_FOR_DUTY
+                "NOT_CLOCKED_IN" -> if (shift.isOverride) REASSIGNED else ELIGIBLE_FOR_DUTY
                 "CLOCKED_OUT", "OFF_DUTY" -> OFF_DUTY
                 "ON_LEAVE" -> ON_LEAVE
                 "TIME_OFF" -> TIME_OFF

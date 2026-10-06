@@ -351,7 +351,7 @@ fun TodayShiftScreen(
                                         color = MaterialTheme.colorScheme.primary
                                     )
                                 }
-                                ShiftTypeBadge(shift.shiftType)
+                                ShiftTypeBadge(shift.shiftType, isOverride = shift.isOverride || uiState.guardDutyState.isReassigned)
                             }
 
                             Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
@@ -604,7 +604,10 @@ fun TodayShiftScreen(
                                                 }
                                             }
                                         },
-                                        enabled = shift.attendanceStatus == "NOT_CLOCKED_IN" && !uiState.clockLoading,
+                                        enabled = (shift.attendanceStatus == "NOT_CLOCKED_IN" || uiState.isEligibleForDuty) &&
+                                                  shift.attendanceStatus != "CLOCKED_IN" &&
+                                                  shift.attendanceStatus != "CLOCKED_OUT" &&
+                                                  !uiState.clockLoading,
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = MaterialTheme.colorScheme.primary
                                         ),
@@ -1036,7 +1039,34 @@ fun TodayShiftScreen(
 }
 
 @Composable
-fun ShiftTypeBadge(type: String) {
+fun ShiftTypeBadge(type: String, isOverride: Boolean = false) {
+    if (isOverride) {
+        Surface(
+            color = Color(0xFF2563EB).copy(alpha = 0.15f),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SwapHoriz,
+                    contentDescription = null,
+                    tint = Color(0xFF2563EB),
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "REASSIGNED DUTY ($type)",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF2563EB)
+                )
+            }
+        }
+        return
+    }
+
     val isDay = type == "DAY"
     val bgColor = if (isDay) GoldAccent.copy(alpha = 0.2f) else MaterialTheme.colorScheme.primaryContainer
     val textColor = if (isDay) GoldAccent else MaterialTheme.colorScheme.primary
@@ -1071,6 +1101,7 @@ fun AttendanceStatusPill(status: String) {
     val (label, bg, fg) = when (status) {
         "CLOCKED_IN" -> Triple("ON DUTY", StatusSuccess.copy(alpha = 0.2f), StatusSuccess)
         "CLOCKED_OUT" -> Triple("COMPLETED", MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primary)
+        "REASSIGNED" -> Triple("REASSIGNED DUTY", Color(0xFF2563EB).copy(alpha = 0.15f), Color(0xFF2563EB))
         else -> Triple("NOT CLOCKED IN", StatusWarning.copy(alpha = 0.2f), StatusWarning)
     }
 

@@ -108,19 +108,28 @@ class ShiftSerializer(serializers.ModelSerializer):
 
     def get_duty_state(self, obj):
         from apps.leave.models import LeaveApplication, LeaveStatus
-        leave_app = getattr(obj, "_leave_app", None)
-        if leave_app is None:
-            leave_app = LeaveApplication.objects.filter(
-                guard=obj.guard,
-                status=LeaveStatus.APPROVED,
-                start_date__lte=obj.date,
-                end_date__gte=obj.date,
-            ).first()
-        if leave_app:
-            return "ON_LEAVE"
+        from .models import DutyOverride, DutyOverrideStatus
 
-        if obj.assignment_type == AssignmentType.TIME_OFF or obj.shift_type == ShiftType.OFF:
-            return "TIME_OFF"
+        has_active_override = getattr(obj, "is_override", False) or DutyOverride.objects.filter(
+            guard=obj.guard,
+            date=obj.date,
+            status=DutyOverrideStatus.ACTIVE,
+        ).exists()
+
+        if not has_active_override:
+            leave_app = getattr(obj, "_leave_app", None)
+            if leave_app is None:
+                leave_app = LeaveApplication.objects.filter(
+                    guard=obj.guard,
+                    status=LeaveStatus.APPROVED,
+                    start_date__lte=obj.date,
+                    end_date__gte=obj.date,
+                ).first()
+            if leave_app:
+                return "ON_LEAVE"
+
+            if obj.assignment_type == AssignmentType.TIME_OFF or obj.shift_type == ShiftType.OFF:
+                return "TIME_OFF"
 
         att = getattr(obj, "_attendance_record", None)
         if att is None:
@@ -150,10 +159,23 @@ class ShiftSerializer(serializers.ModelSerializer):
         if now > sched_end_dt:
             return "OFF_DUTY"
 
+        if has_active_override:
+            return "REASSIGNED"
+
         return "ELIGIBLE_FOR_DUTY"
 
     def get_leave_type(self, obj):
         from apps.leave.models import LeaveApplication, LeaveStatus
+        from .models import DutyOverride, DutyOverrideStatus
+
+        has_active_override = getattr(obj, "is_override", False) or DutyOverride.objects.filter(
+            guard=obj.guard,
+            date=obj.date,
+            status=DutyOverrideStatus.ACTIVE,
+        ).exists()
+        if has_active_override:
+            return None
+
         leave_app = getattr(obj, "_leave_app", None)
         if leave_app is None:
             leave_app = LeaveApplication.objects.filter(
@@ -201,7 +223,13 @@ class ShiftSerializer(serializers.ModelSerializer):
         return now > (sched_start_dt + timedelta(minutes=15))
 
     def get_clock_in_enabled(self, obj):
-        if obj.assignment_type == AssignmentType.TIME_OFF or obj.shift_type == ShiftType.OFF:
+        from .models import DutyOverride, DutyOverrideStatus
+        has_active_override = getattr(obj, "is_override", False) or DutyOverride.objects.filter(
+            guard=obj.guard,
+            date=obj.date,
+            status=DutyOverrideStatus.ACTIVE,
+        ).exists()
+        if not has_active_override and (obj.assignment_type == AssignmentType.TIME_OFF or obj.shift_type == ShiftType.OFF):
             return False
         att = getattr(obj, "_attendance_record", None)
         if att is None:
@@ -218,8 +246,9 @@ class ShiftSerializer(serializers.ModelSerializer):
             sched_end_dt = timezone.make_aware(datetime.combine(obj.date + timedelta(days=1), obj.end_time), timezone.get_current_timezone())
         else:
             sched_end_dt = timezone.make_aware(datetime.combine(obj.date, obj.end_time), timezone.get_current_timezone())
-        reporting_open = sched_start_dt - timedelta(minutes=30)
-        return reporting_open <= now <= sched_end_dt
+
+        reporting_open_dt = sched_start_dt - timedelta(minutes=30)
+        return reporting_open_dt <= now <= sched_end_dt
 
     def get_clock_out_enabled(self, obj):
         if obj.assignment_type == AssignmentType.TIME_OFF or obj.shift_type == ShiftType.OFF:

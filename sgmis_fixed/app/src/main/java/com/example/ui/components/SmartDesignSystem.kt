@@ -355,12 +355,26 @@ fun SmartSearchBar(
             }
         },
         singleLine = true,
+        textStyle = androidx.compose.ui.text.TextStyle(
+            color = TextPrimary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Normal
+        ),
         shape = RoundedCornerShape(12.dp),
         colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = TextPrimary,
+            unfocusedTextColor = TextPrimary,
+            cursorColor = NavyDark,
             focusedBorderColor = NavyDark,
             unfocusedBorderColor = CardBorder,
             focusedContainerColor = LightSurface,
-            unfocusedContainerColor = LightSurface
+            unfocusedContainerColor = LightSurface,
+            focusedPlaceholderColor = TextMuted,
+            unfocusedPlaceholderColor = TextMuted,
+            focusedLeadingIconColor = TextSecondary,
+            unfocusedLeadingIconColor = TextSecondary,
+            focusedTrailingIconColor = TextSecondary,
+            unfocusedTrailingIconColor = TextSecondary
         ),
         modifier = modifier
             .fillMaxWidth()

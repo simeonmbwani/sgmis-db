@@ -147,10 +147,13 @@ class OrganizationPolicy(models.Model):
         ATTENDANCE = "ATTENDANCE", "Attendance & Clock-In Policy"
         COMPENSATION = "COMPENSATION", "Public Holiday & Duty Compensation Policy"
         GEOFENCE = "GEOFENCE", "Station Perimeter & Geofence Policy"
+        SECURITY = "SECURITY", "Access Control & Information Security Policy"
         GENERAL = "GENERAL", "General Security Operations Policy"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     category = models.CharField(max_length=64, choices=Category.choices, db_index=True)
+    policy_key = models.CharField(max_length=64, blank=True, default="", db_index=True)
+    setting_value = models.CharField(max_length=128, blank=True, default="")
     title = models.CharField(max_length=150)
     summary = models.CharField(max_length=255, blank=True, default="")
     content = models.TextField()
@@ -171,5 +174,46 @@ class OrganizationPolicy(models.Model):
 
     def __str__(self):
         return f"[{self.category}] {self.title} (v{self.version})"
+
+    @classmethod
+    def get_operational_value(cls, key: str, default=None):
+        """
+        Dynamically extracts authoritative operational parameters from active policies.
+        Supported keys:
+          - 'PATROL_SCAN_INTERVAL': minimum patrol duration / scan interval (seconds, default 60)
+          - 'STATION_GEOFENCE_RADIUS': station geofence radius (meters, default 200.0)
+          - 'PATROL_PROXIMITY_RADIUS': checkpoint proximity radius (meters, default 100.0)
+          - 'LEAVE_INTERRUPTION_COMPENSATION': days compensation per interrupted leave day (default 1.0)
+        """
+        try:
+            policy = cls.objects.filter(policy_key=key, is_active=True).first()
+            if policy and policy.setting_value:
+                if isinstance(default, int):
+                    return int(float(policy.setting_value))
+                elif isinstance(default, float):
+                    return float(policy.setting_value)
+                return policy.setting_value
+
+            cat_map = {
+                "PATROL_SCAN_INTERVAL": cls.Category.PATROL,
+                "PATROL_PROXIMITY_RADIUS": cls.Category.PATROL,
+                "STATION_GEOFENCE_RADIUS": cls.Category.GEOFENCE,
+                "LEAVE_INTERRUPTION_COMPENSATION": cls.Category.COMPENSATION,
+            }
+            if key in cat_map:
+                cat_policy = cls.objects.filter(category=cat_map[key], is_active=True).first()
+                if cat_policy and cat_policy.content:
+                    import re
+                    match = re.search(rf"{key}\s*=\s*([0-9.]+)", cat_policy.content)
+                    if match:
+                        val_str = match.group(1)
+                        if isinstance(default, int):
+                            return int(float(val_str))
+                        elif isinstance(default, float):
+                            return float(val_str)
+                        return val_str
+        except Exception:
+            pass
+        return default
 
 

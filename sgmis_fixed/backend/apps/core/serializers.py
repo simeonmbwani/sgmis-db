@@ -98,6 +98,8 @@ class OrganizationPolicySerializer(serializers.ModelSerializer):
             "id",
             "category",
             "category_display",
+            "policy_key",
+            "setting_value",
             "title",
             "summary",
             "content",

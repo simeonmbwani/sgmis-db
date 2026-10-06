@@ -1144,7 +1144,8 @@ fun DashboardScreen(
                     // ----------------------------------------------------------
                     // STATE 3: GUARD ELIGIBLE FOR DUTY (Ready to Clock In)
                     // ----------------------------------------------------------
-                    GuardDutyState.ELIGIBLE_FOR_DUTY -> {
+                    GuardDutyState.ELIGIBLE_FOR_DUTY, GuardDutyState.REASSIGNED -> {
+                        val isReassigned = uiState.guardDutyState == GuardDutyState.REASSIGNED
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1171,7 +1172,7 @@ fun DashboardScreen(
                                         shape = RoundedCornerShape(6.dp)
                                     ) {
                                         Text(
-                                            text = "▲ READY FOR DUTY",
+                                            text = if (isReassigned) "⚡ REASSIGNED DUTY" else "▲ READY FOR DUTY",
                                             color = Color.Black,
                                             style = MaterialTheme.typography.labelSmall,
                                             fontWeight = FontWeight.Bold,
@@ -1186,7 +1187,11 @@ fun DashboardScreen(
                                 }
 
                                 Text(
-                                    text = "Scheduled at ${uiState.currentStationName}",
+                                    text = if (isReassigned) {
+                                        "Assigned Post: ${uiState.currentStationName}"
+                                    } else {
+                                        "Scheduled at ${uiState.currentStationName}"
+                                    },
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -1198,7 +1203,11 @@ fun DashboardScreen(
                                 )
 
                                 Text(
-                                    text = "You have a scheduled shift today. Clock in to unlock operational logs, patrol recording, and occurrence book.",
+                                    text = if (isReassigned) {
+                                        "Administrative recall/reassignment to active duty. Clock in to unlock operational logs, patrol recording, and occurrence book."
+                                    } else {
+                                        "You have a scheduled shift today. Clock in to unlock operational logs, patrol recording, and occurrence book."
+                                    },
                                     style = MaterialTheme.typography.bodySmall
                                 )
 
@@ -4910,7 +4919,7 @@ private fun NationalRosterOversightCard(
                         val dutyBadgeColor = when (shift.dutyState) {
                             GuardDutyState.ON_DUTY -> StatusSuccess
                             GuardDutyState.ON_LEAVE -> StatusWarning
-                            GuardDutyState.ELIGIBLE_FOR_DUTY -> GoldAccent
+                            GuardDutyState.ELIGIBLE_FOR_DUTY, GuardDutyState.REASSIGNED -> GoldAccent
                             GuardDutyState.EXAM, GuardDutyState.ESCORT -> MaterialTheme.colorScheme.tertiary
                             else -> MaterialTheme.colorScheme.outline
                         }
