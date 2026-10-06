@@ -114,9 +114,12 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
         if target_guard.station_id != station.id:
             raise PermissionDenied("Supervisor cannot assign patrol outside station. Guard is assigned to a different station.")
 
-        name = self.request.data.get("name") or "Routine Station Patrol"
-        start_window = self.request.data.get("start_window")
-        deadline = self.request.data.get("deadline")
+        name = self.request.data.get("name") or serializer.validated_data.get("name") or "Routine Station Patrol"
+        start_window = serializer.validated_data.get("start_window") or self.request.data.get("start_window")
+        deadline = serializer.validated_data.get("deadline") or self.request.data.get("deadline")
+        notes = serializer.validated_data.get("notes")
+        if notes is None:
+            notes = self.request.data.get("notes") or ""
 
         serializer.save(
             guard=target_guard,
@@ -125,6 +128,7 @@ class PatrolLogViewSet(viewsets.ModelViewSet):
             name=name,
             start_window=start_window,
             deadline=deadline,
+            notes=notes,
             status=PatrolStatus.ASSIGNED,
         )
 

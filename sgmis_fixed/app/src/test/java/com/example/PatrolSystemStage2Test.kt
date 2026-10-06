@@ -217,4 +217,24 @@ class PatrolSystemStage2Test {
         val nextAll = ordered.firstOrNull { !scanned.contains(it.id) }
         assertNull(nextAll)
     }
+
+    @Test
+    fun testAssignPatrolRequest_blankNotesDefaultsToEmptyString() {
+        val req = AssignPatrolRequest(
+            guard = "guard-uuid-1",
+            station = "station-uuid-1",
+            name = "Routine Station Patrol"
+        )
+        assertEquals("", req.notes)
+        assertEquals("guard-uuid-1", req.guard)
+        assertEquals("station-uuid-1", req.station)
+    }
+
+    @Test
+    fun testIncidentResolveRequest_creation() {
+        val req = IncidentResolveRequest(
+            resolutionNotes = "Resolved by Supervisor: Perimeter restored and logged."
+        )
+        assertEquals("Resolved by Supervisor: Perimeter restored and logged.", req.resolutionNotes)
+    }
 }

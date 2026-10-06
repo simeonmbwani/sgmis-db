@@ -745,7 +745,7 @@ class SgmisRepository(
         name: String = "Routine Station Patrol",
         startWindow: String? = null,
         deadline: String? = null,
-        notes: String? = null
+        notes: String? = ""
     ): Result<PatrolLog> {
         return try {
             val response = api.assignPatrol(
@@ -755,7 +755,7 @@ class SgmisRepository(
                     name = name,
                     startWindow = startWindow,
                     deadline = deadline,
-                    notes = notes
+                    notes = notes ?: ""
                 )
             )
             if (response.isSuccessful && response.body() != null) {

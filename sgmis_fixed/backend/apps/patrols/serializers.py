@@ -82,6 +82,10 @@ class PatrolLogSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             "guard": {"required": False},
             "station": {"required": False, "allow_null": True},
+            "notes": {"required": False, "allow_null": True, "allow_blank": True},
+            "name": {"required": False, "allow_null": True, "allow_blank": True},
+            "start_window": {"required": False, "allow_null": True},
+            "deadline": {"required": False, "allow_null": True},
         }
 
     def get_anomalies_count(self, obj):
@@ -92,6 +96,9 @@ class PatrolLogSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         request = self.context.get("request")
         user = getattr(request, "user", None)
+
+        if attrs.get("notes") is None:
+            attrs["notes"] = ""
 
         station = attrs.get("station")
         if user and getattr(user, "role", None) == "GUARD":
@@ -111,6 +118,8 @@ class PatrolLogSerializer(serializers.ModelSerializer):
         elif not station:
             if user and getattr(user, "station", None):
                 attrs["station"] = user.station
+            elif attrs.get("guard") and getattr(attrs["guard"], "station", None):
+                attrs["station"] = attrs["guard"].station
             else:
                 raise serializers.ValidationError({
                     "station": "A valid station is required. Your account has no station assigned."

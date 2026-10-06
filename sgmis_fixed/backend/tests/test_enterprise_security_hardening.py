@@ -191,7 +191,7 @@ class EnterpriseSecurityHardeningTests(TestCase):
         self.assertEqual(verified_resp.status_code, status.HTTP_201_CREATED)
 
     def test_supervisor_guardrails_incident_resolution_and_downgrade(self):
-        """Supervisor cannot resolve incident (must triage), cannot downgrade severity."""
+        """Guard cannot resolve incident; Supervisor can resolve incident at own station; cannot downgrade severity."""
         inc = IncidentReport.objects.create(
             station=self.station,
             reporting_guard=self.guard_1,
@@ -201,14 +201,15 @@ class EnterpriseSecurityHardeningTests(TestCase):
             location="East Gate",
         )
 
-        # Supervisor tries to resolve -> 403 Forbidden
-        self.client.force_authenticate(user=self.supervisor)
-        resolve_resp = self.client.post(f"/incidents/reports/{inc.id}/resolve/", {
-            "resolution_notes": "Supervisor resolved.",
+        # Guard tries to resolve -> 403 Forbidden
+        self.client.force_authenticate(user=self.guard_1)
+        guard_resolve_resp = self.client.post(f"/incidents/reports/{inc.id}/resolve/", {
+            "resolution_notes": "Guard attempted resolution.",
         })
-        self.assertEqual(resolve_resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(guard_resolve_resp.status_code, status.HTTP_403_FORBIDDEN)
 
         # Supervisor can triage: acknowledge, assign, escalate
+        self.client.force_authenticate(user=self.supervisor)
         ack_resp = self.client.post(f"/incidents/reports/{inc.id}/acknowledge/")
         self.assertEqual(ack_resp.status_code, status.HTTP_200_OK)
 
@@ -223,7 +224,17 @@ class EnterpriseSecurityHardeningTests(TestCase):
         })
         self.assertEqual(downgrade_resp.status_code, status.HTTP_400_BAD_REQUEST)
 
+        # Supervisor resolves incident at own station -> 200 OK
+        resolve_resp = self.client.post(f"/incidents/reports/{inc.id}/resolve/", {
+            "resolution_notes": "Supervisor resolved.",
+        })
+        self.assertEqual(resolve_resp.status_code, status.HTTP_200_OK)
+        inc.refresh_from_db()
+        self.assertEqual(inc.status, IncidentStatus.RESOLVED)
+
         # Admin resolves incident -> 200 OK
+        inc.status = IncidentStatus.INVESTIGATING
+        inc.save()
         self.client.force_authenticate(user=self.admin)
         admin_resolve = self.client.post(f"/incidents/reports/{inc.id}/resolve/", {
             "resolution_notes": "Armed response team deployed and perimeter secured.",

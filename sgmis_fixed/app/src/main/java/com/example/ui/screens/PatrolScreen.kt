@@ -732,7 +732,7 @@ fun PatrolScreen(
                                 name = patrolName,
                                 startWindow = java.time.Instant.now().toString(),
                                 deadline = deadlineIso,
-                                notes = notes.ifBlank { null }
+                                notes = notes.trim()
                             )
                         }
                     },

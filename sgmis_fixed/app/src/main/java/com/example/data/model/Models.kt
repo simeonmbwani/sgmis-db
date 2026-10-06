@@ -434,7 +434,7 @@ data class AssignPatrolRequest(
     val name: String = "Routine Station Patrol",
     @Json(name = "start_window") val startWindow: String? = null,
     val deadline: String? = null,
-    val notes: String? = null
+    val notes: String? = ""
 )
 
 @JsonClass(generateAdapter = true)

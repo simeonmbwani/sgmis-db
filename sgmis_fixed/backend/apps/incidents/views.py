@@ -225,13 +225,20 @@ class IncidentReportViewSet(viewsets.ModelViewSet):
             "incident": self.get_serializer(incident).data
         }, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["post"], url_path="resolve", permission_classes=[IsAdministrator])
+    @action(detail=True, methods=["post"], url_path="resolve", permission_classes=[IsSupervisorOrAdmin])
     def resolve(self, request, pk=None):
         """
-        Only Administrators can resolve/close incidents.
-        Supervisors cannot close incidents (must triage: acknowledge -> assign -> escalate).
+        Administrators have global incident resolution authority.
+        Station Supervisors have operational incident resolution authority for their assigned station.
+        Guards cannot resolve incidents.
         """
         incident = self.get_object()
+        user = request.user
+
+        if user.role == UserRole.SUPERVISOR:
+            if not user.station or incident.station_id != user.station_id:
+                raise PermissionDenied("Station isolation: You can only resolve incidents belonging to your assigned station.")
+
         notes = request.data.get("resolution_notes", "").strip()
         incident.status = IncidentStatus.RESOLVED
         incident.resolution_notes = notes
