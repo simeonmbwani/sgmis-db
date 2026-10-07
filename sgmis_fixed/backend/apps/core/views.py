@@ -1,3 +1,4 @@
+import os
 from django.utils import timezone
 from django.db import models
 from rest_framework import viewsets, status
@@ -24,9 +25,20 @@ def health_check(request):
     Service health check endpoint.
     Safe for load balancers and container orchestrators.
     """
+    flag = os.getenv("CREATE_INITIAL_SUPERUSER", "").strip().lower() in ("true", "1")
+    try:
+        superusers = list(User.objects.filter(is_superuser=True).values_list("username", flat=True))
+        superuser_count = len(superusers)
+    except Exception:
+        superusers = []
+        superuser_count = 0
+
     return Response({
         "status": "ok",
         "service": "sgmis-api",
+        "superuser_count": superuser_count,
+        "superusers": superusers,
+        "create_initial_superuser_enabled": flag,
     })
 
 @api_view(["GET"])

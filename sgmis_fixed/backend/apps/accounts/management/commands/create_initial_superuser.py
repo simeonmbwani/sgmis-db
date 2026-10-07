@@ -20,7 +20,8 @@ class Command(BaseCommand):
         username = (
             os.getenv("SUPERUSER_USERNAME")
             or os.getenv("DJANGO_SUPERUSER_USERNAME")
-            or ""
+            or os.getenv("ADMIN_USERNAME")
+            or "admin"
         ).strip()
 
         password = (
@@ -43,10 +44,7 @@ class Command(BaseCommand):
         ).strip()
 
         if not username:
-            self.stderr.write(
-                "create_initial_superuser: Required username environment variable (SUPERUSER_USERNAME or DJANGO_SUPERUSER_USERNAME) is missing. No user created."
-            )
-            return
+            username = "admin"
 
         if not password:
             self.stderr.write(
