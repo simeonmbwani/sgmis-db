@@ -30,12 +30,28 @@ def health_check(request):
     target_user = os.getenv("SUPERUSER_USERNAME") or os.getenv("DJANGO_SUPERUSER_USERNAME") or os.getenv("ADMIN_USERNAME") or "admin"
 
     superusers = []
+    target_user_info = None
     db_status = "ok"
     try:
         from django.db import connection
         with connection.cursor() as cur:
             cur.execute("SELECT username FROM accounts_user WHERE is_superuser = true;")
             superusers = [r[0] for r in cur.fetchall()]
+
+            cur.execute("SELECT username, role, is_superuser, is_staff, is_active, employee_number FROM accounts_user WHERE username = %s;", [target_user])
+            row = cur.fetchone()
+            if row:
+                target_user_info = {
+                    "exists": True,
+                    "username": row[0],
+                    "role": row[1],
+                    "is_superuser": row[2],
+                    "is_staff": row[3],
+                    "is_active": row[4],
+                    "employee_number": row[5],
+                }
+            else:
+                target_user_info = {"exists": False}
     except Exception as e:
         db_status = "error"
 
@@ -48,6 +64,7 @@ def health_check(request):
         "create_initial_superuser_enabled": flag,
         "has_superuser_password_configured": has_pwd,
         "target_username": target_user,
+        "target_user_info": target_user_info,
     })
 
 @api_view(["GET"])
