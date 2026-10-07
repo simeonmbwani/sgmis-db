@@ -46,39 +46,49 @@ class LoginView(APIView):
         client_ip = get_client_ip(request)
         now = timezone.now()
 
-        # Check existing lockout record
+        MAX_FAILED_ATTEMPTS = 5
+        LOCKOUT_MINUTES = 15
+        WINDOW_MINUTES = 15
+
+        # Check existing lockout record strictly by identifier if supplied
         attempt_record = None
         if identifier:
             attempt_record = LoginAttempt.objects.filter(identifier=identifier).first()
-        if not attempt_record and client_ip:
-            attempt_record = LoginAttempt.objects.filter(ip_address=client_ip).first()
+        elif client_ip:
+            attempt_record = LoginAttempt.objects.filter(identifier="anonymous", ip_address=client_ip).first()
 
-        if attempt_record and attempt_record.locked_until and attempt_record.locked_until > now:
-            remaining_seconds = int((attempt_record.locked_until - now).total_seconds())
-            remaining_minutes = max(1, (remaining_seconds + 59) // 60)
-            log_security_event(
-                event_type=SecurityAuditEvent.EventType.LOGIN_FAILURE,
-                actor_username=identifier,
-                ip_address=client_ip,
-                details={"reason": "Attempt on locked account", "remaining_minutes": remaining_minutes}
-            )
-            return Response({
-                "detail": f"Account locked due to 3 failed login attempts. Please retry after {remaining_minutes} minute(s).",
-                "is_locked": True,
-                "lockout_remaining_minutes": remaining_minutes,
-                "locked_until": attempt_record.locked_until.isoformat(),
-            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        # 1. Reset if lockout period has expired
+        if attempt_record and attempt_record.locked_until:
+            if attempt_record.locked_until <= now:
+                attempt_record.failed_attempts = 0
+                attempt_record.locked_until = None
+                attempt_record.save(update_fields=["failed_attempts", "locked_until"])
+            else:
+                remaining_seconds = int((attempt_record.locked_until - now).total_seconds())
+                remaining_minutes = max(1, (remaining_seconds + 59) // 60)
+                log_security_event(
+                    event_type=SecurityAuditEvent.EventType.LOGIN_FAILURE,
+                    actor_username=identifier,
+                    ip_address=client_ip,
+                    details={"reason": "Attempt on locked account", "remaining_minutes": remaining_minutes}
+                )
+                return Response({
+                    "detail": f"Account locked due to {MAX_FAILED_ATTEMPTS} failed login attempts. Please retry after {remaining_minutes} minute(s).",
+                    "is_locked": True,
+                    "lockout_remaining_minutes": remaining_minutes,
+                    "locked_until": attempt_record.locked_until.isoformat(),
+                }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        # 2. Reset if sliding window has elapsed since last failed attempt (stale counter)
+        if attempt_record and attempt_record.failed_attempts > 0 and attempt_record.last_attempt:
+            if (now - attempt_record.last_attempt) > timedelta(minutes=WINDOW_MINUTES):
+                attempt_record.failed_attempts = 0
+                attempt_record.save(update_fields=["failed_attempts"])
 
         serializer = LoginSerializer(data=request.data)
         if not serializer.is_valid():
             # Record failed login attempt
-            if not attempt_record and identifier:
-                attempt_record = LoginAttempt.objects.create(
-                    identifier=identifier,
-                    ip_address=client_ip,
-                    failed_attempts=0
-                )
-            elif not attempt_record and client_ip:
+            if not attempt_record:
                 attempt_record = LoginAttempt.objects.create(
                     identifier=identifier or "anonymous",
                     ip_address=client_ip,
@@ -87,24 +97,24 @@ class LoginView(APIView):
 
             if attempt_record:
                 attempt_record.failed_attempts += 1
-                if attempt_record.failed_attempts >= 3:
-                    attempt_record.locked_until = now + timedelta(minutes=15)
+                if attempt_record.failed_attempts >= MAX_FAILED_ATTEMPTS:
+                    attempt_record.locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
                     attempt_record.save()
                     log_security_event(
                         event_type=SecurityAuditEvent.EventType.LOGIN_FAILURE,
                         actor_username=identifier,
                         ip_address=client_ip,
-                        details={"reason": "Account locked after 3 failed attempts"}
+                        details={"reason": f"Account locked after {MAX_FAILED_ATTEMPTS} failed attempts"}
                     )
                     return Response({
-                        "detail": "Maximum 3 failed login attempts exceeded. Account is locked for 15 minutes.",
+                        "detail": f"Maximum {MAX_FAILED_ATTEMPTS} failed login attempts exceeded. Account is locked for {LOCKOUT_MINUTES} minutes.",
                         "is_locked": True,
-                        "lockout_remaining_minutes": 15,
+                        "lockout_remaining_minutes": LOCKOUT_MINUTES,
                         "locked_until": attempt_record.locked_until.isoformat(),
                     }, status=status.HTTP_429_TOO_MANY_REQUESTS)
                 else:
                     attempt_record.save()
-                    remaining_attempts = 3 - attempt_record.failed_attempts
+                    remaining_attempts = MAX_FAILED_ATTEMPTS - attempt_record.failed_attempts
                     log_security_event(
                         event_type=SecurityAuditEvent.EventType.LOGIN_FAILURE,
                         actor_username=identifier,
@@ -112,7 +122,7 @@ class LoginView(APIView):
                         details={"failed_attempts": attempt_record.failed_attempts, "remaining": remaining_attempts}
                     )
                     return Response({
-                        "detail": f"Invalid credentials. {remaining_attempts} attempt(s) remaining before a 15-minute account lockout.",
+                        "detail": f"Invalid credentials. {remaining_attempts} attempt(s) remaining before a {LOCKOUT_MINUTES}-minute account lockout.",
                         "is_locked": False,
                         "remaining_attempts": remaining_attempts,
                     }, status=status.HTTP_400_BAD_REQUEST)
@@ -125,15 +135,16 @@ class LoginView(APIView):
             )
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        # Login succeeded: reset failed attempts
+        # Login succeeded: reset failed attempts for this user
         user = serializer.validated_data["user"]
         if attempt_record:
             attempt_record.failed_attempts = 0
             attempt_record.locked_until = None
             attempt_record.save()
 
-        if client_ip:
-            LoginAttempt.objects.filter(ip_address=client_ip).update(failed_attempts=0, locked_until=None)
+        LoginAttempt.objects.filter(identifier=user.username).update(failed_attempts=0, locked_until=None)
+        if user.employee_number:
+            LoginAttempt.objects.filter(identifier=user.employee_number).update(failed_attempts=0, locked_until=None)
 
         log_security_event(
             event_type=SecurityAuditEvent.EventType.LOGIN_SUCCESS,
@@ -344,8 +355,6 @@ class PasswordResetConfirmView(APIView):
             LoginAttempt.objects.filter(identifier=user.email).update(failed_attempts=0, locked_until=None)
         if ident:
             LoginAttempt.objects.filter(identifier=ident).update(failed_attempts=0, locked_until=None)
-        if client_ip:
-            LoginAttempt.objects.filter(ip_address=client_ip).update(failed_attempts=0, locked_until=None)
 
         log_security_event(
             event_type=SecurityAuditEvent.EventType.PASSWORD_RESET_SUCCESS,

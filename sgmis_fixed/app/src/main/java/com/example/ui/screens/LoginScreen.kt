@@ -301,7 +301,7 @@ fun LoginScreen(
                             ),
                             keyboardActions = KeyboardActions(
                                 onDone = {
-                                    if (!uiState.isLockedOut) {
+                                    if (!uiState.isLockedOut && !uiState.isLoading) {
                                         viewModel.login(identifier, password)
                                     }
                                 }

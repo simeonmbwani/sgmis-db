@@ -75,24 +75,24 @@ class Batch1SecurityFoundationTests(TestCase):
     # -------------------------------------------------------------------------
     # 1. AUTHENTICATION & LOGIN THROTTLING
     # -------------------------------------------------------------------------
-    def test_login_throttling_3_attempts_and_lockout(self):
-        """3 failed login attempts lock account for 15 minutes and create audit events."""
-        for i in range(2):
+    def test_login_throttling_5_attempts_and_lockout(self):
+        """5 failed login attempts lock account for 15 minutes and create audit events."""
+        for i in range(4):
             resp = self.client.post("/auth/login/", {
                 "identifier": "guard_alice",
                 "password": "wrong_password",
             })
             self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
             self.assertFalse(resp.data.get("is_locked", False))
-            self.assertEqual(resp.data.get("remaining_attempts"), 2 - i)
+            self.assertEqual(resp.data.get("remaining_attempts"), 4 - i)
 
-        # 3rd attempt locks account
-        resp_3 = self.client.post("/auth/login/", {
+        # 5th attempt locks account
+        resp_5 = self.client.post("/auth/login/", {
             "identifier": "guard_alice",
             "password": "wrong_password",
         })
-        self.assertEqual(resp_3.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
-        self.assertTrue(resp_3.data.get("is_locked", True))
+        self.assertEqual(resp_5.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertTrue(resp_5.data.get("is_locked", True))
 
         # Locked account rejects even correct password
         resp_blocked = self.client.post("/auth/login/", {
@@ -106,7 +106,7 @@ class Batch1SecurityFoundationTests(TestCase):
             event_type=SecurityAuditEvent.EventType.LOGIN_FAILURE,
             actor_username="guard_alice",
         )
-        self.assertGreaterEqual(audit_events.count(), 3)
+        self.assertGreaterEqual(audit_events.count(), 5)
 
     def test_login_success_resets_failures_and_audits(self):
         """Successful login resets failed attempts and logs LOGIN_SUCCESS."""

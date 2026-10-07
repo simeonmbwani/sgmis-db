@@ -330,32 +330,32 @@ class AuthoritativeRosterAndGuardIdentityTests(TestCase):
         self.assertTrue(resolved_tomorrow["clock_in_enabled"])
 
     # =========================================================================
-    # 6. AUTHENTICATION LOCKOUT (3 FAILED ATTEMPTS) & SMS RESET UNLOCK
+    # 6. AUTHENTICATION LOCKOUT (5 FAILED ATTEMPTS) & SMS RESET UNLOCK
     # =========================================================================
-    def test_three_failed_logins_lockout_and_sms_recovery_unlock(self):
+    def test_five_failed_logins_lockout_and_sms_recovery_unlock(self):
         """
-        Attempt 1: retry allowed.
-        Attempt 2: retry allowed.
-        Attempt 3: locked for 15 minutes.
+        Attempts 1-4: retry allowed with decreasing remaining_attempts.
+        Attempt 5: locked for 15 minutes.
         Reset password via SMS OTP unlocks the account immediately.
         """
         # Attempt 1
         r1 = self.client.post("/auth/login/", {"identifier": "guard_a", "password": "wrong"})
         self.assertEqual(r1.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(r1.data.get("remaining_attempts"), 2)
+        self.assertEqual(r1.data.get("remaining_attempts"), 4)
         self.assertFalse(r1.data.get("is_locked", False))
 
-        # Attempt 2
-        r2 = self.client.post("/auth/login/", {"identifier": "guard_a", "password": "wrong"})
-        self.assertEqual(r2.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(r2.data.get("remaining_attempts"), 1)
-        self.assertFalse(r2.data.get("is_locked", False))
+        # Attempts 2, 3, 4
+        for i in range(2, 5):
+            r = self.client.post("/auth/login/", {"identifier": "guard_a", "password": "wrong"})
+            self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+            self.assertEqual(r.data.get("remaining_attempts"), 5 - i)
+            self.assertFalse(r.data.get("is_locked", False))
 
-        # Attempt 3 -> Locked
-        r3 = self.client.post("/auth/login/", {"identifier": "guard_a", "password": "wrong"})
-        self.assertEqual(r3.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
-        self.assertTrue(r3.data.get("is_locked", False))
-        self.assertEqual(r3.data.get("lockout_remaining_minutes"), 15)
+        # Attempt 5 -> Locked
+        r5 = self.client.post("/auth/login/", {"identifier": "guard_a", "password": "wrong"})
+        self.assertEqual(r5.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertTrue(r5.data.get("is_locked", False))
+        self.assertEqual(r5.data.get("lockout_remaining_minutes"), 15)
 
         # Attempt with correct password while locked is rejected
         r_blocked = self.client.post("/auth/login/", {"identifier": "guard_a", "password": "Password123!"})

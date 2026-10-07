@@ -418,6 +418,7 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
 
     // --- Authentication ---
     fun login(identifier: String, pass: String, onSuccess: () -> Unit = {}) {
+        if (_uiState.value.isLoading || _uiState.value.isLockedOut) return
         if (identifier.isBlank() || pass.isBlank()) {
             _uiState.update { it.copy(errorMessage = "Username or Employee ID and password are required.") }
             return

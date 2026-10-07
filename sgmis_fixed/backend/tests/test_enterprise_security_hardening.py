@@ -58,30 +58,129 @@ class EnterpriseSecurityHardeningTests(TestCase):
             employee_number="SEC-102",
         )
 
-    def test_brute_force_lockout_after_three_failed_attempts(self):
-        """3 failed login attempts trigger a 15-minute lockout (HTTP 429)."""
-        for i in range(2):
+    def test_brute_force_lockout_after_five_failed_attempts(self):
+        """5 failed login attempts trigger a 15-minute lockout (HTTP 429)."""
+        for i in range(4):
             resp = self.client.post("/auth/login/", {
                 "identifier": "guard_alice",
                 "password": "wrongpassword!",
             })
             self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
             self.assertFalse(resp.data.get("is_locked", False))
+            self.assertEqual(resp.data.get("remaining_attempts"), 4 - i)
 
-        # 3rd attempt triggers lockout
-        third_resp = self.client.post("/auth/login/", {
+        # 5th attempt triggers lockout
+        fifth_resp = self.client.post("/auth/login/", {
             "identifier": "guard_alice",
             "password": "wrongpassword!",
         })
-        self.assertEqual(third_resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
-        self.assertTrue(third_resp.data.get("is_locked", False))
+        self.assertEqual(fifth_resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertTrue(fifth_resp.data.get("is_locked", False))
+        self.assertEqual(fifth_resp.data.get("lockout_remaining_minutes"), 15)
 
-        # 4th attempt (even with right password) is blocked by lockout
+        # 6th attempt (even with right password) is blocked by lockout
         blocked_resp = self.client.post("/auth/login/", {
             "identifier": "guard_alice",
             "password": "alicepassword123",
         })
         self.assertEqual(blocked_resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_no_collateral_ip_lockout_for_distinct_users_on_shared_ip(self):
+        """User A failing 5 times on shared IP must NOT lock out User B on that same IP."""
+        shared_ip = "197.221.250.202"
+
+        # User A (guard_1) fails 5 times from shared_ip
+        for i in range(4):
+            r = self.client.post(
+                "/auth/login/",
+                {"identifier": self.guard_1.username, "password": "wrongpassword!"},
+                REMOTE_ADDR=shared_ip
+            )
+            self.assertEqual(r.status_code, status.HTTP_400_BAD_REQUEST)
+            self.assertEqual(r.data.get("remaining_attempts"), 4 - i)
+
+        # 5th attempt locks User A
+        r5 = self.client.post(
+            "/auth/login/",
+            {"identifier": self.guard_1.username, "password": "wrongpassword!"},
+            REMOTE_ADDR=shared_ip
+        )
+        self.assertEqual(r5.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertTrue(r5.data.get("is_locked", False))
+
+        # Verify User A is indeed locked on next attempt
+        r_blocked = self.client.post(
+            "/auth/login/",
+            {"identifier": self.guard_1.username, "password": "alicepassword123"},
+            REMOTE_ADDR=shared_ip
+        )
+        self.assertEqual(r_blocked.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+        # User B (guard_2) now attempts to authenticate from the EXACT SAME IP with correct password
+        r_user_b = self.client.post(
+            "/auth/login/",
+            {"identifier": self.guard_2.username, "password": "bobpassword123"},
+            REMOTE_ADDR=shared_ip
+        )
+        # MUST succeed and not be blocked by User A's lockout!
+        self.assertEqual(r_user_b.status_code, status.HTTP_200_OK)
+        self.assertIn("access", r_user_b.data)
+        self.assertEqual(r_user_b.data["user"]["username"], self.guard_2.username)
+
+        # User A must STILL remain locked out
+        r_user_a_still_locked = self.client.post(
+            "/auth/login/",
+            {"identifier": self.guard_1.username, "password": "alicepassword123"},
+            REMOTE_ADDR=shared_ip
+        )
+        self.assertEqual(r_user_a_still_locked.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+    def test_lockout_expiry_auto_resets_counter(self):
+        """When locked_until has expired, a subsequent attempt resets the counter and does not re-lock immediately."""
+        # Setup an expired lockout record
+        attempt = LoginAttempt.objects.create(
+            identifier="guard_alice",
+            failed_attempts=5,
+            locked_until=timezone.now() - timedelta(minutes=1),
+            last_attempt=timezone.now() - timedelta(minutes=16),
+        )
+        # Attempt login with wrong password after lockout expiry
+        resp = self.client.post("/auth/login/", {
+            "identifier": "guard_alice",
+            "password": "wrongpassword!",
+        })
+        # Must NOT be locked! Should be attempt 1 out of 5, with 4 remaining
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(resp.data.get("is_locked", False))
+        self.assertEqual(resp.data.get("remaining_attempts"), 4)
+
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.failed_attempts, 1)
+        self.assertIsNone(attempt.locked_until)
+
+    def test_sliding_window_resets_stale_failed_attempts(self):
+        """Failed attempts older than WINDOW_MINUTES (15 min) are auto-reset."""
+        # 3 failed attempts from 20 minutes ago
+        attempt = LoginAttempt.objects.create(
+            identifier="guard_alice",
+            failed_attempts=3,
+            locked_until=None,
+        )
+        LoginAttempt.objects.filter(id=attempt.id).update(
+            last_attempt=timezone.now() - timedelta(minutes=20)
+        )
+        # Next failed attempt occurs
+        resp = self.client.post("/auth/login/", {
+            "identifier": "guard_alice",
+            "password": "wrongpassword!",
+        })
+        # The 3 stale attempts were cleared, so this is attempt 1 (4 remaining)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(resp.data.get("is_locked", False))
+        self.assertEqual(resp.data.get("remaining_attempts"), 4)
+
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.failed_attempts, 1)
 
     def test_password_recovery_time_sensitive_otp(self):
         """Request OTP and confirm password recovery."""
