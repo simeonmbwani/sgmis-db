@@ -26,19 +26,28 @@ def health_check(request):
     Safe for load balancers and container orchestrators.
     """
     flag = os.getenv("CREATE_INITIAL_SUPERUSER", "").strip().lower() in ("true", "1")
+    has_pwd = bool(os.getenv("SUPERUSER_PASSWORD") or os.getenv("DJANGO_SUPERUSER_PASSWORD") or os.getenv("SGMIS_INITIAL_ADMIN_PASSWORD"))
+    target_user = os.getenv("SUPERUSER_USERNAME") or os.getenv("DJANGO_SUPERUSER_USERNAME") or os.getenv("ADMIN_USERNAME") or "admin"
+
+    superusers = []
+    db_status = "ok"
     try:
-        superusers = list(User.objects.filter(is_superuser=True).values_list("username", flat=True))
-        superuser_count = len(superusers)
-    except Exception:
-        superusers = []
-        superuser_count = 0
+        from django.db import connection
+        with connection.cursor() as cur:
+            cur.execute("SELECT username FROM accounts_user WHERE is_superuser = true;")
+            superusers = [r[0] for r in cur.fetchall()]
+    except Exception as e:
+        db_status = "error"
 
     return Response({
         "status": "ok",
         "service": "sgmis-api",
-        "superuser_count": superuser_count,
+        "db_status": db_status,
+        "superuser_count": len(superusers),
         "superusers": superusers,
         "create_initial_superuser_enabled": flag,
+        "has_superuser_password_configured": has_pwd,
+        "target_username": target_user,
     })
 
 @api_view(["GET"])
