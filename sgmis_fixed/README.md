@@ -78,7 +78,7 @@ Open the repository root in Android Studio. The Android client is under `app/`.
 The default production API is now:
 
 ```text
-https://sgmis-db.onrender.com/
+https://security-management-5u3m.onrender.com/
 ```
 
 The app still allows the server URL to be overridden through the existing session/configuration mechanism.

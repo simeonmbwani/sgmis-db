@@ -447,7 +447,7 @@ fun ServerConfigDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { urlText = "https://sgmis-db.onrender.com/" },
+                        onClick = { urlText = "https://security-management-5u3m.onrender.com/" },
                         modifier = Modifier.weight(1f).testTag("preset_production_button")
                     ) {
                         Text("Production", style = MaterialTheme.typography.labelSmall)

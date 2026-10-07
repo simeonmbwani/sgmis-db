@@ -1,11 +1,17 @@
 // SGMIS Web Management & Command Portal
 // Authoritative client for Administrators and Supervisors
 
+const PRODUCTION_API_URL = 'https://security-management-5u3m.onrender.com';
 const DEFAULT_API_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? 'http://localhost:8000'
-    : 'https://sgmis-db.onrender.com';
+    : PRODUCTION_API_URL;
 
-let API_BASE = localStorage.getItem('sgmis_api_url') || DEFAULT_API_URL;
+let storedApiUrl = localStorage.getItem('sgmis_api_url');
+if (storedApiUrl && (storedApiUrl.includes('sgmis-db.onrender.com') || (!['localhost', '127.0.0.1'].includes(window.location.hostname) && storedApiUrl.includes('localhost')))) {
+    storedApiUrl = PRODUCTION_API_URL;
+    localStorage.setItem('sgmis_api_url', storedApiUrl);
+}
+let API_BASE = (storedApiUrl || DEFAULT_API_URL).replace(/\/+$/, '');
 let token = localStorage.getItem('sgmis_access_token');
 let currentUser = JSON.parse(localStorage.getItem('sgmis_user') || 'null');
 let currentTab = 'dashboard';
@@ -136,7 +142,7 @@ function renderLogin(container) {
 
 function configureApiUrl() {
   const current = API_BASE;
-  const next = prompt('Enter Django API Base URL (e.g. http://localhost:8000 or https://your-cloud-run.app):', current);
+  const next = prompt('Enter Django API Base URL (e.g. http://localhost:8000 or https://security-management-5u3m.onrender.com):', current);
   if (next && next.trim()) {
     API_BASE = next.trim().replace(/\/$/, '');
     localStorage.setItem('sgmis_api_url', API_BASE);

@@ -1,4 +1,4 @@
-﻿package com.example
+package com.example
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
@@ -26,7 +26,7 @@ class SessionManagerTest {
     @Test
     fun testDefaultServerUrlPointsToProduction() {
         val sessionManager = SessionManager(context)
-        assertEquals("https://sgmis-db.onrender.com", sessionManager.serverUrl)
+        assertEquals("https://security-management-5u3m.onrender.com", sessionManager.serverUrl)
     }
 
     @Test
@@ -35,7 +35,7 @@ class SessionManagerTest {
         prefs.edit().putString("server_url", "http://10.0.2.2:8000/").commit()
 
         val sessionManager = SessionManager(context)
-        assertEquals("https://sgmis-db.onrender.com", sessionManager.serverUrl)
+        assertEquals("https://security-management-5u3m.onrender.com", sessionManager.serverUrl)
     }
 
     @Test
@@ -44,7 +44,16 @@ class SessionManagerTest {
         prefs.edit().putString("server_url", "http://127.0.0.1:8000").commit()
 
         val sessionManager = SessionManager(context)
-        assertEquals("https://sgmis-db.onrender.com", sessionManager.serverUrl)
+        assertEquals("https://security-management-5u3m.onrender.com", sessionManager.serverUrl)
+    }
+
+    @Test
+    fun testOldRenderUrlMigratedToProduction() {
+        val prefs = context.getSharedPreferences("sgmis_session_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("server_url", "https://sgmis-db.onrender.com/").commit()
+
+        val sessionManager = SessionManager(context)
+        assertEquals("https://security-management-5u3m.onrender.com", sessionManager.serverUrl)
     }
 
     @Test
@@ -54,7 +63,7 @@ class SessionManagerTest {
 
         // First initialization migrates legacy emulator to production
         val sessionManager1 = SessionManager(context)
-        assertEquals("https://sgmis-db.onrender.com", sessionManager1.serverUrl)
+        assertEquals("https://security-management-5u3m.onrender.com", sessionManager1.serverUrl)
 
         // User explicitly sets emulator or staging URL
         sessionManager1.serverUrl = "http://10.0.2.2:8000/"

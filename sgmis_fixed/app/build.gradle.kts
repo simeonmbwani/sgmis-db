@@ -26,7 +26,7 @@ android {
     buildConfigField(
       "String",
       "DEFAULT_API_URL",
-      "\"https://sgmis-db.onrender.com/\""
+      "\"https://security-management-5u3m.onrender.com/\""
     )
   }
 
