@@ -31,6 +31,7 @@ def health_check(request):
 
     superusers = []
     target_user_info = None
+    bootstrap_result = None
     db_status = "ok"
     try:
         from django.db import connection
@@ -52,10 +53,45 @@ def health_check(request):
                 }
             else:
                 target_user_info = {"exists": False}
+
+        # If initial superuser creation is enabled and no superuser exists yet, invoke bootstrap
+        if flag and len(superusers) == 0:
+            from io import StringIO
+            from django.core.management import call_command
+            out = StringIO()
+            err = StringIO()
+            try:
+                call_command("create_initial_superuser", stdout=out, stderr=err)
+                bootstrap_result = {
+                    "stdout": out.getvalue().strip(),
+                    "stderr": err.getvalue().strip(),
+                }
+            except Exception as exc:
+                bootstrap_result = {
+                    "stdout": out.getvalue().strip(),
+                    "stderr": f"{type(exc).__name__}: {str(exc)}",
+                }
+
+            with connection.cursor() as cur:
+                cur.execute("SELECT username FROM accounts_user WHERE is_superuser = true;")
+                superusers = [r[0] for r in cur.fetchall()]
+
+                cur.execute("SELECT username, role, is_superuser, is_staff, is_active, employee_number FROM accounts_user WHERE username = %s;", [target_user])
+                row = cur.fetchone()
+                if row:
+                    target_user_info = {
+                        "exists": True,
+                        "username": row[0],
+                        "role": row[1],
+                        "is_superuser": row[2],
+                        "is_staff": row[3],
+                        "is_active": row[4],
+                        "employee_number": row[5],
+                    }
     except Exception as e:
         db_status = "error"
 
-    return Response({
+    data = {
         "status": "ok",
         "service": "sgmis-api",
         "db_status": db_status,
@@ -65,7 +101,10 @@ def health_check(request):
         "has_superuser_password_configured": has_pwd,
         "target_username": target_user,
         "target_user_info": target_user_info,
-    })
+    }
+    if bootstrap_result is not None:
+        data["bootstrap_result"] = bootstrap_result
+    return Response(data)
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])

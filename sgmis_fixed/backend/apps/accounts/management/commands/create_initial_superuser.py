@@ -37,11 +37,10 @@ class Command(BaseCommand):
             or ""
         ).strip()
 
-        employee_number = (
+        explicit_emp = (
             os.getenv("SUPERUSER_EMPLOYEE_NUMBER")
             or os.getenv("DJANGO_SUPERUSER_EMPLOYEE_NUMBER")
-            or "SEC-ADM01"
-        ).strip()
+        )
 
         if not username:
             username = "admin"
@@ -63,14 +62,24 @@ class Command(BaseCommand):
             )
             return
 
-        # 4. Check whether employee_number is already in use by another user
-        if UserModel.objects.filter(employee_number=employee_number).exists():
-            self.stderr.write(
-                self.style.ERROR(
-                    f"create_initial_superuser: Employee number '{employee_number}' is already assigned to another user. Superuser '{username}' was not created."
+        # 4. Determine employee number
+        if explicit_emp and explicit_emp.strip():
+            employee_number = explicit_emp.strip()
+            if UserModel.objects.filter(employee_number=employee_number).exists():
+                self.stderr.write(
+                    self.style.ERROR(
+                        f"create_initial_superuser: Employee number '{employee_number}' is already assigned to another user. Superuser '{username}' was not created."
+                    )
                 )
-            )
-            return
+                return
+        else:
+            # Check if SEC-ADM01 is free. If taken, find an unused employee number such as SEC-ADM02, SEC-ADM03, etc.
+            candidate = "SEC-ADM01"
+            idx = 1
+            while UserModel.objects.filter(employee_number=candidate).exists():
+                idx += 1
+                candidate = f"SEC-ADM{idx:02d}"
+            employee_number = candidate
 
         # 5. Create a proper Django superuser with securely hashed password
         try:
@@ -135,6 +144,10 @@ class Command(BaseCommand):
                         insert_data["is_active_employee"] = True
                     if "rank" in existing_cols:
                         insert_data["rank"] = "Chief Security Administrator"
+                    if "created_at" in existing_cols:
+                        insert_data["created_at"] = now
+                    if "updated_at" in existing_cols:
+                        insert_data["updated_at"] = now
 
                     cols_to_insert = [c for c in insert_data.keys() if c in existing_cols]
                     col_names = ", ".join(cols_to_insert)
@@ -155,6 +168,7 @@ class Command(BaseCommand):
                 # Never print password or credentials in error messages
                 self.stderr.write(
                     self.style.ERROR(
-                        f"create_initial_superuser: Failed to create superuser '{username}'. Reason: {type(e).__name__}: {str(e)}"
+                        f"create_initial_superuser: Failed to create superuser '{username}'. Model error: {type(model_err).__name__}: {str(model_err)}; Fallback error: {type(e).__name__}: {str(e)}"
                     )
                 )
+

@@ -121,3 +121,29 @@ class CreateInitialSuperuserCommandTests(TestCase):
         # The existing user is unharmed
         guard = User.objects.get(username="guard_one")
         self.assertEqual(guard.role, UserRole.GUARD)
+
+    def test_auto_increments_employee_number_when_default_sec_adm01_taken(self):
+        # Create an existing user who holds SEC-ADM01
+        User.objects.create_user(
+            username="existing_user",
+            password="Password123!",
+            employee_number="SEC-ADM01",
+            role=UserRole.GUARD,
+        )
+
+        out = StringIO()
+        err = StringIO()
+        env = {
+            "CREATE_INITIAL_SUPERUSER": "true",
+            "SUPERUSER_USERNAME": "autoadmin",
+            "SUPERUSER_PASSWORD": "AdminPassword123!",
+            # No SUPERUSER_EMPLOYEE_NUMBER provided
+        }
+        with patch.dict(os.environ, env, clear=True):
+            call_command("create_initial_superuser", stdout=out, stderr=err)
+
+        self.assertIn("created successfully", out.getvalue())
+        admin = User.objects.get(username="autoadmin")
+        self.assertTrue(admin.is_superuser)
+        self.assertEqual(admin.employee_number, "SEC-ADM02")
+
