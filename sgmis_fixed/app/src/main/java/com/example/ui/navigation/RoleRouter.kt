@@ -30,6 +30,7 @@ object NavRoutes {
 
     // Common Non-Operational Routes (accessible off-duty)
     const val NOTIFICATIONS = "notifications"
+    const val MESSAGES = "messages"
     const val SETTINGS = "settings"
     const val PROFILE = "profile"
     const val ABOUT = "about"
@@ -132,6 +133,7 @@ object RoleRouter {
                     NavRoutes.EMERGENCY_SOS,
                     NavRoutes.GUARD_DUTY_PLAN,
                     NavRoutes.NOTIFICATIONS,
+                    NavRoutes.MESSAGES,
                     NavRoutes.SETTINGS,
                     NavRoutes.PROFILE,
                     NavRoutes.ABOUT,

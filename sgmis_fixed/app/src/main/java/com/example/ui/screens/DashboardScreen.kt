@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.automirrored.filled.EventNote
@@ -1139,6 +1140,43 @@ fun DashboardScreen(
                                 }
                             }
                         }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { onNavigate(NavRoutes.ESCORT_DUTIES) }
+                                    .testTag("nav_escort_duties"),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                shape = RoundedCornerShape(14.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(Icons.Default.DirectionsCar, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                                    Text("Escort Duties", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    Text("Vehicle & transit escorts", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { onNavigate(NavRoutes.EXAM_DUTIES) }
+                                    .testTag("nav_exam_duties"),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                shape = RoundedCornerShape(14.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(Icons.Default.School, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(24.dp))
+                                    Text("Exam Duties", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    Text("Supervision duties", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
                     }
 
                     // ----------------------------------------------------------
@@ -1237,7 +1275,9 @@ fun DashboardScreen(
                             BlueprintAction("SOS Emergency", "Immediate emergency alert", Icons.Default.Warning, NavRoutes.SOS, "nav_emergency_sos", isLocked = true, isEmergency = true),
                             BlueprintAction("Patrol Check", "Start patrol route", Icons.AutoMirrored.Filled.DirectionsWalk, NavRoutes.PATROL, "nav_patrol", isLocked = true),
                             BlueprintAction("Handover / Take-Over", "Shift handover notes", Icons.Default.SwapHoriz, NavRoutes.HANDOVER, "nav_handover", isLocked = true),
-                            BlueprintAction("My Roster", "View shift schedule", Icons.Default.CalendarMonth, NavRoutes.MY_ROSTER, "nav_guard_duty_plan", isLocked = false)
+                            BlueprintAction("My Roster", "View shift schedule", Icons.Default.CalendarMonth, NavRoutes.MY_ROSTER, "nav_guard_duty_plan", isLocked = false),
+                            BlueprintAction("Escort Duties", "Assigned vehicle escorts", Icons.Default.DirectionsCar, NavRoutes.ESCORT_DUTIES, "nav_escort_duties", isLocked = false),
+                            BlueprintAction("Exam Duties", "Exam supervision duties", Icons.Default.School, NavRoutes.EXAM_DUTIES, "nav_exam_duties", isLocked = false)
                         )
 
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1262,6 +1302,88 @@ fun DashboardScreen(
                                     if (pair.size == 1) {
                                         Spacer(modifier = Modifier.weight(1f))
                                     }
+                                }
+                            }
+                        }
+
+                        // Communications & Alerts Section: Messages & Notifications
+                        Text(
+                            text = "Communications & Alerts",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable {
+                                        showDirectMessagesDialog = true
+                                        viewModel.fetchDirectMessages()
+                                    }
+                                    .testTag("nav_direct_messages"),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                shape = RoundedCornerShape(14.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Chat, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                                        if (uiState.unreadMessageCount > 0) {
+                                            Surface(color = MaterialTheme.colorScheme.primary, shape = RoundedCornerShape(10.dp)) {
+                                                Text(
+                                                    text = "${uiState.unreadMessageCount} new",
+                                                    color = MaterialTheme.colorScheme.onPrimary,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Text("Messages", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    Text("Comms & updates", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { onNavigate(NavRoutes.NOTIFICATIONS) }
+                                    .testTag("nav_notifications"),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                shape = RoundedCornerShape(14.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.Notifications, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(24.dp))
+                                        if (uiState.unreadNotificationCount > 0) {
+                                            Surface(color = MaterialTheme.colorScheme.error, shape = RoundedCornerShape(10.dp)) {
+                                                Text(
+                                                    text = "${uiState.unreadNotificationCount} new",
+                                                    color = MaterialTheme.colorScheme.onError,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Text("Notifications", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    Text("Alerts & notices", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }
@@ -1629,14 +1751,25 @@ fun DirectMessagesDialog(
     val adminId = admin?.id
     val adminName = admin?.fullName ?: admin?.username ?: "Administrator"
 
-    // Default recipient is supervisor, otherwise admin
+    val stationGuards = remember(uiState.users, currentUserId) {
+        uiState.users.filter { it.role == "GUARD" && it.id != currentUserId }
+    }
+
+    // Default recipient is supervisor, otherwise admin, otherwise first station guard
     var selectedRecipientId by remember(supervisorId, adminId) {
-        mutableStateOf(supervisorId ?: adminId ?: "")
+        mutableStateOf(supervisorId ?: adminId ?: stationGuards.firstOrNull()?.id ?: "")
     }
 
     LaunchedEffect(Unit) {
+        viewModel.fetchUsers()
         viewModel.fetchDirectMessages()
         viewModel.fetchUnreadMessageCount()
+    }
+
+    LaunchedEffect(supervisorId, adminId, stationGuards) {
+        if (selectedRecipientId.isBlank()) {
+            selectedRecipientId = supervisorId ?: adminId ?: stationGuards.firstOrNull()?.id ?: ""
+        }
     }
 
     AlertDialog(
@@ -1663,6 +1796,7 @@ fun DirectMessagesDialog(
                 }
                 IconButton(
                     onClick = {
+                        viewModel.fetchUsers()
                         viewModel.fetchDirectMessages()
                         viewModel.fetchUnreadMessageCount()
                     }
@@ -1685,7 +1819,9 @@ fun DirectMessagesDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (!supervisorId.isNullOrBlank()) {
@@ -1700,6 +1836,14 @@ fun DirectMessagesDialog(
                             selected = selectedRecipientId == adminId,
                             onClick = { selectedRecipientId = adminId },
                             label = { Text(adminName, style = MaterialTheme.typography.labelSmall) }
+                        )
+                    }
+                    stationGuards.forEach { guardUser ->
+                        val gName = guardUser.fullName?.takeIf { it.isNotBlank() } ?: guardUser.username
+                        FilterChip(
+                            selected = selectedRecipientId == guardUser.id,
+                            onClick = { selectedRecipientId = guardUser.id },
+                            label = { Text("Guard: $gName", style = MaterialTheme.typography.labelSmall) }
                         )
                     }
                 }

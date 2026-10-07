@@ -1452,6 +1452,14 @@ class SGMISBackendEndToEndTests(TestCase):
         self.assertEqual(resp.data["sender_name"], self.guard_a.username)
         msg_id = resp.data["id"]
 
+        # Message another guard at same station who is NOT in guard pair (guard_c)
+        resp_guard_c = self.client.post("/notifications/messages/", {
+            "recipient_id": str(self.guard_c.id),
+            "content": "Station Alpha relief readiness check.",
+        })
+        self.assertEqual(resp_guard_c.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp_guard_c.data["sender_name"], self.guard_a.username)
+
         # Message station supervisor
         resp_sup = self.client.post("/notifications/messages/", {
             "recipient_id": str(self.supervisor.id),
@@ -1459,13 +1467,55 @@ class SGMISBackendEndToEndTests(TestCase):
         })
         self.assertEqual(resp_sup.status_code, status.HTTP_201_CREATED)
 
+        # Unauthorized messaging: guard cannot message guard at another station
+        station_beta = Station.objects.create(name="Station Beta", code="ST-BETA")
+        guard_beta = UserModel.objects.create_user(
+            username="guard_beta",
+            email="guard_beta@sgmis.local",
+            password=self.password,
+            employee_number="SEC-901",
+            role=UserRole.GUARD,
+            station=station_beta,
+        )
+        resp_other_station = self.client.post("/notifications/messages/", {
+            "recipient_id": str(guard_beta.id),
+            "content": "Cross-station unauthorized message attempt.",
+        })
+        self.assertEqual(resp_other_station.status_code, status.HTTP_403_FORBIDDEN)
+
         # Unauthorized messaging: guard cannot message an unassigned user
-        unrelated_user = User.objects.create_user(username="stranger_guard", role=UserRole.GUARD)
+        unrelated_user = UserModel.objects.create_user(username="stranger_guard", role=UserRole.GUARD)
         resp_bad = self.client.post("/notifications/messages/", {
             "recipient_id": str(unrelated_user.id),
             "content": "Hello stranger",
         })
         self.assertEqual(resp_bad.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Supervisor messaging preserved: supervisor can message station guard, but not guard at another station
+        self.client.force_authenticate(user=self.supervisor)
+        resp_sup_to_guard = self.client.post("/notifications/messages/", {
+            "recipient_id": str(self.guard_a.id),
+            "content": "Standby for perimeter briefing.",
+        })
+        self.assertEqual(resp_sup_to_guard.status_code, status.HTTP_201_CREATED)
+
+        resp_sup_to_other = self.client.post("/notifications/messages/", {
+            "recipient_id": str(guard_beta.id),
+            "content": "Message to unauthorized station guard.",
+        })
+        self.assertEqual(resp_sup_to_other.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Guard user directory: guard lists active users strictly scoped to their station
+        self.client.force_authenticate(user=self.guard_a)
+        users_resp = self.client.get("/accounts/users/")
+        self.assertEqual(users_resp.status_code, status.HTTP_200_OK)
+        user_list = users_resp.data if isinstance(users_resp.data, list) else users_resp.data.get("results", [])
+        user_ids = [u["id"] for u in user_list]
+        self.assertIn(str(self.guard_b.id), user_ids)
+        self.assertIn(str(self.guard_c.id), user_ids)
+        self.assertIn(str(self.supervisor.id), user_ids)
+        self.assertNotIn(str(guard_beta.id), user_ids)
+        self.assertNotIn(str(unrelated_user.id), user_ids)
 
         # Recipient reads message and checks unread count
         self.client.force_authenticate(user=self.guard_b)
@@ -1477,6 +1527,95 @@ class SGMISBackendEndToEndTests(TestCase):
         read_resp = self.client.post(f"/notifications/messages/{msg_id}/mark_read/")
         self.assertEqual(read_resp.status_code, status.HTTP_200_OK)
         self.assertTrue(read_resp.data["read"])
+
+    def test_guard_module_access_across_duty_statuses(self):
+        """Guard access to Messages, Notifications, My Roster, Escort Duties, Exam Duties across INCOMING, TIME OFF, ON LEAVE."""
+        from apps.escorts.models import EscortDuty, EscortStatus
+        from apps.exams.models import ExamDuty, ExamStatus
+        from apps.shifts.models import AssignmentType
+
+        # Create escort duty and exam duty for guard_a
+        now = timezone.now()
+        EscortDuty.objects.create(
+            guard=self.guard_a,
+            station=self.station,
+            supervisor=self.supervisor,
+            mission_name="Transit Escort Mission Alpha",
+            origin="Main Campus",
+            destination="Regional Depot",
+            start_time=now + timedelta(days=2),
+            end_time=now + timedelta(days=2, hours=3),
+            status=EscortStatus.ASSIGNED,
+        )
+        ExamDuty.objects.create(
+            guard=self.guard_a,
+            station=self.station,
+            supervisor=self.supervisor,
+            institution="ZOU Regional Campus",
+            exam_title="End of Semester Examination",
+            date=now.date() + timedelta(days=3),
+            start_time=time(9, 0),
+            end_time=time(12, 0),
+            status=ExamStatus.ASSIGNED,
+        )
+
+        self.client.force_authenticate(user=self.guard_a)
+
+        # 1. State: INCOMING (Scheduled shift today, not clocked in)
+        today = timezone.localdate()
+        Shift.objects.filter(guard=self.guard_a, date=today).delete()
+        Shift.objects.create(
+            guard=self.guard_a,
+            station=self.station,
+            date=today,
+            shift_type=ShiftType.DAY,
+            start_time=time(7, 0),
+            end_time=time(19, 0),
+        )
+
+        resp_msg = self.client.get("/notifications/messages/")
+        self.assertEqual(resp_msg.status_code, status.HTTP_200_OK)
+        resp_notif = self.client.get("/notifications/")
+        self.assertEqual(resp_notif.status_code, status.HTTP_200_OK)
+        resp_roster = self.client.get("/shifts/shifts/my_current_roster/")
+        self.assertEqual(resp_roster.status_code, status.HTTP_200_OK)
+        resp_escort = self.client.get("/escorts/duties/")
+        self.assertEqual(resp_escort.status_code, status.HTTP_200_OK)
+        escort_items = resp_escort.data if isinstance(resp_escort.data, list) else resp_escort.data.get("results", [])
+        self.assertGreaterEqual(len(escort_items), 1)
+        resp_exam = self.client.get("/exams/duties/")
+        self.assertEqual(resp_exam.status_code, status.HTTP_200_OK)
+        exam_items = resp_exam.data if isinstance(resp_exam.data, list) else resp_exam.data.get("results", [])
+        self.assertGreaterEqual(len(exam_items), 1)
+
+        # 2. State: TIME OFF / OFF DUTY (ShiftType OFF)
+        Shift.objects.filter(guard=self.guard_a, date=today).update(
+            shift_type=ShiftType.OFF,
+            assignment_type=AssignmentType.TIME_OFF,
+        )
+
+        self.assertEqual(self.client.get("/notifications/messages/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.get("/notifications/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.get("/shifts/shifts/my_current_roster/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.get("/escorts/duties/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.get("/exams/duties/").status_code, status.HTTP_200_OK)
+
+        # 3. State: ON LEAVE (Approved leave covering today)
+        LeaveApplication.objects.create(
+            guard=self.guard_a,
+            leave_type="ANNUAL",
+            start_date=today - timedelta(days=1),
+            end_date=today + timedelta(days=5),
+            status=LeaveStatus.APPROVED,
+            reviewer=self.supervisor,
+            reason="Approved annual rest leave",
+        )
+
+        self.assertEqual(self.client.get("/notifications/messages/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.get("/notifications/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.get("/shifts/shifts/my_current_roster/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.get("/escorts/duties/").status_code, status.HTTP_200_OK)
+        self.assertEqual(self.client.get("/exams/duties/").status_code, status.HTTP_200_OK)
 
     def test_ob_24hr_amendment_rule(self):
         """Phase 13: Occurrence book 24-hour amendment rule & immutability."""

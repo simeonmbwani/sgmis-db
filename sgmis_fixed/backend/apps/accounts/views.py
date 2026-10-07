@@ -508,11 +508,18 @@ class UserViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(Q(station=user.station) | Q(role=UserRole.GUARD, station__isnull=True))
             else:
                 qs = qs.filter(role=UserRole.GUARD)
+        elif user.role == UserRole.GUARD:
+            if user.station:
+                qs = qs.filter(station=user.station, is_active=True)
+            else:
+                qs = qs.none()
         return qs
 
     def get_permissions(self):
         if self.action in ["create", "update", "partial_update", "destroy", "deactivate"]:
             return [IsAdministrator()]
+        elif self.action in ["list", "retrieve"]:
+            return [IsAuthenticated()]
         return [IsSupervisorOrAdmin()]
 
     @action(detail=True, methods=["post"], url_path="deactivate", permission_classes=[IsAdministrator])

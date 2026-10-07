@@ -2134,6 +2134,9 @@ class SgmisViewModel(private val repository: SgmisRepository) : ViewModel() {
                 _uiState.update { it.copy(messagesLoading = false, errorMessage = err.message) }
             }
         }
+        if (_uiState.value.users.isEmpty()) {
+            fetchUsers()
+        }
     }
 
     fun sendDirectMessage(recipientId: String, content: String, onSuccess: () -> Unit = {}) {

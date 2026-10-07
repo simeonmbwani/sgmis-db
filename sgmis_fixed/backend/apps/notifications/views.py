@@ -193,19 +193,26 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
 
         # Boundary enforcement
         if sender.role == UserRole.GUARD:
-            allowed_partner_ids = set()
+            allowed_guard_ids = set()
             if sender.station:
+                station_guards = User.objects.filter(
+                    role=UserRole.GUARD,
+                    station=sender.station,
+                    is_active=True,
+                ).exclude(id=sender.id)
+                allowed_guard_ids.update(str(g.id) for g in station_guards)
+
                 pairs = GuardPair.objects.filter(station=sender.station, is_active=True)
                 for p in pairs:
                     partner = p.get_partner_for(sender)
                     if partner:
-                        allowed_partner_ids.add(str(partner.id))
+                        allowed_guard_ids.add(str(partner.id))
 
             today_shift = Shift.objects.filter(guard=sender, date=timezone.localdate()).first()
             if today_shift:
                 partner = today_shift.get_partner()
                 if partner:
-                    allowed_partner_ids.add(str(partner.id))
+                    allowed_guard_ids.add(str(partner.id))
 
             allowed_supervisor_ids = set()
             if sender.station:
@@ -213,9 +220,9 @@ class DirectMessageViewSet(viewsets.ModelViewSet):
                 allowed_supervisor_ids.update(str(s.id) for s in supervisors)
 
             target_id_str = str(recipient.id)
-            if target_id_str not in allowed_partner_ids and target_id_str not in allowed_supervisor_ids:
+            if target_id_str not in allowed_guard_ids and target_id_str not in allowed_supervisor_ids:
                 raise PermissionDenied(
-                    "Communication boundary violation: Security guards can only exchange messages with their assigned partner or station supervisor."
+                    "Communication boundary violation: Security guards can only exchange messages with guards and supervisors assigned to their station."
                 )
 
         elif sender.role == UserRole.SUPERVISOR:

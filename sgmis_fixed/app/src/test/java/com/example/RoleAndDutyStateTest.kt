@@ -1124,4 +1124,44 @@ class RoleAndDutyStateTest {
         assertTrue(shiftLeave.isOffDuty)
         assertFalse(shiftLeave.isEligibleForDuty)
     }
+
+    // ==========================================
+    // 17. Guard Access to Key Modules Across Duty States (Incoming, Time Off, On Leave)
+    // ==========================================
+
+    @Test
+    fun testGuardAccessToFiveModules_inIncomingTimeOffAndOnLeave() {
+        val targetRoutes = listOf(
+            NavRoutes.MESSAGES,
+            NavRoutes.NOTIFICATIONS,
+            NavRoutes.MY_ROSTER,
+            NavRoutes.GUARD_DUTY_PLAN,
+            NavRoutes.ESCORT_DUTIES,
+            NavRoutes.EXAM_DUTIES
+        )
+
+        // All 5 modules must be allowed for GUARD role
+        for (route in targetRoutes) {
+            assertTrue("Route $route must be allowed for AppRole.GUARD", RoleRouter.isRouteAllowed(route, AppRole.GUARD))
+            assertFalse("Route $route must NOT be classified as an operational route", RoleRouter.isOperationalRoute(route))
+        }
+
+        // Test across all three required status domains: INCOMING, TIME OFF, ON LEAVE
+        val testStates = listOf(
+            GuardDutyState.ELIGIBLE_FOR_DUTY, // INCOMING
+            GuardDutyState.REASSIGNED,        // INCOMING (Administrative reassignment)
+            GuardDutyState.TIME_OFF,          // TIME OFF
+            GuardDutyState.OFF_DUTY,          // TIME OFF (Resting)
+            GuardDutyState.ON_LEAVE           // ON LEAVE
+        )
+
+        for (state in testStates) {
+            for (route in targetRoutes) {
+                assertTrue(
+                    "Guard in state $state must have full access to module: $route",
+                    RoleRouter.isRouteAccessible(route, AppRole.GUARD, state)
+                )
+            }
+        }
+    }
 }
