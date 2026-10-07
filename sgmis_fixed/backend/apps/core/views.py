@@ -80,32 +80,68 @@ def health_check(request):
 
         # 4. Simulate Admin form creation in a dry-run rollback transaction
         try:
+            from django.test import RequestFactory
+            from django.contrib.sessions.middleware import SessionMiddleware
+            from django.contrib.messages.storage.fallback import FallbackStorage
+
             sim = {}
             model_admin = admin.site._registry.get(User)
             sim["admin_class"] = model_admin.__class__.__name__
             sim["admin_bases"] = [b.__name__ for b in model_admin.__class__.__mro__]
-            FormClass = model_admin.get_form(None)
+
+            admin_user = User.objects.filter(is_superuser=True).first()
+            rf = RequestFactory()
+
+            # Test GET /admin/accounts/user/add/
+            req_get = rf.get('/admin/accounts/user/add/')
+            req_get.user = admin_user
+            SessionMiddleware(lambda r: None).process_request(req_get)
+            req_get.session.save()
+            req_get._messages = FallbackStorage(req_get)
+
+            FormClass = model_admin.get_form(req_get)
             sim["form_class"] = FormClass.__name__
             sim["form_fields"] = list(FormClass.base_fields.keys())
 
-            with transaction.atomic():
-                # Test save with sample guard data
-                form = FormClass(data={
-                    "username": "diag_test_guard_xyz",
-                    "password": "TestPassword123!",
-                    "role": "GUARD",
-                    "rank": "Security Officer",
-                    "is_active": True,
-                })
-                sim["form_valid"] = form.is_valid()
-                if not form.is_valid():
-                    sim["form_errors"] = form.errors
-                else:
-                    obj = form.save(commit=False)
-                    obj.save()
-                    form.save_m2m()
-                    sim["save_status"] = "success"
-                transaction.set_rollback(True)
+            try:
+                resp_get = model_admin.add_view(req_get)
+                if hasattr(resp_get, 'render'):
+                    resp_get.render()
+                sim["get_status"] = resp_get.status_code
+            except Exception as get_e:
+                sim["get_error"] = str(get_e)
+                sim["get_traceback"] = traceback.format_exc()
+
+            # Test POST /admin/accounts/user/add/
+            req_post = rf.post('/admin/accounts/user/add/', data={
+                "username": "diag_test_guard_xyz",
+                "password": "TestPassword123!",
+                "role": "GUARD",
+                "rank": "Security Officer",
+                "phone_number": "+263771234567",
+                "address": "123 Test St",
+                "is_active": "on",
+                "_save": "Save",
+            })
+            req_post.user = admin_user
+            req_post._dont_enforce_csrf_checks = True
+            SessionMiddleware(lambda r: None).process_request(req_post)
+            req_post.session.save()
+            req_post._messages = FallbackStorage(req_post)
+
+            try:
+                with transaction.atomic():
+                    resp_post = model_admin.add_view(req_post)
+                    if hasattr(resp_post, 'render'):
+                        resp_post.render()
+                    sim["post_status"] = resp_post.status_code
+                    if hasattr(resp_post, 'url'):
+                        sim["post_redirect"] = resp_post.url
+                    transaction.set_rollback(True)
+            except Exception as post_e:
+                sim["post_error"] = str(post_e)
+                sim["post_traceback"] = traceback.format_exc()
+
             data["simulation"] = sim
         except Exception as sim_e:
             data["simulation_error"] = {
