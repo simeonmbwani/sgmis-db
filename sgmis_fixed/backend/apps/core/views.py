@@ -25,86 +25,10 @@ def health_check(request):
     Service health check endpoint.
     Safe for load balancers and container orchestrators.
     """
-    flag = os.getenv("CREATE_INITIAL_SUPERUSER", "").strip().lower() in ("true", "1")
-    has_pwd = bool(os.getenv("SUPERUSER_PASSWORD") or os.getenv("DJANGO_SUPERUSER_PASSWORD") or os.getenv("SGMIS_INITIAL_ADMIN_PASSWORD"))
-    target_user = os.getenv("SUPERUSER_USERNAME") or os.getenv("DJANGO_SUPERUSER_USERNAME") or os.getenv("ADMIN_USERNAME") or "admin"
-
-    superusers = []
-    target_user_info = None
-    bootstrap_result = None
-    db_status = "ok"
-    try:
-        from django.db import connection
-        with connection.cursor() as cur:
-            cur.execute("SELECT username FROM accounts_user WHERE is_superuser = true;")
-            superusers = [r[0] for r in cur.fetchall()]
-
-            cur.execute("SELECT username, role, is_superuser, is_staff, is_active, employee_number FROM accounts_user WHERE username = %s;", [target_user])
-            row = cur.fetchone()
-            if row:
-                target_user_info = {
-                    "exists": True,
-                    "username": row[0],
-                    "role": row[1],
-                    "is_superuser": row[2],
-                    "is_staff": row[3],
-                    "is_active": row[4],
-                    "employee_number": row[5],
-                }
-            else:
-                target_user_info = {"exists": False}
-
-        # If initial superuser creation is enabled and no superuser exists yet, invoke bootstrap
-        if flag and len(superusers) == 0:
-            from io import StringIO
-            from django.core.management import call_command
-            out = StringIO()
-            err = StringIO()
-            try:
-                call_command("create_initial_superuser", stdout=out, stderr=err)
-                bootstrap_result = {
-                    "stdout": out.getvalue().strip(),
-                    "stderr": err.getvalue().strip(),
-                }
-            except Exception as exc:
-                bootstrap_result = {
-                    "stdout": out.getvalue().strip(),
-                    "stderr": f"{type(exc).__name__}: {str(exc)}",
-                }
-
-            with connection.cursor() as cur:
-                cur.execute("SELECT username FROM accounts_user WHERE is_superuser = true;")
-                superusers = [r[0] for r in cur.fetchall()]
-
-                cur.execute("SELECT username, role, is_superuser, is_staff, is_active, employee_number FROM accounts_user WHERE username = %s;", [target_user])
-                row = cur.fetchone()
-                if row:
-                    target_user_info = {
-                        "exists": True,
-                        "username": row[0],
-                        "role": row[1],
-                        "is_superuser": row[2],
-                        "is_staff": row[3],
-                        "is_active": row[4],
-                        "employee_number": row[5],
-                    }
-    except Exception as e:
-        db_status = "error"
-
-    data = {
+    return Response({
         "status": "ok",
         "service": "sgmis-api",
-        "db_status": db_status,
-        "superuser_count": len(superusers),
-        "superusers": superusers,
-        "create_initial_superuser_enabled": flag,
-        "has_superuser_password_configured": has_pwd,
-        "target_username": target_user,
-        "target_user_info": target_user_info,
-    }
-    if bootstrap_result is not None:
-        data["bootstrap_result"] = bootstrap_result
-    return Response(data)
+    })
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
