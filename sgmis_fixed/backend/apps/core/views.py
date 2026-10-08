@@ -18,139 +18,13 @@ from apps.core.models import RecordAdjustmentRequest, SecurityAuditEvent, Superv
 from apps.leave.models import LeaveAdjustmentRecord
 from apps.core.serializers import RecordAdjustmentRequestSerializer
 
-import sys
-import traceback
-from django.http import JsonResponse
-
-_LAST_SERVER_ERROR = None
-
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def health_check(request):
     """
     Service health check endpoint.
     Safe for load balancers and container orchestrators.
-    Supports ?diag=1 for safe read-only schema/simulation diagnosis.
     """
-    if request.GET.get("diag"):
-        from django.db import connection, transaction
-        from django.contrib import admin
-        data = {
-            "status": "ok",
-            "service": "sgmis-api",
-            "last_server_error": _LAST_SERVER_ERROR,
-        }
-        try:
-            with connection.cursor() as cur:
-                # 1. Columns
-                cur.execute("""
-                    SELECT column_name, data_type, is_nullable, column_default 
-                    FROM information_schema.columns 
-                    WHERE table_name = 'accounts_user' 
-                    ORDER BY ordinal_position;
-                """)
-                data["columns"] = [
-                    {"name": r[0], "type": r[1], "nullable": r[2], "default": r[3]}
-                    for r in cur.fetchall()
-                ]
-
-                # 2. Constraints
-                cur.execute("""
-                    SELECT conname, pg_get_constraintdef(c.oid) 
-                    FROM pg_constraint c 
-                    JOIN pg_namespace n ON n.oid = c.connamespace 
-                    WHERE conrelid = 'accounts_user'::regclass;
-                """)
-                data["constraints"] = [
-                    {"name": r[0], "def": r[1]} for r in cur.fetchall()
-                ]
-
-                # 3. Migrations
-                cur.execute("""
-                    SELECT app, name, applied 
-                    FROM django_migrations 
-                    WHERE app = 'accounts' 
-                    ORDER BY applied;
-                """)
-                data["migrations"] = [
-                    {"name": r[1], "applied": str(r[2])} for r in cur.fetchall()
-                ]
-        except Exception as db_e:
-            data["db_error"] = str(db_e)
-
-        # 4. Simulate Admin form creation in a dry-run rollback transaction
-        try:
-            from django.test import RequestFactory
-            from django.contrib.sessions.middleware import SessionMiddleware
-            from django.contrib.messages.storage.fallback import FallbackStorage
-
-            sim = {}
-            model_admin = admin.site._registry.get(User)
-            sim["admin_class"] = model_admin.__class__.__name__
-            sim["admin_bases"] = [b.__name__ for b in model_admin.__class__.__mro__]
-
-            admin_user = User.objects.filter(is_superuser=True).first()
-            rf = RequestFactory()
-
-            # Test GET /admin/accounts/user/add/
-            req_get = rf.get('/admin/accounts/user/add/')
-            req_get.user = admin_user
-            SessionMiddleware(lambda r: None).process_request(req_get)
-            req_get.session.save()
-            req_get._messages = FallbackStorage(req_get)
-
-            FormClass = model_admin.get_form(req_get)
-            sim["form_class"] = FormClass.__name__
-            sim["form_fields"] = list(FormClass.base_fields.keys())
-
-            try:
-                resp_get = model_admin.add_view(req_get)
-                if hasattr(resp_get, 'render'):
-                    resp_get.render()
-                sim["get_status"] = resp_get.status_code
-            except Exception as get_e:
-                sim["get_error"] = str(get_e)
-                sim["get_traceback"] = traceback.format_exc()
-
-            # Test POST /admin/accounts/user/add/
-            req_post = rf.post('/admin/accounts/user/add/', data={
-                "username": "diag_test_guard_xyz",
-                "password": "TestPassword123!",
-                "role": "GUARD",
-                "rank": "Security Officer",
-                "phone_number": "+263771234567",
-                "address": "123 Test St",
-                "is_active": "on",
-                "_save": "Save",
-            })
-            req_post.user = admin_user
-            req_post._dont_enforce_csrf_checks = True
-            SessionMiddleware(lambda r: None).process_request(req_post)
-            req_post.session.save()
-            req_post._messages = FallbackStorage(req_post)
-
-            try:
-                with transaction.atomic():
-                    resp_post = model_admin.add_view(req_post)
-                    if hasattr(resp_post, 'render'):
-                        resp_post.render()
-                    sim["post_status"] = resp_post.status_code
-                    if hasattr(resp_post, 'url'):
-                        sim["post_redirect"] = resp_post.url
-                    transaction.set_rollback(True)
-            except Exception as post_e:
-                sim["post_error"] = str(post_e)
-                sim["post_traceback"] = traceback.format_exc()
-
-            data["simulation"] = sim
-        except Exception as sim_e:
-            data["simulation_error"] = {
-                "error": str(sim_e),
-                "traceback": traceback.format_exc(),
-            }
-
-        return Response(data)
-
     return Response({
         "status": "ok",
         "service": "sgmis-api",
@@ -296,17 +170,12 @@ def api_not_found(request, exception=None):
     }, status=404)
 
 def api_server_error(request):
-    global _LAST_SERVER_ERROR
+    import sys
+    import traceback
     exc_type, exc_value, exc_tb = sys.exc_info()
-    tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb)) if exc_type else "No active exception"
-    _LAST_SERVER_ERROR = {
-        "path": request.path,
-        "method": request.method,
-        "exception_type": str(exc_type),
-        "exception_value": str(exc_value),
-        "traceback": tb_str,
-    }
-    sys.stderr.write(f"\n=== CRITICAL 500 ERROR ON {request.path} ===\n{tb_str}\n")
+    if exc_type:
+        tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        sys.stderr.write(f"\n=== CRITICAL 500 ERROR ON {request.path} ===\n{tb_str}\n")
     return JsonResponse({
         "detail": "An internal server error occurred.",
         "error": "HTTP_500",
