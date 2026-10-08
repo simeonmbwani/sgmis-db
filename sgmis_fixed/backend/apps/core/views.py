@@ -11,7 +11,7 @@ from apps.patrols.models import PatrolLog, PatrolStatus
 from apps.accounts.models import User, UserRole
 from apps.stations.models import Station
 from apps.escorts.models import EscortDuty, EscortStatus
-from apps.shifts.models import Shift, Attendance, DutyRoster, ShiftHandover, RosterStatus
+from apps.shifts.models import Shift, Attendance
 from apps.leave.models import LeaveApplication, LeaveStatus
 from apps.accounts.permissions import IsAdministrator
 from apps.core.models import RecordAdjustmentRequest, SecurityAuditEvent, SupervisorOverrideAudit
@@ -25,64 +25,6 @@ def health_check(request):
     Service health check endpoint.
     Safe for load balancers and container orchestrators.
     """
-    if request.GET.get("roster_diag"):
-        try:
-            rosters_data = []
-            for r in DutyRoster.objects.all().select_related("station", "approved_by"):
-                shifts_qs = Shift.objects.filter(roster=r)
-                s_count = shifts_qs.count()
-                min_s_date = str(shifts_qs.order_by("date").values_list("date", flat=True).first()) if s_count > 0 else None
-                max_s_date = str(shifts_qs.order_by("-date").values_list("date", flat=True).first()) if s_count > 0 else None
-                att_count = Attendance.objects.filter(shift__roster=r).count()
-                clock_in_count = Attendance.objects.filter(shift__roster=r, clock_in__isnull=False).count()
-                handover_count = ShiftHandover.objects.filter(outgoing_shift__roster=r).count()
-
-                clean_error = None
-                try:
-                    r.clean()
-                except Exception as ce:
-                    clean_error = str(ce)
-
-                rosters_data.append({
-                    "id": str(r.id),
-                    "station_id": str(r.station_id),
-                    "station_name": r.station.name if r.station else None,
-                    "start_date": str(r.start_date),
-                    "end_date": str(r.end_date),
-                    "status": r.status,
-                    "status_display": r.get_status_display(),
-                    "approved_by": r.approved_by.username if r.approved_by else None,
-                    "approved_at": str(r.approved_at) if r.approved_at else None,
-                    "created_at": str(r.created_at) if r.created_at else None,
-                    "updated_at": str(r.updated_at) if r.updated_at else None,
-                    "shifts_count": s_count,
-                    "shifts_min_date": min_s_date,
-                    "shifts_max_date": max_s_date,
-                    "attendance_count": att_count,
-                    "attendance_clocked_in_count": clock_in_count,
-                    "handover_count": handover_count,
-                    "clean_error": clean_error,
-                })
-
-            total_shifts = Shift.objects.count()
-            unassigned_roster_shifts = Shift.objects.filter(roster__isnull=True).count()
-
-            return Response({
-                "status": "ok",
-                "service": "sgmis-api",
-                "rosters": rosters_data,
-                "total_rosters": len(rosters_data),
-                "total_shifts": total_shifts,
-                "unassigned_roster_shifts": unassigned_roster_shifts,
-            })
-        except Exception as e:
-            import traceback
-            return Response({
-                "status": "error",
-                "error": str(e),
-                "traceback": traceback.format_exc(),
-            }, status=500)
-
     return Response({
         "status": "ok",
         "service": "sgmis-api",
