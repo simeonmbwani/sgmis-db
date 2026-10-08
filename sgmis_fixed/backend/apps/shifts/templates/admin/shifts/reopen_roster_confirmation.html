@@ -1,0 +1,53 @@
+{% extends "admin/base_site.html" %}
+{% load i18n l10n %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+<a href="{% url 'admin:index' %}">{% translate 'Home' %}</a>
+&rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_config.verbose_name }}</a>
+&rsaquo; <a href="{% url 'admin:shifts_dutyroster_changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+&rsaquo; {% translate 'Reopen to DRAFT' %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div style="max-width: 800px; margin: 20px 0;">
+    <div style="background-color: #fff3cd; border: 1px solid #ffeeba; color: #856404; padding: 15px; border-radius: 4px; margin-bottom: 20px;">
+        <h3 style="margin-top: 0; color: #856404;">⚠️ Warning: Generated Shifts Removal</h3>
+        <p>Reopening an approved roster will:</p>
+        <ul>
+            <li><strong>Delete all generated child shifts</strong> associated with this roster (only allowed if there are 0 attendance records).</li>
+            <li>Reset the roster status from <strong>APPROVED</strong> to <strong>DRAFT</strong>.</li>
+            <li>Clear all approval metadata (<code>approved_by</code> and <code>approved_at</code>).</li>
+            <li>Record an immutable <strong>SecurityAuditEvent</strong> in the system audit log.</li>
+        </ul>
+        <p>Once reopened, you can safely modify the start and end dates in Django Admin, regenerate shifts, and re-validate/re-approve the roster.</p>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="reopen_to_draft_action" />
+        <input type="hidden" name="confirm_reopen" value="yes" />
+        {% for obj in queryset %}
+            <input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}" />
+        {% endfor %}
+
+        <h3>Selected Rosters to Reopen:</h3>
+        <ul>
+        {% for obj in queryset %}
+            <li><strong>{{ obj.station.name }}</strong>: {{ obj.start_date }} to {{ obj.end_date }} (Current status: {{ obj.get_status_display }})</li>
+        {% endfor %}
+        </ul>
+
+        <div style="margin: 20px 0;">
+            <label for="id_reason" style="display: block; font-weight: bold; margin-bottom: 5px;">Reason for Reopening (Mandatory for Audit Trail):</label>
+            <textarea id="id_reason" name="reason" rows="3" style="width: 100%; max-width: 600px;" required placeholder="e.g., Incorrect start date entered during creation; reverting to draft to correct dates.">Incorrect start date entered during creation; reverting to draft to correct dates.</textarea>
+        </div>
+
+        <div class="submit-row">
+            <input type="submit" value="Yes, Reopen to DRAFT" style="background: #ba2121; color: white; border: none; padding: 10px 20px; font-weight: bold; cursor: pointer; border-radius: 4px;" />
+            <a href="{% url 'admin:shifts_dutyroster_changelist' %}" class="button cancel-link" style="padding: 10px 15px; text-decoration: none; margin-left: 10px;">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

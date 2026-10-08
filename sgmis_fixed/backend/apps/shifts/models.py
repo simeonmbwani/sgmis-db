@@ -186,7 +186,7 @@ class DutyRoster(models.Model):
                 )
 
         # 4. Immutability protection for APPROVED / ACTIVE / ARCHIVED rosters
-        if self.pk:
+        if self.pk and not getattr(self, "_admin_reopening", False):
             try:
                 original = DutyRoster.objects.get(pk=self.pk)
                 if original.status in (RosterStatus.APPROVED, RosterStatus.ACTIVE, RosterStatus.ARCHIVED):

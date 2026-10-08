@@ -80,10 +80,17 @@ def reopen_duty_roster_as_draft(roster, admin_user, reason):
     if shift_ids:
         Shift.objects.filter(pk__in=shift_ids).delete()
 
+    locked_roster._admin_reopening = True
     locked_roster.status = RosterStatus.DRAFT
     locked_roster.approved_by = None
     locked_roster.approved_at = None
     locked_roster.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+
+    if isinstance(roster, DutyRoster) and roster is not locked_roster:
+        roster._admin_reopening = True
+        roster.status = RosterStatus.DRAFT
+        roster.approved_by = None
+        roster.approved_at = None
 
     SecurityAuditEvent.objects.create(
         event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
