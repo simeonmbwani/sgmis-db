@@ -29,6 +29,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.R
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,19 +83,24 @@ fun ProfileScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("My Profile", fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = "My Profile",
+                subtitle = "Personnel Credentials & Details",
+                onNavigationClick = onBack,
                 navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("profile_back_button")) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("profile_back_button")
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back)
+                            contentDescription = stringResource(R.string.back),
+                            tint = NavyDark
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                }
             )
         }
     ) { paddingValues ->
@@ -101,6 +108,7 @@ fun ProfileScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .background(LightBackground)
                 .verticalScroll(scrollState)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -108,7 +116,7 @@ fun ProfileScreen(
             // Notification banners
             if (uiState.successMessage != null) {
                 Surface(
-                    color = com.example.ui.theme.StatusSuccess.copy(alpha = 0.15f),
+                    color = StatusSuccess.copy(alpha = 0.15f),
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 ) {
@@ -116,11 +124,11 @@ fun ProfileScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.CheckCircle, null, tint = com.example.ui.theme.StatusSuccess, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.CheckCircle, null, tint = StatusSuccess, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = uiState.successMessage!!,
-                            color = com.example.ui.theme.StatusSuccess,
+                            color = StatusSuccess,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -129,7 +137,7 @@ fun ProfileScreen(
 
             if (uiState.errorMessage != null) {
                 Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
+                    color = StatusError.copy(alpha = 0.15f),
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 ) {
@@ -137,11 +145,11 @@ fun ProfileScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Error, null, tint = StatusError, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = uiState.errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            color = StatusError,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -149,14 +157,13 @@ fun ProfileScreen(
             }
 
             // Header Profile Card with Photo & Quick Identity
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("profile_header_card"),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            SgmisCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("profile_header_card")
             ) {
                 Column(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    modifier = Modifier.fillMaxWidth().padding(4.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Row(
@@ -167,7 +174,7 @@ fun ProfileScreen(
                             modifier = Modifier
                                 .size(72.dp)
                                 .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primaryContainer),
+                                .background(NavyDark.copy(alpha = 0.12f)),
                             contentAlignment = Alignment.Center
                         ) {
                             if (!fullPhotoUrl.isNullOrBlank()) {
@@ -185,7 +192,7 @@ fun ProfileScreen(
                                     text = initials,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 24.sp,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    color = NavyDark
                                 )
                             }
                         }
@@ -196,21 +203,18 @@ fun ProfileScreen(
                             Text(
                                 text = user?.fullName ?: user?.username ?: "Officer",
                                 style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimaryLight
                             )
                             Text(
                                 text = "Employee ID: ${user?.employeeNumber ?: "—"}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = TextSecondaryLight
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            AssistChip(
-                                onClick = {},
-                                label = { Text(user?.role ?: "GUARD", fontWeight = FontWeight.Bold, fontSize = 11.sp) },
-                                colors = AssistChipDefaults.assistChipColors(
-                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                    labelColor = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            SgmisBadge(
+                                text = user?.role ?: "GUARD",
+                                variant = BadgeVariant.Info
                             )
                         }
                     }
@@ -218,46 +222,49 @@ fun ProfileScreen(
                     // Gallery photo upload action
                     OutlinedButton(
                         onClick = { photoPickerLauncher.launch("image/*") },
-                        modifier = Modifier.fillMaxWidth().testTag("profile_photo_upload_button"),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("profile_photo_upload_button"),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(18.dp), tint = NavyDark)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Select & Upload Photo from Gallery")
+                        Text("Select & Upload Photo from Gallery", color = NavyDark, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
 
             // Read-Only Authoritative Organization Info Card
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("protected_info_card"),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            SgmisCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("protected_info_card")
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(modifier = Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Outlined.Lock,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = NavyDark,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Authoritative Security Assignment",
                             style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimaryLight
                         )
                     }
 
                     Text(
                         text = "Organizational credentials and station postings are managed exclusively by Station Administration.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = TextSecondaryLight
                     )
 
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = BorderSubtleLight, thickness = 0.5.dp)
 
                     ProfileDetailRow("Employee ID", user?.employeeNumber ?: "—")
                     ProfileDetailRow("Operational Role", user?.role ?: "—")
@@ -269,25 +276,25 @@ fun ProfileScreen(
             }
 
             // Editable Personal Details Card
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("editable_profile_card"),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            SgmisCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("editable_profile_card")
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(modifier = Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Outlined.Edit,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = NavyDark,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Contact & Profile Details",
                             style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimaryLight
                         )
                     }
 
@@ -354,9 +361,11 @@ fun ProfileScreen(
                                 address = user?.address ?: ""
                                 photoUrl = user?.profilePhoto ?: ""
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
                         ) {
-                            Text("Reset")
+                            Text("Reset", color = TextSecondaryLight)
                         }
 
                         Button(
@@ -364,13 +373,17 @@ fun ProfileScreen(
                                 viewModel.updateProfile(firstName, lastName, phone, email, address, photoUrl)
                             },
                             enabled = !uiState.isLoading,
-                            modifier = Modifier.weight(1f).testTag("save_profile_button")
+                            colors = ButtonDefaults.buttonColors(containerColor = NavyDark),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("save_profile_button")
                         ) {
                             if (uiState.isLoading) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(16.dp),
                                     strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary
+                                    color = SurfaceCardLight
                                 )
                             } else {
                                 Text("Save Changes")
@@ -390,7 +403,7 @@ private fun ProfileDetailRow(label: String, value: String) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(text = value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+        Text(text = label, style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
+        Text(text = value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = TextPrimaryLight)
     }
 }

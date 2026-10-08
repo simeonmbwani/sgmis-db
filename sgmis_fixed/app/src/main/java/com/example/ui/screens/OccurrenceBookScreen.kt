@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,7 +23,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.OccurrenceBookEntry
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,6 +38,8 @@ fun OccurrenceBookScreen(
     val uiState by viewModel.uiState.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
     var amendingEntry by remember { mutableStateOf<OccurrenceBookEntry?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedCategoryFilter by remember { mutableStateOf<String?>(null) }
 
     val currentUserRole = uiState.currentUser?.role
     val isSupervisor = currentUserRole == "SUPERVISOR"
@@ -46,15 +52,29 @@ fun OccurrenceBookScreen(
     // Auto-dismiss transient messages after 3.5 seconds
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
         if (uiState.successMessage != null || uiState.errorMessage != null) {
-            kotlinx.coroutines.delay(3500)
+            delay(3500)
             viewModel.clearMessages()
+        }
+    }
+
+    val filteredEntries = remember(uiState.obEntries, searchQuery, selectedCategoryFilter) {
+        uiState.obEntries.filter { entry ->
+            val matchesCategory = selectedCategoryFilter == null || entry.category.equals(selectedCategoryFilter, ignoreCase = true)
+            val matchesSearch = searchQuery.isBlank() ||
+                entry.occurrenceText.contains(searchQuery, ignoreCase = true) ||
+                entry.entryNumber.contains(searchQuery, ignoreCase = true) ||
+                entry.guardName.contains(searchQuery, ignoreCase = true) ||
+                (entry.stationName?.contains(searchQuery, ignoreCase = true) == true) ||
+                (entry.crossReference?.contains(searchQuery, ignoreCase = true) == true)
+            matchesCategory && matchesSearch
         }
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.occurrence_book_title), fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = stringResource(R.string.occurrence_book_title),
+                subtitle = "${uiState.currentStationName ?: "Station Post"} • Official Log",
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("ob_back_button")) {
                         Icon(
@@ -70,8 +90,7 @@ fun OccurrenceBookScreen(
                     ) {
                         Icon(Icons.Default.Refresh, "Refresh OB")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         },
         floatingActionButton = {
@@ -79,7 +98,7 @@ fun OccurrenceBookScreen(
                 ExtendedFloatingActionButton(
                     onClick = { showAddDialog = true },
                     icon = { Icon(Icons.Default.Add, null) },
-                    text = { Text("Log OB Entry") },
+                    text = { Text("Log OB Entry", fontWeight = FontWeight.Bold) },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.testTag("log_ob_entry_fab")
@@ -96,7 +115,9 @@ fun OccurrenceBookScreen(
             if (uiState.isGuard && !uiState.isOnDuty) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -113,66 +134,99 @@ fun OccurrenceBookScreen(
 
             // Notification banners
             if (uiState.successMessage != null) {
-                Surface(
-                    color = com.example.ui.theme.StatusSuccess.copy(alpha = 0.15f),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.CheckCircle, null, tint = com.example.ui.theme.StatusSuccess, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.successMessage!!,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = CardStatus.SUCCESS,
+                    title = "Operation Recorded",
+                    description = uiState.successMessage!!,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                )
             }
 
             if (uiState.errorMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(8.dp)
+                SgmisStatusCard(
+                    status = CardStatus.ERROR,
+                    title = "Notice",
+                    description = uiState.errorMessage!!,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                )
+            }
+
+            // Search Bar & Category Filter Bar
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SgmisSearchBar(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    placeholder = "Search entries, CR numbers, officers...",
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                val categories = listOf("ROUTINE", "VISITOR", "INCIDENT", "VEHICLE", "HANDOVER", "MAINTENANCE")
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall
+                    SgmisFilterChip(
+                        selected = selectedCategoryFilter == null,
+                        onClick = { selectedCategoryFilter = null },
+                        label = "All (${uiState.obEntries.size})"
+                    )
+                    categories.forEach { cat ->
+                        val count = uiState.obEntries.count { it.category.equals(cat, ignoreCase = true) }
+                        SgmisFilterChip(
+                            selected = selectedCategoryFilter == cat,
+                            onClick = {
+                                selectedCategoryFilter = if (selectedCategoryFilter == cat) null else cat
+                            },
+                            label = "$cat ($count)"
                         )
                     }
                 }
             }
 
             if (uiState.obLoading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    SgmisLoadingSkeleton(modifier = Modifier.fillMaxWidth().height(110.dp))
+                    SgmisLoadingSkeleton(modifier = Modifier.fillMaxWidth().height(110.dp))
+                    SgmisLoadingSkeleton(modifier = Modifier.fillMaxWidth().height(110.dp))
                 }
-            } else if (uiState.obEntries.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Outlined.Book, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(56.dp))
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text("No Occurrence Book records found", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+            } else if (filteredEntries.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    SgmisEmptyState(
+                        icon = Icons.Outlined.Book,
+                        title = "No Occurrence Book records",
+                        message = if (searchQuery.isNotBlank() || selectedCategoryFilter != null) {
+                            "No entries matching the current search criteria."
+                        } else {
+                            "No Occurrence Book records found for this station post."
+                        }
+                    )
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                    contentPadding = PaddingValues(top = 16.dp, bottom = 88.dp),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(uiState.obEntries) { entry ->
+                    items(filteredEntries) { entry ->
                         OBEntryCard(
                             entry = entry,
                             onAmend = { amendingEntry = entry }
@@ -223,9 +277,11 @@ fun OBEntryCard(
     onAmend: () -> Unit = {}
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth().testTag("ob_entry_${entry.entryNumber}"),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("ob_entry_${entry.entryNumber}"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -269,14 +325,25 @@ fun OBEntryCard(
                     )
                 }
                 Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
+                    color = when (entry.category.uppercase()) {
+                        "INCIDENT" -> MaterialTheme.colorScheme.errorContainer
+                        "VEHICLE" -> MaterialTheme.colorScheme.secondaryContainer
+                        "VISITOR" -> MaterialTheme.colorScheme.tertiaryContainer
+                        else -> MaterialTheme.colorScheme.primaryContainer
+                    },
                     shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
                         text = entry.categoryDisplay ?: entry.category,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        fontWeight = FontWeight.Bold,
+                        color = when (entry.category.uppercase()) {
+                            "INCIDENT" -> MaterialTheme.colorScheme.onErrorContainer
+                            "VEHICLE" -> MaterialTheme.colorScheme.onSecondaryContainer
+                            "VISITOR" -> MaterialTheme.colorScheme.onTertiaryContainer
+                            else -> MaterialTheme.colorScheme.onPrimaryContainer
+                        },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                     )
                 }
             }
@@ -302,7 +369,7 @@ fun OBEntryCard(
                 }
             }
 
-            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
 
             if (entry.amendments.isNotEmpty()) {
                 Text(
@@ -337,10 +404,14 @@ fun OBEntryCard(
                         }
                     }
                 }
-                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
             }
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Column {
                     Text(
                         text = "Post: ${entry.stationName}",
@@ -464,10 +535,12 @@ fun CreateOBEntryDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
-        title = { Text("Record OB Entry") },
+        title = { Text("Record OB Entry", fontWeight = FontWeight.Bold) },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (errorMessage != null) {
@@ -491,10 +564,14 @@ fun CreateOBEntryDialog(
                     }
                 }
 
-                Text("Official Occurrence Book log entry. Backend generates the sequential entry number and CR code.", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    text = "Official Occurrence Book log entry. Backend generates the sequential entry number and CR code.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
 
-                // Category selector (all 6 official categories)
-                Text("Category:", style = MaterialTheme.typography.labelSmall)
+                // Category selector
+                Text("Category:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     categoriesRow1.forEach { cat ->
                         FilterChip(
@@ -529,6 +606,7 @@ fun CreateOBEntryDialog(
                                     onValueChange = { vehicleReg = it },
                                     label = { Text("Vehicle Registration / Plate Number") },
                                     placeholder = { Text("e.g. AEZ-4591") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_vehicle_reg_input"),
                                     singleLine = true
                                 )
@@ -536,6 +614,7 @@ fun CreateOBEntryDialog(
                                     value = vehicleDriver,
                                     onValueChange = { vehicleDriver = it },
                                     label = { Text("Driver / Operator Name") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_vehicle_driver_input"),
                                     singleLine = true
                                 )
@@ -543,6 +622,7 @@ fun CreateOBEntryDialog(
                                     value = vehiclePurpose,
                                     onValueChange = { vehiclePurpose = it },
                                     label = { Text("Purpose / Cargo / Remarks") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_vehicle_purpose_input"),
                                     singleLine = true
                                 )
@@ -561,6 +641,7 @@ fun CreateOBEntryDialog(
                                     value = visitorName,
                                     onValueChange = { visitorName = it },
                                     label = { Text("Visitor Full Name") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_visitor_name_input"),
                                     singleLine = true
                                 )
@@ -568,6 +649,7 @@ fun CreateOBEntryDialog(
                                     value = visitorIdNumber,
                                     onValueChange = { visitorIdNumber = it },
                                     label = { Text("National ID / Passport Number") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_visitor_id_input"),
                                     singleLine = true
                                 )
@@ -575,6 +657,7 @@ fun CreateOBEntryDialog(
                                     value = visitorHost,
                                     onValueChange = { visitorHost = it },
                                     label = { Text("Host Official / Department") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_visitor_host_input"),
                                     singleLine = true
                                 )
@@ -582,6 +665,7 @@ fun CreateOBEntryDialog(
                                     value = visitorPassNumber,
                                     onValueChange = { visitorPassNumber = it },
                                     label = { Text("Pass / Badge Number Issued") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_visitor_pass_input"),
                                     singleLine = true
                                 )
@@ -600,7 +684,8 @@ fun CreateOBEntryDialog(
                                     value = incidentType,
                                     onValueChange = { incidentType = it },
                                     label = { Text("Incident Nature / Type") },
-                                    placeholder = { Text("e.g. Perimeter breach, theft attempt, unauthorized entry") },
+                                    placeholder = { Text("e.g. Perimeter breach, theft attempt") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_incident_type_input"),
                                     singleLine = true
                                 )
@@ -608,7 +693,8 @@ fun CreateOBEntryDialog(
                                     value = incidentActionTaken,
                                     onValueChange = { incidentActionTaken = it },
                                     label = { Text("Immediate Action Taken") },
-                                    placeholder = { Text("e.g. Apprehended, supervisor notified, dispatched") },
+                                    placeholder = { Text("e.g. Apprehended, supervisor notified") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_incident_action_input"),
                                     singleLine = true
                                 )
@@ -616,6 +702,7 @@ fun CreateOBEntryDialog(
                                     value = incidentPersonsInvolved,
                                     onValueChange = { incidentPersonsInvolved = it },
                                     label = { Text("Persons / Witnesses Involved") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_incident_persons_input"),
                                     singleLine = true
                                 )
@@ -634,6 +721,7 @@ fun CreateOBEntryDialog(
                                     value = handoverRelievingOfficer,
                                     onValueChange = { handoverRelievingOfficer = it },
                                     label = { Text("Relieving Officer Name") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_handover_relieving_input"),
                                     singleLine = true
                                 )
@@ -641,7 +729,8 @@ fun CreateOBEntryDialog(
                                     value = handoverKeysEquipment,
                                     onValueChange = { handoverKeysEquipment = it },
                                     label = { Text("Keys & Equipment Count") },
-                                    placeholder = { Text("e.g. Master key bundle, radio #4, torch OK") },
+                                    placeholder = { Text("e.g. Master keys, radio #4, torch OK") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_handover_keys_input"),
                                     singleLine = true
                                 )
@@ -649,6 +738,7 @@ fun CreateOBEntryDialog(
                                     value = handoverSpecialInstructions,
                                     onValueChange = { handoverSpecialInstructions = it },
                                     label = { Text("Special Orders / Instructions") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_handover_instructions_input"),
                                     singleLine = true
                                 )
@@ -668,6 +758,7 @@ fun CreateOBEntryDialog(
                                     onValueChange = { maintenanceFacility = it },
                                     label = { Text("Facility / Asset / Zone") },
                                     placeholder = { Text("e.g. East Gate Barrier, Floodlight #3") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_maint_facility_input"),
                                     singleLine = true
                                 )
@@ -675,6 +766,7 @@ fun CreateOBEntryDialog(
                                     value = maintenanceDefect,
                                     onValueChange = { maintenanceDefect = it },
                                     label = { Text("Defect / Fault Description") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_maint_defect_input"),
                                     singleLine = true
                                 )
@@ -682,6 +774,7 @@ fun CreateOBEntryDialog(
                                     value = maintenanceReportedTo,
                                     onValueChange = { maintenanceReportedTo = it },
                                     label = { Text("Reported To / Work Order #") },
+                                    shape = RoundedCornerShape(10.dp),
                                     modifier = Modifier.fillMaxWidth().testTag("ob_maint_reported_input"),
                                     singleLine = true
                                 )
@@ -696,6 +789,7 @@ fun CreateOBEntryDialog(
                     label = { Text("Occurrence Description / Notes *") },
                     minLines = 3,
                     enabled = !isLoading,
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth().testTag("ob_text_input")
                 )
 
@@ -706,6 +800,7 @@ fun CreateOBEntryDialog(
                     placeholder = { Text("e.g. CR-MW-001 (auto-generated if empty)") },
                     singleLine = true,
                     enabled = !isLoading,
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth().testTag("ob_cr_input")
                 )
 
@@ -715,6 +810,7 @@ fun CreateOBEntryDialog(
                     label = { Text("Check / Verification Record") },
                     singleLine = true,
                     enabled = !isLoading,
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -728,6 +824,7 @@ fun CreateOBEntryDialog(
                     }
                 },
                 enabled = effectiveText.isNotBlank() && !isLoading,
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.testTag("submit_ob_entry_confirm_button")
             ) {
                 if (isLoading) {
@@ -762,7 +859,7 @@ fun AmendOBDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
-        title = { Text("Amend Record ${entry.entryNumber}") },
+        title = { Text("Amend Record ${entry.entryNumber}", fontWeight = FontWeight.Bold) },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -794,6 +891,7 @@ fun AmendOBDialog(
                     placeholder = { Text("e.g. Correction of vehicle registration number") },
                     singleLine = false,
                     enabled = !isLoading,
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth().testTag("amend_ob_reason_input")
                 )
                 OutlinedTextField(
@@ -802,6 +900,7 @@ fun AmendOBDialog(
                     label = { Text("Amended Record Content *") },
                     minLines = 3,
                     enabled = !isLoading,
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth().testTag("amend_ob_content_input")
                 )
             }
@@ -814,6 +913,7 @@ fun AmendOBDialog(
                     }
                 },
                 enabled = reason.isNotBlank() && amendedText.isNotBlank() && !isLoading,
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.testTag("submit_amend_ob_button")
             ) {
                 if (isLoading) {
@@ -834,4 +934,3 @@ fun AmendOBDialog(
         }
     )
 }
-

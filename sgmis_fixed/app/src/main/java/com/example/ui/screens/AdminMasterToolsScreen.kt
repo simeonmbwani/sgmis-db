@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,11 +12,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.data.model.AppRole
 import com.example.data.model.ReassignDutyRequest
 import com.example.data.model.SetOpeningBalanceRequest
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import java.time.LocalDate
 
@@ -79,29 +85,57 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
     val todayStr = LocalDate.now().toString()
     val upcomingShift = state.rosterShifts.filter { it.guard == guardId && it.date >= todayStr }.minByOrNull { it.date }
 
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("Leave & Duty Master Control", fontWeight = FontWeight.Bold) },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-            actions = { IconButton(onClick = { reloadAll() }) { Icon(Icons.Default.Refresh, "Refresh") } }
-        )
-    }) { padding ->
+    Scaffold(
+        topBar = {
+            SgmisTopAppBar(
+                title = "Leave & Duty Master Control",
+                subtitle = "Authoritative Overrides & Adjustments",
+                onNavigationClick = onBack,
+                navigationIcon = {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("admin_master_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = NavyDark
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { reloadAll() },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("refresh_admin_master_button")
+                    ) {
+                        Icon(Icons.Default.Refresh, "Refresh", tint = NavyDark)
+                    }
+                }
+            )
+        }
+    ) { padding ->
         Column(
             Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .background(LightBackground)
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             if (state.errorMessage != null) {
                 Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    shape = RoundedCornerShape(8.dp)
+                    color = StatusError.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
                         state.errorMessage!!,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        color = StatusError,
                         modifier = Modifier.padding(12.dp),
                         style = MaterialTheme.typography.bodyMedium
                     )
@@ -109,12 +143,13 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
             }
             if (state.successMessage != null) {
                 Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(8.dp)
+                    color = StatusSuccess.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
                         state.successMessage!!,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        color = StatusSuccess,
                         modifier = Modifier.padding(12.dp),
                         style = MaterialTheme.typography.bodyMedium
                     )
@@ -153,41 +188,35 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
 
             // 2. Authoritative Current Record Card
             if (selectedGuard != null) {
-                ElevatedCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.elevatedCardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    )
+                SgmisCard(
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Authoritative Current Record", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer
-                            ) {
-                                Text(
-                                    "DATABASE REAL-TIME",
-                                    Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
+                            Text(
+                                "Authoritative Current Record",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimaryLight
+                            )
+                            SgmisBadge(
+                                text = "DATABASE REAL-TIME",
+                                variant = BadgeVariant.Info
+                            )
                         }
-                        HorizontalDivider()
+                        HorizontalDivider(color = BorderSubtleLight, thickness = 0.5.dp)
 
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Employee:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                            Text("${selectedGuard.fullName ?: selectedGuard.username} (${selectedGuard.employeeNumber ?: "None"})", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                            Text("Employee:", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
+                            Text("${selectedGuard.fullName ?: selectedGuard.username} (${selectedGuard.employeeNumber ?: "None"})", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, color = TextPrimaryLight)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Station:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                            Text(state.stations.firstOrNull { it.id == selectedGuard.station }?.name ?: selectedGuard.stationName ?: "Unassigned", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                            Text("Station:", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
+                            Text(state.stations.firstOrNull { it.id == selectedGuard.station }?.name ?: selectedGuard.stationName ?: "Unassigned", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, color = TextPrimaryLight)
                         }
 
                         val partnerName = if (activePair != null) {
@@ -195,31 +224,31 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
                         } else "None assigned"
                         val pairOrder = activePair?.rotationOrder ?: activePair?.order ?: 1
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Roster Pair & Order:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                            Text("Pair $pairOrder · Partner: $partnerName", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                            Text("Roster Pair & Order:", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
+                            Text("Pair $pairOrder · Partner: $partnerName", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, color = TextPrimaryLight)
                         }
 
-                        HorizontalDivider()
-                        Text("Current Leave Balances:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                        HorizontalDivider(color = BorderSubtleLight, thickness = 0.5.dp)
+                        Text("Current Leave Balances:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = TextPrimaryLight)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Vacation Days:", style = MaterialTheme.typography.bodySmall)
-                            Text("${currentBalance?.remainingVacation ?: 0.0} rem (${currentBalance?.vacationDays ?: 0.0} accrued, ${currentBalance?.usedVacation ?: 0.0} used)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                            Text("Vacation Days:", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
+                            Text("${currentBalance?.remainingVacation ?: 0.0} rem (${currentBalance?.vacationDays ?: 0.0} accrued, ${currentBalance?.usedVacation ?: 0.0} used)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, color = TextPrimaryLight)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Casual Days:", style = MaterialTheme.typography.bodySmall)
-                            Text("${currentBalance?.remainingCasual ?: 0.0} rem (${currentBalance?.casualDays ?: 0.0} accrued, ${currentBalance?.usedCasual ?: 0.0} used)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                            Text("Casual Days:", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
+                            Text("${currentBalance?.remainingCasual ?: 0.0} rem (${currentBalance?.casualDays ?: 0.0} accrued, ${currentBalance?.usedCasual ?: 0.0} used)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, color = TextPrimaryLight)
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Holiday Compensation:", style = MaterialTheme.typography.bodySmall)
-                            Text("${currentBalance?.remainingCompensation ?: 0.0} days rem", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                            Text("Holiday Compensation:", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
+                            Text("${currentBalance?.remainingCompensation ?: 0.0} days rem", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, color = TextPrimaryLight)
                         }
 
                         if (upcomingShift != null) {
-                            HorizontalDivider()
-                            Text("Next Scheduled Duty:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            HorizontalDivider(color = BorderSubtleLight, thickness = 0.5.dp)
+                            Text("Next Scheduled Duty:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = TextPrimaryLight)
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("${upcomingShift.date} · ${upcomingShift.shiftType} · ${upcomingShift.stationName}", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
-                                Text("${upcomingShift.assignmentType} (${upcomingShift.attendanceStatus})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                Text("${upcomingShift.date} · ${upcomingShift.shiftType} · ${upcomingShift.stationName}", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, color = TextPrimaryLight)
+                                Text("${upcomingShift.assignmentType} (${upcomingShift.attendanceStatus})", style = MaterialTheme.typography.bodySmall, color = NavyDark, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -227,14 +256,25 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
             }
 
             // 3. Opening Leave Balance Card
-            ElevatedCard {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Opening Leave Balance", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Superuser master ledger adjustment. Establishes verified opening balance without mutating historical accruals.", style = MaterialTheme.typography.bodySmall)
+            SgmisCard {
+                Column(Modifier.fillMaxWidth().padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Opening Leave Balance", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = TextPrimaryLight)
+                    Text("Superuser master ledger adjustment. Establishes verified opening balance without mutating historical accruals.", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
 
                     if (currentBalance != null) {
-                        Text("Current Balances: Vacation ${currentBalance.vacationDays}d · Casual ${currentBalance.casualDays}d · Holiday Compensation ${currentBalance.remainingCompensation}d",
-                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Surface(
+                            color = NavyDark.copy(alpha = 0.08f),
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "Current Balances: Vacation ${currentBalance.vacationDays}d · Casual ${currentBalance.casualDays}d · Holiday Compensation ${currentBalance.remainingCompensation}d",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = NavyDark,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
                     }
 
                     OutlinedTextField(
@@ -283,7 +323,10 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
                                 (compensation.isBlank() || compensation.toDoubleOrNull() != null) &&
                                 !state.openingBalanceSaving,
                         onClick = { confirmOpeningBalance = true },
-                        modifier = Modifier.fillMaxWidth()
+                        colors = ButtonDefaults.buttonColors(containerColor = NavyDark),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
                     ) {
                         Text(if (state.openingBalanceSaving) "Saving…" else "Review opening balance")
                     }
@@ -291,10 +334,10 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
             }
 
             // 4. Future Duty Reassignment Card
-            ElevatedCard {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Future Duty Reassignment", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Superuser duty reassignment forward from effective date. Earlier shifts and attendance records are strictly preserved.", style = MaterialTheme.typography.bodySmall)
+            SgmisCard {
+                Column(Modifier.fillMaxWidth().padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Future Duty Reassignment", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = TextPrimaryLight)
+                    Text("Superuser duty reassignment forward from effective date. Earlier shifts and attendance records are strictly preserved.", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
 
                     OutlinedTextField(
                         value = effectiveDate,
@@ -434,7 +477,10 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
                     Button(
                         enabled = guardId.isNotBlank() && reason.isNotBlank() && !state.dutyReassignmentSaving,
                         onClick = { confirmDutyReassignment = true },
-                        modifier = Modifier.fillMaxWidth()
+                        colors = ButtonDefaults.buttonColors(containerColor = NavyDark),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
                     ) {
                         Text(if (state.dutyReassignmentSaving) "Saving…" else "Review future reassignment")
                     }
@@ -442,19 +488,19 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
             }
 
             // 5. Recent Leave Adjustments
-            Text("Recent Leave Adjustments Ledger", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("Recent Leave Adjustments Ledger", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = TextPrimaryLight)
             if (state.leaveAdjustmentHistory.isEmpty()) {
-                Text("No recent adjustments recorded.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                Text("No recent adjustments recorded.", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
             } else {
                 state.leaveAdjustmentHistory.take(20).forEach { row ->
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    SgmisCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("${row.guardName ?: row.guard} · ${row.leaveType}", fontWeight = FontWeight.Bold)
-                                Text("${row.previousBalance} → ${row.newBalance} days", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                                Text("${row.guardName ?: row.guard} · ${row.leaveType}", fontWeight = FontWeight.Bold, color = TextPrimaryLight)
+                                Text("${row.previousBalance} → ${row.newBalance} days", fontWeight = FontWeight.SemiBold, color = NavyDark)
                             }
-                            Text("Effective: ${row.effectiveDate} · Authorized by: ${row.authorizedByName ?: "Admin"}", style = MaterialTheme.typography.bodySmall)
-                            Text("Source: ${row.source} · Reason: ${row.reason}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                            Text("Effective: ${row.effectiveDate} · Authorized by: ${row.authorizedByName ?: "Admin"}", style = MaterialTheme.typography.bodySmall, color = TextPrimaryLight)
+                            Text("Source: ${row.source} · Reason: ${row.reason}", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
                         }
                     }
                 }
@@ -466,20 +512,20 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
         val guardLabel = selectedGuard?.fullName ?: selectedGuard?.username ?: guardId
         AlertDialog(
             onDismissRequest = { confirmOpeningBalance = false },
-            title = { Text("Save Opening Balance Changes?") },
+            title = { Text("Save Opening Balance Changes?", fontWeight = FontWeight.Bold, color = TextPrimaryLight) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Employee: $guardLabel")
-                    Text("Effective Date: $effectiveDate")
-                    if (vacation.isNotBlank()) Text("Vacation: ${currentBalance?.vacationDays ?: 0.0} → ${vacation.toDoubleOrNull()} days")
-                    if (casual.isNotBlank()) Text("Casual: ${currentBalance?.casualDays ?: 0.0} → ${casual.toDoubleOrNull()} days")
-                    if (compensation.isNotBlank()) Text("Holiday Comp: ${currentBalance?.remainingCompensation ?: 0.0} → ${compensation.toDoubleOrNull()} days")
-                    Text("Reason: $reason")
-                    if (source.isNotBlank()) Text("Source: $source")
+                    Text("Employee: $guardLabel", style = MaterialTheme.typography.bodyMedium, color = TextPrimaryLight)
+                    Text("Effective Date: $effectiveDate", style = MaterialTheme.typography.bodyMedium, color = TextPrimaryLight)
+                    if (vacation.isNotBlank()) Text("Vacation: ${currentBalance?.vacationDays ?: 0.0} → ${vacation.toDoubleOrNull()} days", color = NavyDark, fontWeight = FontWeight.SemiBold)
+                    if (casual.isNotBlank()) Text("Casual: ${currentBalance?.casualDays ?: 0.0} → ${casual.toDoubleOrNull()} days", color = NavyDark, fontWeight = FontWeight.SemiBold)
+                    if (compensation.isNotBlank()) Text("Holiday Comp: ${currentBalance?.remainingCompensation ?: 0.0} → ${compensation.toDoubleOrNull()} days", color = NavyDark, fontWeight = FontWeight.SemiBold)
+                    Text("Reason: $reason", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
+                    if (source.isNotBlank()) Text("Source: $source", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
                 }
             },
             confirmButton = {
-                TextButton(
+                Button(
                     enabled = !state.openingBalanceSaving,
                     onClick = {
                         confirmOpeningBalance = false
@@ -494,10 +540,11 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
                                 compensationBalance = compensation.toDoubleOrNull()
                             )
                         )
-                    }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = NavyDark)
                 ) { Text(if (state.openingBalanceSaving) "Saving…" else "Confirm Save") }
             },
-            dismissButton = { TextButton(onClick = { confirmOpeningBalance = false }) { Text("Back") } }
+            dismissButton = { TextButton(onClick = { confirmOpeningBalance = false }) { Text("Back", color = TextSecondaryLight) } }
         )
     }
 
@@ -509,22 +556,22 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
 
         AlertDialog(
             onDismissRequest = { confirmDutyReassignment = false },
-            title = { Text("Confirm Future Duty Reassignment?") },
+            title = { Text("Confirm Future Duty Reassignment?", fontWeight = FontWeight.Bold, color = TextPrimaryLight) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Employee: $guardLabel")
-                    Text("Effective Date: From $effectiveDate forward")
-                    Text("New Station: $targetStationName")
-                    Text("New Shift Type: ${shiftType.ifBlank { "Unchanged" }}")
-                    Text("Replacement Pair Guard: $pairLabel")
-                    if (rosterPosition.isNotBlank()) Text("Roster Position: Pair $rosterPosition")
-                    if (assignmentType.isNotBlank()) Text("Assignment Type: $assignmentType")
-                    Text("Earlier roster history and attendance are strictly preserved.")
-                    Text("Reason: $reason")
+                    Text("Employee: $guardLabel", style = MaterialTheme.typography.bodyMedium, color = TextPrimaryLight)
+                    Text("Effective Date: From $effectiveDate forward", style = MaterialTheme.typography.bodyMedium, color = TextPrimaryLight)
+                    Text("New Station: $targetStationName", style = MaterialTheme.typography.bodyMedium, color = TextPrimaryLight)
+                    Text("New Shift Type: ${shiftType.ifBlank { "Unchanged" }}", style = MaterialTheme.typography.bodyMedium, color = TextPrimaryLight)
+                    Text("Replacement Pair Guard: $pairLabel", style = MaterialTheme.typography.bodyMedium, color = TextPrimaryLight)
+                    if (rosterPosition.isNotBlank()) Text("Roster Position: Pair $rosterPosition", style = MaterialTheme.typography.bodyMedium, color = TextPrimaryLight)
+                    if (assignmentType.isNotBlank()) Text("Assignment Type: $assignmentType", style = MaterialTheme.typography.bodyMedium, color = TextPrimaryLight)
+                    Text("Earlier roster history and attendance are strictly preserved.", style = MaterialTheme.typography.labelSmall, color = NavyDark, fontWeight = FontWeight.SemiBold)
+                    Text("Reason: $reason", style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
                 }
             },
             confirmButton = {
-                TextButton(
+                Button(
                     enabled = !state.dutyReassignmentSaving,
                     onClick = {
                         confirmDutyReassignment = false
@@ -540,10 +587,11 @@ fun AdminMasterToolsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
                                 assignmentType = assignmentType.ifBlank { null }
                             )
                         )
-                    }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = NavyDark)
                 ) { Text(if (state.dutyReassignmentSaving) "Saving…" else "Confirm Reassignment") }
             },
-            dismissButton = { TextButton(onClick = { confirmDutyReassignment = false }) { Text("Back") } }
+            dismissButton = { TextButton(onClick = { confirmDutyReassignment = false }) { Text("Back", color = TextSecondaryLight) } }
         )
     }
 }

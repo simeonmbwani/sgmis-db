@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -22,8 +23,8 @@ import com.example.R
 import com.example.data.model.CreateUserRequest
 import com.example.data.model.User
 import com.example.data.model.UpdateUserRequest
-import com.example.ui.theme.StatusSuccess
-import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import kotlinx.coroutines.delay
 
@@ -39,6 +40,8 @@ fun UserManagementScreen(
     var selectedUserForStation by remember { mutableStateOf<User?>(null) }
     var selectedUserForEdit by remember { mutableStateOf<User?>(null) }
     var userForActiveChange by remember { mutableStateOf<User?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedRoleFilter by remember { mutableStateOf("ALL") }
 
     // Auto-dismiss transient messages after 3.5 seconds
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
@@ -53,13 +56,32 @@ fun UserManagementScreen(
         viewModel.fetchStations()
     }
 
+    val filteredUsers = remember(uiState.users, searchQuery, selectedRoleFilter) {
+        uiState.users.filter { user ->
+            val matchesSearch = searchQuery.isBlank() ||
+                (user.fullName ?: "").contains(searchQuery, ignoreCase = true) ||
+                user.username.contains(searchQuery, ignoreCase = true) ||
+                (user.employeeNumber ?: "").contains(searchQuery, ignoreCase = true) ||
+                (user.stationName ?: "").contains(searchQuery, ignoreCase = true)
+
+            val matchesRole = when (selectedRoleFilter) {
+                "GUARD" -> user.role.equals("GUARD", true)
+                "SUPERVISOR" -> user.role.equals("SUPERVISOR", true)
+                "ADMIN" -> user.role.equals("ADMINISTRATOR", true) || user.role.equals("ADMIN", true)
+                else -> true
+            }
+            matchesSearch && matchesRole
+        }
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.users_title), fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = stringResource(R.string.users_title),
+                subtitle = "Personnel & Deployment Console",
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("users_back_button")) {
-                        Icon(Icons.Default.ArrowBack, "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
                 },
                 actions = {
@@ -69,8 +91,7 @@ fun UserManagementScreen(
                     ) {
                         Icon(Icons.Default.Refresh, "Refresh")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         },
         floatingActionButton = {
@@ -79,7 +100,7 @@ fun UserManagementScreen(
                 ExtendedFloatingActionButton(
                     onClick = { showCreateDialog = true },
                     icon = { Icon(Icons.Default.PersonAdd, null) },
-                    text = { Text("Add Guard / User") },
+                    text = { Text("Add Guard / User", fontWeight = FontWeight.SemiBold) },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.testTag("add_user_fab")
@@ -94,62 +115,83 @@ fun UserManagementScreen(
         ) {
             // Notification banners
             if (uiState.successMessage != null) {
-                Surface(
-                    color = StatusSuccess.copy(alpha = 0.15f),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.CheckCircle, null, tint = StatusSuccess, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.successMessage!!,
-                            color = StatusSuccess,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = SgmisCardStatus.SUCCESS,
+                    title = "Success",
+                    message = uiState.successMessage!!,
+                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs)
+                )
             }
 
             if (uiState.errorMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(8.dp)
+                SgmisStatusCard(
+                    status = SgmisCardStatus.ERROR,
+                    title = "Error",
+                    message = uiState.errorMessage!!,
+                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs)
+                )
+            }
+
+            // Search and Filter Bar
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+            ) {
+                SgmisSearchBar(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    placeholder = "Search by name, employee ID, station...",
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
+                    SgmisFilterChip(
+                        selected = selectedRoleFilter == "ALL",
+                        onClick = { selectedRoleFilter = "ALL" },
+                        label = "All (${uiState.users.size})"
+                    )
+                    SgmisFilterChip(
+                        selected = selectedRoleFilter == "GUARD",
+                        onClick = { selectedRoleFilter = "GUARD" },
+                        label = "Guards (${uiState.users.count { it.role.equals("GUARD", true) }})"
+                    )
+                    SgmisFilterChip(
+                        selected = selectedRoleFilter == "SUPERVISOR",
+                        onClick = { selectedRoleFilter = "SUPERVISOR" },
+                        label = "Supervisors (${uiState.users.count { it.role.equals("SUPERVISOR", true) }})"
+                    )
+                    SgmisFilterChip(
+                        selected = selectedRoleFilter == "ADMIN",
+                        onClick = { selectedRoleFilter = "ADMIN" },
+                        label = "Admins (${uiState.users.count { it.role.equals("ADMINISTRATOR", true) || it.role.equals("ADMIN", true) }})"
+                    )
                 }
             }
 
             if (uiState.adminLoading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                }
-            } else if (uiState.users.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text("No personnel found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                SgmisLoadingSkeleton(modifier = Modifier.padding(Spacing.md))
+            } else if (filteredUsers.isEmpty()) {
+                SgmisEmptyState(
+                    icon = Icons.Outlined.PeopleOutline,
+                    title = if (searchQuery.isNotBlank()) "No Matching Personnel" else "No Personnel Found",
+                    description = if (searchQuery.isNotBlank()) "Try refining your search keyword." else "Registered security personnel will appear here.",
+                    actionLabel = if (searchQuery.isBlank() && (uiState.currentUser?.role?.uppercase() in listOf("ADMINISTRATOR", "ADMIN"))) "Add Guard / User" else null,
+                    onAction = { showCreateDialog = true },
+                    modifier = Modifier.fillMaxSize()
+                )
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                    contentPadding = PaddingValues(bottom = 88.dp, top = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.md),
+                    contentPadding = PaddingValues(top = Spacing.xs, bottom = 88.dp),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
-                    items(uiState.users) { u ->
+                    items(filteredUsers) { u ->
                         UserCard(
                             user = u,
                             currentUserRole = uiState.currentUser?.role?.uppercase() ?: "GUARD",
@@ -193,9 +235,16 @@ fun UserManagementScreen(
     userForActiveChange?.let { user ->
         AlertDialog(
             onDismissRequest = { userForActiveChange = null },
-            title = { Text(if (user.isActive) "Deactivate account?" else "Reactivate account?") },
+            title = { Text(if (user.isActive) "Deactivate account?" else "Reactivate account?", fontWeight = FontWeight.Bold) },
             text = { Text("${user.fullName ?: user.username} · ${user.employeeNumber.orEmpty()}\nAccount status: ${if (user.isActive) "Active" else "Inactive"} → ${if (user.isActive) "Inactive" else "Active"}") },
-            confirmButton = { TextButton(onClick = { viewModel.toggleUserActive(user); userForActiveChange = null }) { Text("Confirm change") } },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.toggleUserActive(user); userForActiveChange = null },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (user.isActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                    )
+                ) { Text("Confirm Change") }
+            },
             dismissButton = { TextButton(onClick = { userForActiveChange = null }) { Text("Cancel") } }
         )
     }
@@ -212,10 +261,10 @@ fun UserCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(12.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(CornerRadius.md),
+        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.card)
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -235,16 +284,10 @@ fun UserCard(
                     )
                 }
 
-                Surface(
-                    color = if (user.isActive) StatusSuccess.copy(alpha = 0.2f) else StatusWarning.copy(alpha = 0.2f),
-                    shape = RoundedCornerShape(6.dp)
-                ) {
-                    Text(
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                    SgmisBadge(
                         text = if (user.isActive) "ACTIVE" else "INACTIVE",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (user.isActive) StatusSuccess else StatusWarning,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                        fontWeight = FontWeight.Bold
+                        variant = if (user.isActive) SgmisBadgeVariant.SUCCESS else SgmisBadgeVariant.ERROR
                     )
                 }
             }
@@ -252,11 +295,12 @@ fun UserCard(
             Text(
                 text = "Assigned Station: ${user.stationName ?: "Central (Unassigned)"}",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Medium
             )
 
             if (currentUserRole == "ADMINISTRATOR" || currentUserRole == "ADMIN") {
-                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
@@ -266,7 +310,12 @@ fun UserCard(
                         Text("Assign Station")
                     }
                     TextButton(onClick = onEdit) { Text("Edit Details") }
-                    TextButton(onClick = onToggleActive) {
+                    TextButton(
+                        onClick = onToggleActive,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = if (user.isActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                        )
+                    ) {
                         Text(if (user.isActive) "Deactivate" else "Activate")
                     }
                 }
@@ -282,23 +331,24 @@ private fun EditPersonnelDialog(user: User, onDismiss: () -> Unit, onSave: (Upda
     var firstName by remember(user.id) { mutableStateOf(user.firstName.orEmpty()) }
     var lastName by remember(user.id) { mutableStateOf(user.lastName.orEmpty()) }
     var phone by remember(user.id) { mutableStateOf(user.phoneNumber.orEmpty()) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edit Personnel Record") },
+        title = { Text("Edit Personnel Record", fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(employeeNumber, { employeeNumber = it }, label = { Text("Employee number") })
-                OutlinedTextField(firstName, { firstName = it }, label = { Text("First name") })
-                OutlinedTextField(lastName, { lastName = it }, label = { Text("Last name") })
-                OutlinedTextField(phone, { phone = it }, label = { Text("Phone") })
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                OutlinedTextField(employeeNumber, { employeeNumber = it }, label = { Text("Employee number") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(firstName, { firstName = it }, label = { Text("First name") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(lastName, { lastName = it }, label = { Text("Last name") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(phone, { phone = it }, label = { Text("Phone") }, modifier = Modifier.fillMaxWidth())
             }
         },
-        confirmButton = { TextButton(onClick = { confirmSave = true }) { Text("Review changes") } },
+        confirmButton = { Button(onClick = { confirmSave = true }) { Text("Review Changes") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
     if (confirmSave) AlertDialog(
         onDismissRequest = { confirmSave = false },
-        title = { Text("Save these personnel changes?") },
+        title = { Text("Save these personnel changes?", fontWeight = FontWeight.Bold) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Employee: ${user.fullName ?: user.username}")
             Text("Employee number: ${user.employeeNumber.orEmpty()} → $employeeNumber")
@@ -306,7 +356,7 @@ private fun EditPersonnelDialog(user: User, onDismiss: () -> Unit, onSave: (Upda
             Text("Last name: ${user.lastName.orEmpty()} → $lastName")
             Text("Phone: ${user.phoneNumber.orEmpty()} → $phone")
         } },
-        confirmButton = { TextButton(onClick = { confirmSave = false; onSave(UpdateUserRequest(employeeNumber = employeeNumber, firstName = firstName, lastName = lastName, phoneNumber = phone)) }) { Text("Confirm save") } },
+        confirmButton = { Button(onClick = { confirmSave = false; onSave(UpdateUserRequest(employeeNumber = employeeNumber, firstName = firstName, lastName = lastName, phoneNumber = phone)) }) { Text("Confirm Save") } },
         dismissButton = { TextButton(onClick = { confirmSave = false }) { Text("Back") } }
     )
 }
@@ -329,7 +379,7 @@ fun AssignStationDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs)
             ) {
                 Text("Select target deployment post:", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
@@ -342,11 +392,11 @@ fun AssignStationDialog(
                         selected = selectedStationId == null,
                         onClick = { selectedStationId = null }
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(Spacing.xs))
                     Text("Central Reserve (Unassigned)", fontWeight = FontWeight.SemiBold)
                 }
 
-                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
                 stations.forEach { st ->
                     Row(
@@ -357,7 +407,7 @@ fun AssignStationDialog(
                             selected = selectedStationId == st.id,
                             onClick = { selectedStationId = st.id }
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(Spacing.xs))
                         Column {
                             Text(st.name, fontWeight = FontWeight.Medium)
                             if (!st.code.isNullOrBlank()) {
@@ -382,9 +432,9 @@ fun AssignStationDialog(
     )
     if (confirmAssignment) AlertDialog(
         onDismissRequest = { confirmAssignment = false },
-        title = { Text("Save this station assignment?") },
+        title = { Text("Save this station assignment?", fontWeight = FontWeight.Bold) },
         text = { Text("${user.fullName ?: user.username}: ${user.stationName ?: "Unassigned"} → ${stations.firstOrNull { it.id == selectedStationId }?.name ?: "Unassigned"}") },
-        confirmButton = { TextButton(onClick = { confirmAssignment = false; onAssign(selectedStationId) }) { Text("Confirm assignment") } },
+        confirmButton = { Button(onClick = { confirmAssignment = false; onAssign(selectedStationId) }) { Text("Confirm Assignment") } },
         dismissButton = { TextButton(onClick = { confirmAssignment = false }) { Text("Back") } }
     )
 }
@@ -404,9 +454,9 @@ fun CreateUserDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add Security Officer / User") },
+        title = { Text("Add Security Officer / User", fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 OutlinedTextField(
                     value = username,
                     onValueChange = { username = it },
@@ -421,7 +471,7 @@ fun CreateUserDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                     OutlinedTextField(
                         value = firstName,
                         onValueChange = { firstName = it },
@@ -437,21 +487,21 @@ fun CreateUserDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                    SgmisFilterChip(
                         selected = role == "GUARD",
                         onClick = { role = "GUARD" },
-                        label = { Text("Guard") }
+                        label = "Guard"
                     )
-                    FilterChip(
+                    SgmisFilterChip(
                         selected = role == "SUPERVISOR",
                         onClick = { role = "SUPERVISOR" },
-                        label = { Text("Supervisor") }
+                        label = "Supervisor"
                     )
-                    FilterChip(
+                    SgmisFilterChip(
                         selected = role == "ADMINISTRATOR",
                         onClick = { role = "ADMINISTRATOR" },
-                        label = { Text("Admin") }
+                        label = "Admin"
                     )
                 }
             }

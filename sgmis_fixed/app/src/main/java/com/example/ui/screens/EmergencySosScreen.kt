@@ -26,8 +26,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
-import com.example.util.NotificationHelper
 
 /**
  * Reconstructed Guard SOS Emergency Screen (Blueprint Pages 6 & 14).
@@ -70,18 +71,26 @@ fun EmergencySosScreen(
                     modifier = Modifier.size(36.dp)
                 )
             },
-            title = { Text("CONFIRM EMERGENCY SOS") },
+            title = {
+                Text(
+                    "CONFIRM EMERGENCY SOS",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.error
+                )
+            },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                     Text(
-                        "Are you sure you want to broadcast an immediate high-priority distress alert to station supervisors and central dispatch?"
+                        "Are you sure you want to broadcast an immediate high-priority distress alert to station supervisors and central dispatch?",
+                        style = MaterialTheme.typography.bodyMedium
                     )
                     Surface(
                         color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(CornerRadius.sm),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
+                        Column(modifier = Modifier.padding(Spacing.sm)) {
                             Text(
                                 text = "Emergency: $selectedCategory",
                                 fontWeight = FontWeight.Bold,
@@ -115,7 +124,7 @@ fun EmergencySosScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                     enabled = !uiState.isDispatchingSos && !uiState.isLoading,
-                    modifier = Modifier.testTag("confirm_sos_button")
+                    modifier = Modifier.testTag("confirm_sos_button").defaultMinSize(minHeight = 48.dp)
                 ) {
                     if (uiState.isDispatchingSos || uiState.isLoading) {
                         CircularProgressIndicator(
@@ -123,7 +132,7 @@ fun EmergencySosScreen(
                             strokeWidth = 2.dp,
                             color = MaterialTheme.colorScheme.onError
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(Spacing.xs))
                         Text("ALERTING...", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onError)
                     } else {
                         Text("DISPATCH SOS ALARM", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onError)
@@ -143,13 +152,9 @@ fun EmergencySosScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Emergency SOS", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        Text(uiState.currentStationName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                    }
-                },
+            SgmisTopAppBar(
+                title = "Emergency SOS Beacon",
+                subtitle = "Active Post: ${uiState.currentStationName}",
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("emergency_back_button")) {
                         Icon(
@@ -157,10 +162,7 @@ fun EmergencySosScreen(
                             contentDescription = stringResource(R.string.back)
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                }
             )
         }
     ) { paddingValues ->
@@ -169,49 +171,28 @@ fun EmergencySosScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
                 .verticalScroll(scrollState)
-                .padding(16.dp),
+                .padding(Spacing.md),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(Spacing.md)
         ) {
             // Off-Duty Notice
             if (isOffDutyGuard) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Viewing Mode: Active emergency distress beacon requires an active, clocked-in operational shift.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = SgmisCardStatus.WARNING,
+                    title = "Duty Restricted",
+                    message = "Viewing Mode: Active emergency distress beacon requires an active, clocked-in operational shift.",
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
             // Error banner if submit fails
             if (uiState.errorMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = SgmisCardStatus.ERROR,
+                    title = "Dispatch Error",
+                    message = uiState.errorMessage!!,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
             // SOS Status Banner
@@ -219,10 +200,10 @@ fun EmergencySosScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth().testTag("sos_active_banner"),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(CornerRadius.md)
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        modifier = Modifier.fillMaxWidth().padding(Spacing.md),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -231,7 +212,7 @@ fun EmergencySosScreen(
                             tint = MaterialTheme.colorScheme.error,
                             modifier = Modifier.size(28.dp)
                         )
-                        Spacer(modifier = Modifier.width(12.dp))
+                        Spacer(modifier = Modifier.width(Spacing.sm))
                         Column {
                             Text(
                                 text = "DISTRESS BEACON DISPATCHED",
@@ -254,10 +235,10 @@ fun EmergencySosScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(14.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                shape = RoundedCornerShape(CornerRadius.md),
+                elevation = CardDefaults.cardElevation(defaultElevation = Elevation.card)
             ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(modifier = Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                     Text(
                         text = "SELECT EMERGENCY TYPE",
                         style = MaterialTheme.typography.labelMedium,
@@ -268,9 +249,9 @@ fun EmergencySosScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(CornerRadius.sm))
                                 .clickable { selectedCategory = category }
-                                .padding(vertical = 6.dp, horizontal = 4.dp),
+                                .padding(vertical = Spacing.xxs, horizontal = Spacing.xxs),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
@@ -278,7 +259,7 @@ fun EmergencySosScreen(
                                 onClick = { selectedCategory = category },
                                 colors = RadioButtonDefaults.colors(selectedColor = MaterialTheme.colorScheme.error)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(Spacing.xs))
                             Text(
                                 text = category,
                                 style = MaterialTheme.typography.bodyMedium,
@@ -289,8 +270,8 @@ fun EmergencySosScreen(
                 }
             }
 
-            // Prominent Panic Emblem
-            Spacer(modifier = Modifier.height(4.dp))
+            // Tactical SOS Panic Emblem Button
+            Spacer(modifier = Modifier.height(Spacing.xs))
             Box(
                 modifier = Modifier
                     .size(150.dp)
@@ -303,7 +284,7 @@ fun EmergencySosScreen(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(116.dp)
+                        .size(120.dp)
                         .clip(CircleShape)
                         .background(
                             if (isOffDutyGuard) MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
@@ -319,7 +300,7 @@ fun EmergencySosScreen(
                                 showConfirmDialog = true
                             }
                         },
-                        modifier = Modifier.size(116.dp).testTag("panic_sos_button"),
+                        modifier = Modifier.size(120.dp).testTag("panic_sos_button"),
                         enabled = !uiState.isDispatchingSos
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -333,7 +314,7 @@ fun EmergencySosScreen(
                                 Text(
                                     text = "ALERTING",
                                     fontWeight = FontWeight.Black,
-                                    fontSize = 10.sp,
+                                    fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onError
                                 )
                             } else {
@@ -360,23 +341,23 @@ fun EmergencySosScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 24.dp)
+                modifier = Modifier.padding(horizontal = Spacing.lg)
             )
 
             // Station & Officer Telemetry Card
             Card(
                 modifier = Modifier.fillMaxWidth().testTag("sos_telemetry_card"),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                shape = RoundedCornerShape(CornerRadius.md),
+                elevation = CardDefaults.cardElevation(defaultElevation = Elevation.card)
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(modifier = Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                     Text(
                         text = "Officer Context for Dispatch",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     SosInfoRow("Officer Name", user?.fullName ?: user?.username ?: "—")
                     SosInfoRow("Employee ID", user?.employeeNumber ?: "—")
                     SosInfoRow("Station Post", uiState.currentStationName)

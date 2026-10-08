@@ -5,10 +5,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 
-private val DarkColorScheme =
-  darkColorScheme(
+private val DarkColorScheme = darkColorScheme(
     primary = GoldAccent,
     onPrimary = NavyDark,
     primaryContainer = GoldContainer,
@@ -20,18 +20,18 @@ private val DarkColorScheme =
     tertiary = GoldMuted,
     onTertiary = Color.White,
     background = DarkBackground,
-    onBackground = Color.White,
+    onBackground = TextPrimaryDark,
     surface = DarkSurface,
-    onSurface = Color.White,
+    onSurface = TextPrimaryDark,
     surfaceVariant = DarkSurfaceVariant,
-    onSurfaceVariant = Color(0xFFD1D8E0),
-    outline = Color(0xFF334B68),
+    onSurfaceVariant = TextSecondaryDark,
+    outline = BorderStrongDark,
+    outlineVariant = BorderSubtleDark,
     error = StatusError,
     onError = Color.White
-  )
+)
 
-private val LightColorScheme =
-  lightColorScheme(
+private val LightColorScheme = lightColorScheme(
     primary = NavyDark,
     onPrimary = Color.White,
     primaryContainer = NavyContainer,
@@ -43,15 +43,16 @@ private val LightColorScheme =
     tertiary = GoldAccent,
     onTertiary = NavyDark,
     background = LightBackground,
-    onBackground = NavyDark,
+    onBackground = TextPrimaryLight,
     surface = LightSurface,
-    onSurface = NavyDark,
+    onSurface = TextPrimaryLight,
     surfaceVariant = LightSurfaceVariant,
-    onSurfaceVariant = NavyDark,
-    outline = Color(0xFFB0B9C6),
+    onSurfaceVariant = TextSecondaryLight,
+    outline = BorderStrongLight,
+    outlineVariant = BorderSubtleLight,
     error = StatusError,
     onError = Color.White
-  )
+)
 
 enum class ThemeMode(val label: String) {
     SYSTEM("System default"),
@@ -70,7 +71,19 @@ fun SmartSecurityTheme(
         ThemeMode.DARK -> true
     }
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
-    MaterialTheme(colorScheme = colorScheme, typography = Typography, content = content)
+
+    CompositionLocalProvider(
+        LocalSgmisSpacing provides SgmisSpacing(),
+        LocalSgmisRadius provides SgmisRadius(),
+        LocalSgmisTouchTarget provides SgmisTouchTarget(),
+        LocalSgmisElevation provides SgmisElevation()
+    ) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = Typography,
+            content = content
+        )
+    }
 }
 
 @Composable

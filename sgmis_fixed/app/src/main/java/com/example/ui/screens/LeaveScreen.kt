@@ -30,9 +30,8 @@ import com.example.data.model.LeaveApplication
 import com.example.data.model.LeaveBalance
 import com.example.data.model.LeaveAccrualRecord
 import com.example.data.model.LeaveCategoryRow
-import com.example.ui.theme.GoldAccent
-import com.example.ui.theme.StatusSuccess
-import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import kotlinx.coroutines.delay
 
@@ -74,8 +73,9 @@ fun LeaveScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.leave_title), fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = stringResource(R.string.leave_title),
+                subtitle = "Authorized Records • ${uiState.currentStationName}",
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("leave_back_button")) {
                         Icon(
@@ -99,8 +99,7 @@ fun LeaveScreen(
                     ) {
                         Icon(Icons.Default.Refresh, "Refresh Leave")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         }
     ) { paddingValues ->
@@ -108,95 +107,91 @@ fun LeaveScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
             // Notification banners
             if (uiState.successMessage != null) {
-                Surface(
-                    color = StatusSuccess.copy(alpha = 0.15f),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.CheckCircle, null, tint = StatusSuccess, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.successMessage!!,
-                            color = StatusSuccess,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = SgmisCardStatus.SUCCESS,
+                    title = "Success",
+                    message = uiState.successMessage!!,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
             if (uiState.errorMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = SgmisCardStatus.ERROR,
+                    title = "Error",
+                    message = uiState.errorMessage!!,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
             // Role-Specific Navigation Tabs
             if (isAdmin) {
-                TabRow(
+                PrimaryTabRow(
                     selectedTabIndex = selectedTabIndex,
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    containerColor = MaterialTheme.colorScheme.surface,
                     contentColor = MaterialTheme.colorScheme.primary
                 ) {
                     Tab(
                         selected = selectedTabIndex == 0,
                         onClick = { selectedTabIndex = 0 },
-                        text = { Text("National & Accruals", fontWeight = FontWeight.SemiBold, fontSize = 12.sp) },
-                        icon = { Icon(Icons.Default.AdminPanelSettings, null, modifier = Modifier.size(18.dp)) }
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+                                Icon(Icons.Default.AdminPanelSettings, null, modifier = Modifier.size(16.dp))
+                                Text("National & Accruals", fontWeight = if (selectedTabIndex == 0) FontWeight.Bold else FontWeight.Normal, fontSize = 12.sp)
+                            }
+                        }
                     )
                     Tab(
                         selected = selectedTabIndex == 1,
                         onClick = { selectedTabIndex = 1 },
-                        text = { Text("All Applications", fontWeight = FontWeight.SemiBold, fontSize = 12.sp) },
-                        icon = { Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(18.dp)) }
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+                                Icon(Icons.Default.CheckCircle, null, modifier = Modifier.size(16.dp))
+                                Text("All Applications (${uiState.leaveApplications.size})", fontWeight = if (selectedTabIndex == 1) FontWeight.Bold else FontWeight.Normal, fontSize = 12.sp)
+                            }
+                        }
                     )
                     Tab(
                         selected = selectedTabIndex == 2,
                         onClick = { selectedTabIndex = 2 },
-                        text = { Text("My Leave", fontWeight = FontWeight.SemiBold, fontSize = 12.sp) },
-                        icon = { Icon(Icons.Default.Person, null, modifier = Modifier.size(18.dp)) }
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+                                Icon(Icons.Default.Person, null, modifier = Modifier.size(16.dp))
+                                Text("My Leave", fontWeight = if (selectedTabIndex == 2) FontWeight.Bold else FontWeight.Normal, fontSize = 12.sp)
+                            }
+                        }
                     )
                 }
             } else if (isSupervisor) {
-                TabRow(
+                PrimaryTabRow(
                     selectedTabIndex = selectedTabIndex,
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    containerColor = MaterialTheme.colorScheme.surface,
                     contentColor = MaterialTheme.colorScheme.primary
                 ) {
                     Tab(
                         selected = selectedTabIndex == 0,
                         onClick = { selectedTabIndex = 0 },
-                        text = { Text("Station Command", fontWeight = FontWeight.SemiBold, fontSize = 13.sp) },
-                        icon = { Icon(Icons.Default.SupervisorAccount, null, modifier = Modifier.size(18.dp)) }
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+                                Icon(Icons.Default.SupervisorAccount, null, modifier = Modifier.size(16.dp))
+                                Text("Station Command", fontWeight = if (selectedTabIndex == 0) FontWeight.Bold else FontWeight.Normal, fontSize = 13.sp)
+                            }
+                        }
                     )
                     Tab(
                         selected = selectedTabIndex == 1,
                         onClick = { selectedTabIndex = 1 },
-                        text = { Text("My Leave", fontWeight = FontWeight.SemiBold, fontSize = 13.sp) },
-                        icon = { Icon(Icons.Default.Person, null, modifier = Modifier.size(18.dp)) }
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xxs)) {
+                                Icon(Icons.Default.Person, null, modifier = Modifier.size(16.dp))
+                                Text("My Leave", fontWeight = if (selectedTabIndex == 1) FontWeight.Bold else FontWeight.Normal, fontSize = 13.sp)
+                            }
+                        }
                     )
                 }
             }

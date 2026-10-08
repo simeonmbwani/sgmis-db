@@ -19,9 +19,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
 import com.example.R
-import com.example.ui.theme.ThemeMode
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,22 +40,22 @@ fun SettingsScreen(
     if (showLogoutDialog) {
         AlertDialog(
             onDismissRequest = { showLogoutDialog = false },
-            title = { Text("Confirm Logout") },
-            text = { Text("Are you sure you want to log out of Smart Security? You will need to authenticate again to access operational modules.") },
+            title = { Text("Confirm Logout", fontWeight = FontWeight.Bold, color = TextPrimaryLight) },
+            text = { Text("Are you sure you want to log out of Smart Security? You will need to authenticate again to access operational modules.", color = TextPrimaryLight) },
             confirmButton = {
                 Button(
                     onClick = {
                         showLogoutDialog = false
                         viewModel.logout()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    colors = ButtonDefaults.buttonColors(containerColor = StatusError)
                 ) {
-                    Text("Logout", color = MaterialTheme.colorScheme.onError)
+                    Text("Logout", color = SurfaceCardLight, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showLogoutDialog = false }) {
-                    Text("Cancel")
+                    Text("Cancel", color = TextSecondaryLight)
                 }
             }
         )
@@ -61,19 +63,24 @@ fun SettingsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Settings & About", fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = "Settings & About",
+                subtitle = "Application Preferences & System Info",
+                onNavigationClick = onBack,
                 navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("settings_back_button")) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("settings_back_button")
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back)
+                            contentDescription = stringResource(R.string.back),
+                            tint = NavyDark
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                }
             )
         }
     ) { paddingValues ->
@@ -81,40 +88,41 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .background(LightBackground)
                 .verticalScroll(scrollState)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             // Section 1: Appearance & Theme
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("theme_settings_card"),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            SgmisCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("theme_settings_card")
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(modifier = Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Outlined.Palette,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = NavyDark,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "Appearance",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimaryLight
                         )
                     }
 
                     Text(
                         text = "Choose your preferred interface theme. Setting is saved locally and applies across all screens.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = TextSecondaryLight
                     )
 
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = BorderSubtleLight, thickness = 0.5.dp)
 
                     ThemeMode.values().forEach { mode ->
                         val isSelected = uiState.themeMode == mode
@@ -127,14 +135,16 @@ fun SettingsScreen(
                         ) {
                             RadioButton(
                                 selected = isSelected,
-                                onClick = { viewModel.setThemeMode(mode) }
+                                onClick = { viewModel.setThemeMode(mode) },
+                                colors = RadioButtonDefaults.colors(selectedColor = NavyDark)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text(
                                     text = mode.label,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) NavyDark else TextPrimaryLight
                                 )
                                 Text(
                                     text = when (mode) {
@@ -143,7 +153,7 @@ fun SettingsScreen(
                                         ThemeMode.DARK -> "Command center dark navy palette"
                                     },
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = TextSecondaryLight
                                 )
                             }
                         }
@@ -152,25 +162,25 @@ fun SettingsScreen(
             }
 
             // Section 2: Authenticated Session Info
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("account_summary_card"),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            SgmisCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("account_summary_card")
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(modifier = Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Outlined.AccountCircle,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = NavyDark,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "Active Personnel Session",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimaryLight
                         )
                     }
 
@@ -185,67 +195,73 @@ fun SettingsScreen(
                         Text(
                             text = "No active user session detected.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = TextSecondaryLight
                         )
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
                     OutlinedButton(
                         onClick = { onNavigate(com.example.ui.navigation.NavRoutes.PROFILE) },
-                        modifier = Modifier.fillMaxWidth().testTag("settings_profile_button"),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("settings_profile_button"),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Icon(Icons.Outlined.Person, null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Outlined.Person, null, modifier = Modifier.size(18.dp), tint = NavyDark)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("View & Edit Profile")
+                        Text("View & Edit Profile", color = NavyDark, fontWeight = FontWeight.SemiBold)
                     }
 
                     Button(
                         onClick = { showLogoutDialog = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                        modifier = Modifier.fillMaxWidth().testTag("settings_logout_button")
+                        colors = ButtonDefaults.buttonColors(containerColor = StatusError.copy(alpha = 0.12f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("settings_logout_button")
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Logout,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onErrorContainer
+                            tint = StatusError
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Log Out", color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.Bold)
+                        Text("Log Out", color = StatusError, fontWeight = FontWeight.Bold)
                     }
                 }
             }
 
             // Section 3: About Smart Security
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("about_app_card"),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            SgmisCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("about_app_card")
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(modifier = Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Outlined.Security,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = NavyDark,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "About Smart Security",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimaryLight
                         )
                     }
 
                     Text(
                         text = "Smart Security is a comprehensive, production-grade security operations management and guard tracking platform designed for institutional physical security operations.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = TextSecondaryLight
                     )
 
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = BorderSubtleLight, thickness = 0.5.dp)
 
                     InfoRow(label = "Application Name", value = "Smart Security")
                     InfoRow(label = "Package ID", value = "com.aistudio.sgmis.secops")
@@ -259,12 +275,15 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(4.dp))
                     OutlinedButton(
                         onClick = { onNavigate(com.example.ui.navigation.NavRoutes.ABOUT) },
-                        modifier = Modifier.fillMaxWidth().testTag("view_full_about_button"),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("view_full_about_button"),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Icon(Icons.Outlined.Info, null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Outlined.Info, null, modifier = Modifier.size(18.dp), tint = NavyDark)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("View Complete App & Features Overview")
+                        Text("View Complete App & Features Overview", color = NavyDark, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -279,7 +298,7 @@ private fun InfoRow(label: String, value: String) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(text = value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+        Text(text = label, style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
+        Text(text = value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = TextPrimaryLight)
     }
 }

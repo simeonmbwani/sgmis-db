@@ -28,11 +28,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.model.*
-import com.example.ui.theme.GoldAccent
-import com.example.ui.theme.StatusSuccess
-import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import com.example.util.NotificationHelper
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,10 +48,10 @@ fun HandoverScreen(
     var handoverToAccept by remember { mutableStateOf<ShiftHandover?>(null) }
     var handoverToReject by remember { mutableStateOf<ShiftHandover?>(null) }
 
-    val currentUserRole = uiState.currentUser?.role
+    val currentUserRole = uiState.currentUser?.role?.uppercase()
     val isSupervisor = currentUserRole == "SUPERVISOR"
     val currentUserId = uiState.currentUser?.id
-    val isSupervisorOrAdmin = currentUserRole in listOf("SUPERVISOR", "ADMIN")
+    val isSupervisorOrAdmin = currentUserRole in listOf("SUPERVISOR", "ADMIN", "ADMINISTRATOR")
 
     val pendingForMe = remember(uiState.handovers, currentUserId) {
         uiState.handovers.filter {
@@ -74,18 +74,18 @@ fun HandoverScreen(
         }
     }
 
-    // Auto-dismiss transient messages after 3.5 seconds
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
         if (uiState.successMessage != null || uiState.errorMessage != null) {
-            kotlinx.coroutines.delay(3500)
+            delay(3500)
             viewModel.clearMessages()
         }
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.handover_title), fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = stringResource(R.string.handover_title),
+                subtitle = "Active Station: ${uiState.currentStationName}",
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("handover_back_button")) {
                         Icon(
@@ -101,10 +101,7 @@ fun HandoverScreen(
                     ) {
                         Icon(Icons.Default.Refresh, "Refresh Handovers")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                }
             )
         },
         floatingActionButton = {
@@ -112,7 +109,7 @@ fun HandoverScreen(
                 ExtendedFloatingActionButton(
                     onClick = { showCreateDialog = true },
                     icon = { Icon(Icons.Default.Send, null) },
-                    text = { Text("Submit Handover") },
+                    text = { Text("Submit Handover", fontWeight = FontWeight.SemiBold) },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier.testTag("submit_handover_fab")
@@ -120,8 +117,6 @@ fun HandoverScreen(
             }
         }
     ) { paddingValues ->
-        val currentUserId = uiState.currentUser?.id
-        val isSupervisorOrAdmin = currentUserRole in listOf("SUPERVISOR", "ADMIN")
         val pendingHandovers = uiState.handovers.filter {
             !it.incomingAccepted && !it.isHandoverRejected && (it.incomingGuard == currentUserId || isSupervisorOrAdmin || currentUserId == null)
         }
@@ -134,24 +129,35 @@ fun HandoverScreen(
         ) {
             // Off-duty guard notice
             if (uiState.isGuard && !uiState.isOnDuty) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Viewing mode: Submitting shift handovers requires an active clocked-in duty shift.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = SgmisCardStatus.WARNING,
+                    title = "Duty Restricted",
+                    message = "Viewing mode: Submitting shift handovers requires an active clocked-in duty shift.",
+                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs)
+                )
             }
 
-            TabRow(
+            // Notification banners
+            if (uiState.successMessage != null) {
+                SgmisStatusCard(
+                    status = SgmisCardStatus.SUCCESS,
+                    title = "Success",
+                    message = uiState.successMessage!!,
+                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs)
+                )
+            }
+
+            if (uiState.errorMessage != null) {
+                SgmisStatusCard(
+                    status = SgmisCardStatus.ERROR,
+                    title = "Error",
+                    message = uiState.errorMessage!!,
+                    modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs)
+                )
+            }
+
+            // Tabs for Pending vs All
+            PrimaryTabRow(
                 selectedTabIndex = selectedTab,
                 containerColor = MaterialTheme.colorScheme.surface,
                 contentColor = MaterialTheme.colorScheme.primary
@@ -159,79 +165,43 @@ fun HandoverScreen(
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = { Text("Pending Acceptance (${pendingHandovers.size})") }
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                            Text("Pending Acceptance", fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal)
+                            if (pendingHandovers.isNotEmpty()) {
+                                SgmisBadge(text = "${pendingHandovers.size}", variant = SgmisBadgeVariant.WARNING)
+                            }
+                        }
+                    }
                 )
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = { Text("All Handovers (${uiState.handovers.size})") }
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                            Text("All Handovers", fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal)
+                            Text("(${uiState.handovers.size})", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 )
             }
 
-            // Notification banners
-            if (uiState.successMessage != null) {
-                Surface(
-                    color = StatusSuccess.copy(alpha = 0.15f),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.CheckCircle, null, tint = StatusSuccess, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.successMessage!!,
-                            color = StatusSuccess,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            }
-
-            if (uiState.errorMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            }
-
             if (uiState.handoversLoading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                }
+                SgmisLoadingSkeleton(modifier = Modifier.padding(Spacing.md))
             } else if (displayList.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Outlined.AssignmentTurnedIn, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(56.dp))
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = if (selectedTab == 0) "No pending handovers to accept" else "No handover records found",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                SgmisEmptyState(
+                    icon = Icons.Outlined.AssignmentTurnedIn,
+                    title = if (selectedTab == 0) "No Pending Handovers" else "No Handover Records",
+                    description = if (selectedTab == 0) "All incoming handovers have been accepted." else "Shift logs and transfer documents will appear here.",
+                    actionLabel = if (uiState.todayShift != null && !isSupervisor && (!uiState.isGuard || uiState.isOnDuty)) "Create Handover" else null,
+                    onAction = { showCreateDialog = true },
+                    modifier = Modifier.fillMaxSize()
+                )
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                    contentPadding = PaddingValues(top = 16.dp, bottom = 88.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.md),
+                    contentPadding = PaddingValues(top = Spacing.sm, bottom = 88.dp),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
                     items(displayList) { handover ->
                         HandoverCard(
@@ -320,12 +290,17 @@ fun HandoverCard(
     val canAction = isPending && isIncomingForMe && !isSupervisor
 
     Card(
-        modifier = Modifier.fillMaxWidth().testTag("handover_item_${handover.id}"),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("handover_item_${handover.id}"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(12.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(CornerRadius.md),
+        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.card)
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(
+            modifier = Modifier.padding(Spacing.md),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xs)
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -336,30 +311,18 @@ fun HandoverCard(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
-                Surface(
-                    color = when {
-                        handover.incomingAccepted -> StatusSuccess.copy(alpha = 0.15f)
-                        handover.isHandoverRejected -> MaterialTheme.colorScheme.errorContainer
-                        else -> StatusWarning.copy(alpha = 0.15f)
+                SgmisBadge(
+                    text = when {
+                        handover.incomingAccepted -> "ACCEPTED"
+                        handover.isHandoverRejected -> "REJECTED"
+                        else -> "PENDING ACCEPTANCE"
                     },
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        text = when {
-                            handover.incomingAccepted -> "ACCEPTED"
-                            handover.isHandoverRejected -> "REJECTED"
-                            else -> "PENDING ACCEPTANCE"
-                        },
-                        color = when {
-                            handover.incomingAccepted -> StatusSuccess
-                            handover.isHandoverRejected -> MaterialTheme.colorScheme.error
-                            else -> StatusWarning
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
+                    variant = when {
+                        handover.incomingAccepted -> SgmisBadgeVariant.SUCCESS
+                        handover.isHandoverRejected -> SgmisBadgeVariant.ERROR
+                        else -> SgmisBadgeVariant.WARNING
+                    }
+                )
             }
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -376,7 +339,7 @@ fun HandoverCard(
                 )
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
             Text(
                 text = "Occurrence Summary:",
@@ -396,17 +359,17 @@ fun HandoverCard(
             if (handover.pendingIssues.isNotBlank() && handover.pendingIssues != "None.") {
                 Surface(
                     color = if (handover.isHandoverRejected) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(6.dp),
+                    shape = RoundedCornerShape(CornerRadius.sm),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(modifier = Modifier.padding(Spacing.xs), verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             if (handover.isHandoverRejected) Icons.Default.Cancel else Icons.Default.Info,
                             null,
                             tint = if (handover.isHandoverRejected) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(Spacing.xs))
                         Text(
                             text = handover.pendingIssues,
                             style = MaterialTheme.typography.bodySmall,
@@ -419,16 +382,16 @@ fun HandoverCard(
             if (canAction) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.xs)
                 ) {
                     Button(
                         onClick = onAccept,
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f).testTag("accept_handover_button")
+                        shape = RoundedCornerShape(CornerRadius.sm),
+                        modifier = Modifier.weight(1f).testTag("accept_handover_button").defaultMinSize(minHeight = 44.dp)
                     ) {
                         Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(Spacing.xs))
                         Text("Accept")
                     }
 
@@ -436,18 +399,18 @@ fun HandoverCard(
                         onClick = onReject,
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f).testTag("reject_handover_button")
+                        shape = RoundedCornerShape(CornerRadius.sm),
+                        modifier = Modifier.weight(1f).testTag("reject_handover_button").defaultMinSize(minHeight = 44.dp)
                     ) {
                         Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(Spacing.xs))
                         Text("Reject", color = MaterialTheme.colorScheme.error)
                     }
                 }
             } else if (handover.incomingAccepted) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.CheckCircle, null, tint = StatusSuccess, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(Spacing.xs))
                     Text(
                         text = "Accepted at ${handover.incomingAcceptedAt ?: "on shift"}",
                         style = MaterialTheme.typography.labelSmall,
@@ -491,14 +454,14 @@ fun AcceptHandoverDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs)
             ) {
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(CornerRadius.sm),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(modifier = Modifier.padding(Spacing.xs), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Station:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(handover.stationName, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
@@ -521,24 +484,24 @@ fun AcceptHandoverDialog(
                 )
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(CornerRadius.sm),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
                         text = handover.occurrenceSummary.ifBlank { "No occurrences logged." },
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(10.dp)
+                        modifier = Modifier.padding(Spacing.xs)
                     )
                 }
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Equipment Issued:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(handover.equipmentIssued, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(Spacing.xs))
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Keys Handed Over:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(handover.keysHandedOver, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
@@ -548,12 +511,12 @@ fun AcceptHandoverDialog(
                 if (handover.pendingIssues.isNotBlank() && handover.pendingIssues != "None.") {
                     Surface(
                         color = StatusWarning.copy(alpha = 0.15f),
-                        shape = RoundedCornerShape(6.dp),
+                        shape = RoundedCornerShape(CornerRadius.sm),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(modifier = Modifier.padding(Spacing.xs), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Warning, null, tint = StatusWarning, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(Spacing.xs))
                             Column {
                                 Text("Pending Handover Discrepancies:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = StatusWarning)
                                 Text(handover.pendingIssues, style = MaterialTheme.typography.bodySmall)
@@ -562,14 +525,14 @@ fun AcceptHandoverDialog(
                     }
                 }
 
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(CornerRadius.sm))
                         .clickable { confirmedVerification = !confirmedVerification }
-                        .padding(vertical = 4.dp),
+                        .padding(vertical = Spacing.xxs),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Checkbox(
@@ -577,7 +540,7 @@ fun AcceptHandoverDialog(
                         onCheckedChange = { confirmedVerification = it },
                         modifier = Modifier.testTag("handover_verification_checkbox")
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(Spacing.xxs))
                     Text(
                         text = "I physically verify and confirm receipt of all post equipment, keys, and security status from ${handover.outgoingGuardName}.",
                         style = MaterialTheme.typography.bodySmall,
@@ -591,7 +554,7 @@ fun AcceptHandoverDialog(
                 onClick = onConfirm,
                 enabled = confirmedVerification && !isLoading,
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                modifier = Modifier.testTag("confirm_accept_handover_button")
+                modifier = Modifier.testTag("confirm_accept_handover_button").defaultMinSize(minHeight = 44.dp)
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(
@@ -599,7 +562,7 @@ fun AcceptHandoverDialog(
                         strokeWidth = 2.dp,
                         color = MaterialTheme.colorScheme.onPrimary
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(Spacing.xs))
                     Text("Verifying...")
                 } else {
                     Text("Confirm & Accept")
@@ -628,7 +591,7 @@ fun RejectHandoverDialog(
         icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
         title = { Text("Reject Shift Handover", fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 Text(
                     text = "Rejecting handover for ${handover.stationName} (Outgoing: ${handover.outgoingGuardName}). This flags discrepancies for supervisor review.",
                     style = MaterialTheme.typography.bodyMedium
@@ -649,7 +612,7 @@ fun RejectHandoverDialog(
                 onClick = { onConfirm(reason.trim()) },
                 enabled = !isLoading,
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                modifier = Modifier.testTag("confirm_reject_button")
+                modifier = Modifier.testTag("confirm_reject_button").defaultMinSize(minHeight = 44.dp)
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onError)
@@ -682,31 +645,19 @@ fun CreateHandoverDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
-        title = { Text("Submit Shift Handover") },
+        title = { Text("Submit Shift Handover", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs)
             ) {
                 if (errorMessage != null) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(8.dp),
+                    SgmisStatusCard(
+                        status = SgmisCardStatus.ERROR,
+                        title = "Handover Error",
+                        message = errorMessage,
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = errorMessage,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
+                    )
                 }
 
                 Text(
@@ -754,15 +705,15 @@ fun CreateHandoverDialog(
 
                 Surface(
                     color = if (emergencyOverride) StatusWarning.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(CornerRadius.sm),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
-                        modifier = Modifier.padding(12.dp),
+                        modifier = Modifier.padding(Spacing.sm),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Column(modifier = Modifier.weight(1f).padding(end = Spacing.xs)) {
                             Text(
                                 text = "Emergency Early Handover",
                                 style = MaterialTheme.typography.labelLarge,
@@ -793,7 +744,7 @@ fun CreateHandoverDialog(
                     }
                 },
                 enabled = occurrence.isNotBlank() && !isLoading,
-                modifier = Modifier.testTag("submit_handover_confirm_button")
+                modifier = Modifier.testTag("submit_handover_confirm_button").defaultMinSize(minHeight = 44.dp)
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(
@@ -801,7 +752,7 @@ fun CreateHandoverDialog(
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(Spacing.xs))
                     Text("Submitting...")
                 } else {
                     Text("Submit")

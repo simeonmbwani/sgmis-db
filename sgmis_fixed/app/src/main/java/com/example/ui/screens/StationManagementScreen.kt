@@ -22,9 +22,10 @@ import com.example.R
 import com.example.data.model.GuardPair
 import com.example.data.model.Station
 import com.example.data.model.User
-import com.example.ui.theme.StatusSuccess
-import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +39,7 @@ fun StationManagementScreen(
     var showCreatePairDialog by remember { mutableStateOf(false) }
     var selectedStationForEdit by remember { mutableStateOf<Station?>(null) }
     var selectedPairForEdit by remember { mutableStateOf<GuardPair?>(null) }
+    var selectedTab by remember { mutableStateOf(0) } // 0: Stations, 1: Guard Pairs
 
     val role = uiState.currentUser?.role?.uppercase()
     val canManage = role in listOf("ADMINISTRATOR", "ADMIN")
@@ -48,10 +50,18 @@ fun StationManagementScreen(
         viewModel.fetchUsers()
     }
 
+    LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
+        if (uiState.successMessage != null || uiState.errorMessage != null) {
+            delay(3500)
+            viewModel.clearMessages()
+        }
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.stations_title), fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = stringResource(R.string.stations_title),
+                subtitle = "Security Deployments & Rotation Pairs",
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -61,19 +71,20 @@ fun StationManagementScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.fetchStations() }) {
+                    IconButton(onClick = { viewModel.fetchStations(); viewModel.fetchGuardPairs() }) {
                         Icon(Icons.Default.Refresh, "Refresh")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         },
         floatingActionButton = {
             if (canManage) {
                 ExtendedFloatingActionButton(
-                    onClick = { showCreateStationDialog = true },
-                    icon = { Icon(Icons.Default.AddLocation, null) },
-                    text = { Text("Add Station") },
+                    onClick = {
+                        if (selectedTab == 0) showCreateStationDialog = true else showCreatePairDialog = true
+                    },
+                    icon = { Icon(if (selectedTab == 0) Icons.Default.AddLocation else Icons.Default.GroupAdd, null) },
+                    text = { Text(if (selectedTab == 0) "Add Station" else "Add Guard Pair", fontWeight = FontWeight.SemiBold) },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 )
@@ -84,116 +95,129 @@ fun StationManagementScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
             // Success & Error notification banners
             if (uiState.successMessage != null) {
-                Surface(
-                    color = StatusSuccess.copy(alpha = 0.15f),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.CheckCircle, null, tint = StatusSuccess, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.successMessage!!,
-                            color = StatusSuccess,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = SgmisCardStatus.SUCCESS,
+                    title = "Success",
+                    message = uiState.successMessage!!,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
             if (uiState.errorMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = SgmisCardStatus.ERROR,
+                    title = "Error",
+                    message = uiState.errorMessage!!,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
-            if (uiState.stations.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text("No deployment stations registered.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    item {
-                        Text("Stations (${uiState.stations.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    }
-                    items(uiState.stations) { st ->
-                        StationCard(st, if (canManage) ({ selectedStationForEdit = st }) else null)
-                    }
-                    item {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Guard Pairs (${uiState.guardPairs.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            if (canManage) {
-                                TextButton(onClick = { showCreatePairDialog = true }) {
-                                    Icon(Icons.Default.GroupAdd, null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Add Pair")
-                                }
-                            }
+            PrimaryTabRow(
+                selectedTabIndex = selectedTab,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary
+            ) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                            Icon(Icons.Default.LocationOn, null, modifier = Modifier.size(16.dp))
+                            Text("Stations (${uiState.stations.size})", fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal)
                         }
                     }
-                    items(uiState.guardPairs) { p ->
-                        val guardAName = p.guardAName ?: uiState.users.find { it.id == p.guardA }?.let { it.fullName ?: it.username } ?: p.guardA
-                        val guardBName = p.guardBName ?: uiState.users.find { it.id == p.guardB }?.let { it.fullName ?: it.username } ?: p.guardB
-                        val stationName = p.stationName ?: uiState.stations.find { it.id == p.station }?.name ?: p.station
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                            Icon(Icons.Default.Groups, null, modifier = Modifier.size(16.dp))
+                            Text("Guard Pairs (${uiState.guardPairs.size})", fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
+                )
+            }
 
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            shape = RoundedCornerShape(12.dp),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("Pair #${p.rotationOrder ?: p.order}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.primaryContainer,
-                                        shape = RoundedCornerShape(4.dp)
+            if (selectedTab == 0) {
+                if (uiState.stations.isEmpty()) {
+                    SgmisEmptyState(
+                        icon = Icons.Outlined.LocationOff,
+                        title = "No Stations Registered",
+                        description = "No deployment stations registered in the master database.",
+                        actionLabel = if (canManage) "Add Station" else null,
+                        onAction = { showCreateStationDialog = true },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(bottom = 88.dp),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                    ) {
+                        items(uiState.stations) { st ->
+                            StationCard(st, if (canManage) ({ selectedStationForEdit = st }) else null)
+                        }
+                    }
+                }
+            } else {
+                if (uiState.guardPairs.isEmpty()) {
+                    SgmisEmptyState(
+                        icon = Icons.Outlined.GroupOff,
+                        title = "No Guard Pairs Registered",
+                        description = "Create paired rosters for 2-officer shift coverage.",
+                        actionLabel = if (canManage) "Add Guard Pair" else null,
+                        onAction = { showCreatePairDialog = true },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(bottom = 88.dp),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                    ) {
+                        items(uiState.guardPairs) { p ->
+                            val guardAName = p.guardAName ?: uiState.users.find { it.id == p.guardA }?.let { it.fullName ?: it.username } ?: p.guardA
+                            val guardBName = p.guardBName ?: uiState.users.find { it.id == p.guardB }?.let { it.fullName ?: it.username } ?: p.guardB
+                            val stationName = p.stationName ?: uiState.stations.find { it.id == p.station }?.name ?: p.station
+
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                shape = RoundedCornerShape(CornerRadius.md),
+                                elevation = CardDefaults.cardElevation(defaultElevation = Elevation.card)
+                            ) {
+                                Column(modifier = Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = stationName,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
+                                        Text("Pair #${p.rotationOrder ?: p.order}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                                        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                                            SgmisBadge(
+                                                text = if (p.isActive) "ACTIVE" else "INACTIVE",
+                                                variant = if (p.isActive) SgmisBadgeVariant.SUCCESS else SgmisBadgeVariant.ERROR
+                                            )
+                                            SgmisBadge(
+                                                text = stationName,
+                                                variant = SgmisBadgeVariant.NEUTRAL
+                                            )
+                                        }
+                                    }
+                                    Text("Guard A: $guardAName", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                    Text("Guard B: $guardBName", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                    Text("Rotation Order: ${p.rotationOrder ?: p.order}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    if (canManage) {
+                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                            TextButton(onClick = { selectedPairForEdit = p }) { Text("Edit Pair") }
+                                        }
                                     }
                                 }
-                                Text("Guard A: $guardAName", style = MaterialTheme.typography.bodyMedium)
-                                Text("Guard B: $guardBName", style = MaterialTheme.typography.bodyMedium)
-                                Text("${if (p.isActive) "ACTIVE" else "INACTIVE"} · rotation ${p.rotationOrder ?: p.order}", style = MaterialTheme.typography.labelSmall)
-                                if (canManage) TextButton(onClick = { selectedPairForEdit = p }) { Text("Edit Pair") }
                             }
                         }
                     }
@@ -254,27 +278,24 @@ fun StationCard(station: Station, onEdit: (() -> Unit)? = null) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(12.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(CornerRadius.md),
+        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.card)
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(modifier = Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(station.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(6.dp)
-                ) {
-                    Text(
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                    SgmisBadge(
+                        text = if (station.isActive) "ACTIVE" else "INACTIVE",
+                        variant = if (station.isActive) SgmisBadgeVariant.SUCCESS else SgmisBadgeVariant.ERROR
+                    )
+                    SgmisBadge(
                         text = station.code ?: "STN",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
+                        variant = SgmisBadgeVariant.INFO
                     )
                 }
             }
@@ -283,8 +304,13 @@ fun StationCard(station: Station, onEdit: (() -> Unit)? = null) {
             }
             Text("Coordinates: ${station.latitude ?: 0.0}, ${station.longitude ?: 0.0} (Radius: ${station.effectiveRadius}m)", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
             Text("Assigned personnel: ${station.guardsCount} · Pairs: ${station.pairsCount}", style = MaterialTheme.typography.bodySmall)
-            Text(if (station.isActive) "ACTIVE" else "INACTIVE", color = if (station.isActive) StatusSuccess else StatusWarning, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-            if (onEdit != null) TextButton(onClick = onEdit) { Text("Edit Station Settings") }
+
+            if (onEdit != null) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onEdit) { Text("Edit Station Settings") }
+                }
+            }
         }
     }
 }
@@ -297,18 +323,29 @@ private fun EditStationDialog(station: Station, onDismiss: () -> Unit, onSave: (
     var address by remember(station.id) { mutableStateOf(station.address.orEmpty()) }
     var radius by remember(station.id) { mutableStateOf(station.effectiveRadius.toString()) }
     var active by remember(station.id) { mutableStateOf(station.isActive) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit Station") }, text = {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(name, { name = it }, label = { Text("Name") })
-            OutlinedTextField(code, { code = it.uppercase() }, label = { Text("Code") })
-            OutlinedTextField(address, { address = it }, label = { Text("Address") })
-            OutlinedTextField(radius, { radius = it }, label = { Text("Geofence radius (m)") })
-            Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(active, { active = it }); Text("Active") }
-        }
-    }, confirmButton = { TextButton(onClick = { confirmSave = true }) { Text("Review changes") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Station", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                OutlinedTextField(name, { name = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(code, { code = it.uppercase() }, label = { Text("Code") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(address, { address = it }, label = { Text("Address") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(radius, { radius = it }, label = { Text("Geofence radius (m)") }, modifier = Modifier.fillMaxWidth())
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(active, { active = it })
+                    Spacer(modifier = Modifier.width(Spacing.xxs))
+                    Text("Active Station")
+                }
+            }
+        },
+        confirmButton = { Button(onClick = { confirmSave = true }) { Text("Review Changes") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
     if (confirmSave) AlertDialog(
         onDismissRequest = { confirmSave = false },
-        title = { Text("Save these changes?") },
+        title = { Text("Save these changes?", fontWeight = FontWeight.Bold) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Station: ${station.name} → $name")
             Text("Code: ${station.code.orEmpty()} → $code")
@@ -316,7 +353,7 @@ private fun EditStationDialog(station: Station, onDismiss: () -> Unit, onSave: (
             Text("Geofence radius: ${station.effectiveRadius} m → ${radius} m")
             Text("Status: ${if (station.isActive) "Active" else "Inactive"} → ${if (active) "Active" else "Inactive"}")
         } },
-        confirmButton = { TextButton(onClick = { confirmSave = false; onSave(com.example.data.model.UpdateStationRequest(name, code, address, station.latitude, station.longitude, radius.toDoubleOrNull(), active)) }) { Text("Confirm save") } },
+        confirmButton = { Button(onClick = { confirmSave = false; onSave(com.example.data.model.UpdateStationRequest(name, code, address, station.latitude, station.longitude, radius.toDoubleOrNull(), active)) }) { Text("Confirm Save") } },
         dismissButton = { TextButton(onClick = { confirmSave = false }) { Text("Back") } }
     )
 }
@@ -329,21 +366,32 @@ private fun EditGuardPairDialog(pair: GuardPair, stations: List<Station>, users:
     var guardB by remember(pair.id) { mutableStateOf(pair.guardB) }
     var order by remember(pair.id) { mutableStateOf((pair.rotationOrder ?: pair.order).toString()) }
     var active by remember(pair.id) { mutableStateOf(pair.isActive) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit Guard Pair") }, text = {
-        Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Station")
-            stations.forEach { item -> TextButton(onClick = { station = item.id }) { Text("${if (station == item.id) "✓ " else ""}${item.name}") } }
-            Text("Guard A")
-            users.filter { it.role.equals("GUARD", true) }.forEach { item -> TextButton(onClick = { guardA = item.id }) { Text("${if (guardA == item.id) "✓ " else ""}${item.fullName ?: item.username}") } }
-            Text("Guard B")
-            users.filter { it.role.equals("GUARD", true) }.forEach { item -> TextButton(onClick = { guardB = item.id }) { Text("${if (guardB == item.id) "✓ " else ""}${item.fullName ?: item.username}") } }
-            OutlinedTextField(order, { order = it }, label = { Text("Rotation order (1–3)") })
-            Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(active, { active = it }); Text("Active pair") }
-        }
-    }, confirmButton = { TextButton(onClick = { confirmSave = true }) { Text("Review changes") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Guard Pair", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                Text("Station", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                stations.forEach { item -> TextButton(onClick = { station = item.id }) { Text("${if (station == item.id) "✓ " else ""}${item.name}") } }
+                Text("Guard A", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                users.filter { it.role.equals("GUARD", true) }.forEach { item -> TextButton(onClick = { guardA = item.id }) { Text("${if (guardA == item.id) "✓ " else ""}${item.fullName ?: item.username}") } }
+                Text("Guard B", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                users.filter { it.role.equals("GUARD", true) }.forEach { item -> TextButton(onClick = { guardB = item.id }) { Text("${if (guardB == item.id) "✓ " else ""}${item.fullName ?: item.username}") } }
+                OutlinedTextField(order, { order = it }, label = { Text("Rotation order (1–3)") }, modifier = Modifier.fillMaxWidth())
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(active, { active = it })
+                    Spacer(modifier = Modifier.width(Spacing.xxs))
+                    Text("Active pair")
+                }
+            }
+        },
+        confirmButton = { Button(onClick = { confirmSave = true }) { Text("Review Changes") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
     if (confirmSave) AlertDialog(
         onDismissRequest = { confirmSave = false },
-        title = { Text("Save these changes?") },
+        title = { Text("Save these changes?", fontWeight = FontWeight.Bold) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Station: ${pair.stationName.orEmpty()} → ${stations.firstOrNull { it.id == station }?.name ?: station}")
             Text("Guard A: ${pair.guardAName ?: pair.guardA} → ${users.firstOrNull { it.id == guardA }?.fullName ?: guardA}")
@@ -351,7 +399,7 @@ private fun EditGuardPairDialog(pair: GuardPair, stations: List<Station>, users:
             Text("Rotation order: ${pair.rotationOrder ?: pair.order} → ${order}")
             Text("Status: ${if (pair.isActive) "Active" else "Inactive"} → ${if (active) "Active" else "Inactive"}")
         } },
-        confirmButton = { TextButton(onClick = { confirmSave = false; onSave(com.example.data.model.UpdateGuardPairRequest(station, guardA, guardB, order.toIntOrNull(), active)) }) { Text("Confirm save") } },
+        confirmButton = { Button(onClick = { confirmSave = false; onSave(com.example.data.model.UpdateGuardPairRequest(station, guardA, guardB, order.toIntOrNull(), active)) }) { Text("Confirm Save") } },
         dismissButton = { TextButton(onClick = { confirmSave = false }) { Text("Back") } }
     )
 }
@@ -372,28 +420,16 @@ fun CreateStationDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
-        title = { Text("Register Deployment Station") },
+        title = { Text("Register Deployment Station", fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 if (errorMessage != null) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = errorMessage,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
+                    SgmisStatusCard(
+                        status = SgmisCardStatus.ERROR,
+                        title = "Validation Error",
+                        message = errorMessage,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
 
                 OutlinedTextField(
@@ -420,7 +456,7 @@ fun CreateStationDialog(
                     enabled = !isLoading,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                     OutlinedTextField(
                         value = lat,
                         onValueChange = { lat = it },
@@ -470,7 +506,7 @@ fun CreateStationDialog(
                         strokeWidth = 2.dp,
                         color = MaterialTheme.colorScheme.onPrimary
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(Spacing.xs))
                     Text("Registering...")
                 } else {
                     Text("Register")
@@ -500,25 +536,19 @@ fun CreateGuardPairDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
-        title = { Text("Create Authoritative Guard Pair") },
+        title = { Text("Create Authoritative Guard Pair", fontWeight = FontWeight.Bold) },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(Spacing.xs)
             ) {
                 if (errorMessage != null) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(
-                            text = errorMessage,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(10.dp)
-                        )
-                    }
+                    SgmisStatusCard(
+                        status = SgmisCardStatus.ERROR,
+                        title = "Validation Error",
+                        message = errorMessage,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
 
                 Text("Station:", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
@@ -531,7 +561,7 @@ fun CreateGuardPairDialog(
                             selected = selectedStationId == st.id,
                             onClick = { selectedStationId = st.id }
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(Spacing.xxs))
                         Text(st.name, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
@@ -596,7 +626,7 @@ fun CreateGuardPairDialog(
                 enabled = !isLoading && selectedStationId.isNotBlank() && selectedGuardA.isNotBlank() && selectedGuardB.isNotBlank() && selectedGuardA != selectedGuardB
             ) {
                 if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                 } else {
                     Text("Save Pair")
                 }

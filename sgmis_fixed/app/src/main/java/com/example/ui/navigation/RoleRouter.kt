@@ -35,6 +35,15 @@ object NavRoutes {
     const val PROFILE = "profile"
     const val ABOUT = "about"
 
+    // Secondary Navigation Hub Routes
+    const val GUARD_OPERATIONS_HUB = "guard_operations"
+    const val GUARD_SCHEDULE_HUB = "guard_schedule"
+    const val SUPERVISOR_OPERATIONS_HUB = "supervisor_operations"
+    const val SUPERVISOR_PERSONNEL_HUB = "supervisor_personnel"
+    const val ADMIN_GOVERNANCE_HUB = "admin_governance"
+    const val ADMIN_INFRASTRUCTURE_HUB = "admin_infrastructure"
+    const val ADMIN_AUDIT_HUB = "admin_audit"
+
     // Supervisory & Administrative Management Routes
     const val ATTENDANCE_MANAGEMENT = "attendance_management"
     const val ROSTER_MANAGEMENT = "roster"
@@ -94,7 +103,12 @@ object RoleRouter {
                 NavRoutes.HANDOVER,
                 NavRoutes.EMERGENCY_SOS,
                 NavRoutes.GUARD_DUTY_PLAN,
-                NavRoutes.GUARD_DASHBOARD
+                NavRoutes.GUARD_DASHBOARD,
+                NavRoutes.GUARD_OPERATIONS_HUB,
+                NavRoutes.GUARD_SCHEDULE_HUB,
+                NavRoutes.SUPERVISOR_DASHBOARD,
+                NavRoutes.SUPERVISOR_OPERATIONS_HUB,
+                NavRoutes.SUPERVISOR_PERSONNEL_HUB
             )
             AppRole.SUPERVISOR -> {
                 // Supervisors focus on supervisory command, roster management, attendance/override,
@@ -107,19 +121,26 @@ object RoleRouter {
                     NavRoutes.EMERGENCY_SOS,
                     NavRoutes.GUARD_DUTY_PLAN,
                     NavRoutes.GUARD_DASHBOARD,
+                    NavRoutes.GUARD_OPERATIONS_HUB,
+                    NavRoutes.GUARD_SCHEDULE_HUB,
                     NavRoutes.STATION_MANAGEMENT,
                     NavRoutes.ADMIN_DASHBOARD,
                     NavRoutes.ADMIN_HISTORY,
-                    NavRoutes.ADMIN_MASTER_TOOLS
+                    NavRoutes.ADMIN_MASTER_TOOLS,
+                    NavRoutes.ADMIN_GOVERNANCE_HUB,
+                    NavRoutes.ADMIN_INFRASTRUCTURE_HUB,
+                    NavRoutes.ADMIN_AUDIT_HUB
                 )
             }
             AppRole.GUARD -> {
-                // Guards can only access guard application routes and common non-operational routes.
+                // Guards can only access guard application routes, hubs, and common non-operational routes.
                 // Strictly barred from administrative and supervisory console routes.
                 route in listOf(
                     NavRoutes.LOGIN,
                     NavRoutes.DASHBOARD,
                     NavRoutes.GUARD_DASHBOARD,
+                    NavRoutes.GUARD_OPERATIONS_HUB,
+                    NavRoutes.GUARD_SCHEDULE_HUB,
                     NavRoutes.TODAY_SHIFT,
                     NavRoutes.HANDOVER,
                     NavRoutes.OCCURRENCE_BOOK,

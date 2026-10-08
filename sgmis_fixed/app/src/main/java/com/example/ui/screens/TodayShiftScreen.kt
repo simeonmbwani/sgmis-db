@@ -1,12 +1,18 @@
 package com.example.ui.screens
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -14,27 +20,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.model.Shift
-import com.example.ui.theme.GoldAccent
-import com.example.ui.theme.StatusError
-import com.example.ui.theme.StatusSuccess
-import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
-
-import android.Manifest
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.example.util.LocationHelper
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -101,7 +100,8 @@ fun TodayShiftScreen(
             showEarlyClockOutDialog = true
         }
         if (err.contains("Late Arrival Report required", ignoreCase = true) ||
-            err.contains("60 minutes", ignoreCase = true)) {
+            err.contains("60 minutes", ignoreCase = true)
+        ) {
             showLateArrivalDialog = true
         }
         if (!showEarlyClockOutDialog && !showLateArrivalDialog && (uiState.successMessage != null || uiState.errorMessage != null)) {
@@ -125,15 +125,14 @@ fun TodayShiftScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = stringResource(R.string.today_shift_title),
-                        fontWeight = FontWeight.Bold
-                    )
-                },
+            SgmisTopAppBar(
+                title = stringResource(R.string.today_shift_title),
+                subtitle = if (shift != null) "${shift.stationName} • ${shift.date}" else "Operational Console",
                 navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("today_shift_back_button")) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.testTag("today_shift_back_button")
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.back)
@@ -150,10 +149,7 @@ fun TodayShiftScreen(
                             contentDescription = "Refresh Shift"
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                }
             )
         }
     ) { paddingValues ->
@@ -161,162 +157,82 @@ fun TodayShiftScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             if (uiState.shiftLoading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    SgmisLoadingSkeleton(modifier = Modifier.fillMaxWidth().height(140.dp))
+                    SgmisLoadingSkeleton(modifier = Modifier.fillMaxWidth().height(90.dp))
+                    SgmisLoadingSkeleton(modifier = Modifier.fillMaxWidth().height(160.dp))
                 }
             } else if (uiState.errorMessage != null && shift == null) {
                 // Dedicated Error State
-                Card(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 40.dp)
-                        .testTag("shift_error_card"),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ),
-                    shape = RoundedCornerShape(16.dp)
+                        .padding(top = 24.dp)
+                        .testTag("shift_error_card")
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ErrorOutline,
-                            contentDescription = null,
-                            tint = StatusError,
-                            modifier = Modifier.size(64.dp)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "Failed to Load Shift",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = uiState.errorMessage!!,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(20.dp))
-                        Button(
-                            onClick = {
-                                viewModel.clearError()
-                                viewModel.fetchTodayShift()
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            )
-                        ) {
-                            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Retry Loading Shift")
+                    SgmisErrorState(
+                        title = "Failed to Load Shift",
+                        message = uiState.errorMessage ?: "Unknown error occurred while retrieving duty assignment.",
+                        actionLabel = "Retry Loading Shift",
+                        onAction = {
+                            viewModel.clearError()
+                            viewModel.fetchTodayShift()
                         }
-                    }
+                    )
                 }
             } else if (shift == null) {
-                // Empty state
-                Card(
+                // Dedicated Empty State
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 40.dp)
-                        .testTag("no_shift_card"),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ),
-                    shape = RoundedCornerShape(16.dp)
+                        .padding(top = 24.dp)
+                        .testTag("no_shift_card")
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.EventBusy,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(64.dp)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = stringResource(R.string.no_shift_scheduled),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = if (isGuard) {
-                                "You do not have an active shift assignment on today's roster."
-                            } else {
-                                "No active operational shift is currently scheduled for today on this roster."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(20.dp))
-                        Button(
-                            onClick = { viewModel.fetchTodayShift() },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            )
-                        ) {
-                            Text("Check Roster Again")
-                        }
-                    }
+                    SgmisEmptyState(
+                        icon = Icons.Outlined.EventBusy,
+                        title = stringResource(R.string.no_shift_scheduled),
+                        message = if (isGuard) {
+                            "You do not have an active shift assignment on today's roster."
+                        } else {
+                            "No active operational shift is currently scheduled for today on this roster."
+                        },
+                        actionLabel = "Check Roster Again",
+                        onAction = { viewModel.fetchTodayShift() }
+                    )
                 }
             } else {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(scrollState),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     // Feedback Messages
                     if (uiState.successMessage != null) {
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = StatusSuccess.copy(alpha = 0.15f)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.CheckCircle, null, tint = StatusSuccess, modifier = Modifier.size(20.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(uiState.successMessage!!, style = MaterialTheme.typography.bodySmall, color = StatusSuccess)
-                            }
-                        }
+                        SgmisStatusCard(
+                            status = CardStatus.SUCCESS,
+                            title = "Operation Successful",
+                            description = uiState.successMessage!!,
+                            icon = Icons.Default.CheckCircle
+                        )
                     }
 
                     if (uiState.errorMessage != null) {
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = StatusError.copy(alpha = 0.15f)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Error, null, tint = StatusError, modifier = Modifier.size(20.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(uiState.errorMessage!!, style = MaterialTheme.typography.bodySmall, color = StatusError)
-                            }
-                        }
+                        SgmisStatusCard(
+                            status = CardStatus.ERROR,
+                            title = "Operational Notice",
+                            description = uiState.errorMessage!!,
+                            icon = Icons.Default.Error
+                        )
                     }
 
-                    // Main Shift Assignment Card
+                    // 1. Authoritative Shift Assignment Card
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -330,15 +246,15 @@ fun TodayShiftScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(20.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                                .padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column {
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = shift.stationName,
                                         style = MaterialTheme.typography.titleLarge,
@@ -348,13 +264,17 @@ fun TodayShiftScreen(
                                     Text(
                                         text = if (isGuard) "Official Duty Assignment" else "Authoritative Station Duty Schedule",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.SemiBold
                                     )
                                 }
-                                ShiftTypeBadge(shift.shiftType, isOverride = shift.isOverride || uiState.guardDutyState.isReassigned)
+                                ShiftTypeBadge(
+                                    type = shift.shiftType,
+                                    isOverride = shift.isOverride || uiState.guardDutyState.isReassigned
+                                )
                             }
 
-                            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
 
                             // Details Grid
                             Row(
@@ -394,13 +314,13 @@ fun TodayShiftScreen(
                         }
                     }
 
-                    // Mandatory Shift Timing & Schedule Protocol Card
+                    // 2. Mandatory Shift Timing & Schedule Protocol Card
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("timing_protocol_card"),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
                         ),
                         shape = RoundedCornerShape(16.dp)
                     ) {
@@ -409,26 +329,61 @@ fun TodayShiftScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Schedule, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                Icon(
+                                    Icons.Default.Schedule,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Mandatory Schedule & Timing Protocol", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "Mandatory Schedule & Timing Protocol",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
-                            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Column {
-                                    Text("REPORTING WINDOW", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text("30 mins before start", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        "REPORTING WINDOW",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "30 mins before start",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
                                 }
                                 Column {
-                                    Text("GRACE PERIOD", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text("15 mins max", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = StatusWarning)
+                                    Text(
+                                        "GRACE PERIOD",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "15 mins max",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = StatusWarning
+                                    )
                                 }
                                 Column {
-                                    Text("SHIFT DURATION", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text("12 Hours Standard", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                                    Text(
+                                        "SHIFT DURATION",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "12 Hours Standard",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
                                 }
                             }
                             Surface(
@@ -436,8 +391,16 @@ fun TodayShiftScreen(
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Info, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(16.dp))
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Info,
+                                        null,
+                                        tint = MaterialTheme.colorScheme.secondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = "Shift handover / takeover is authorized strictly upon completing full 12-hour duty unless emergency supervisor authorization is logged.",
@@ -449,7 +412,7 @@ fun TodayShiftScreen(
                         }
                     }
 
-                    // Assigned Primary Duty Officer Card
+                    // 3. Assigned Primary Duty Officer Card
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -463,7 +426,7 @@ fun TodayShiftScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(20.dp),
+                                .padding(18.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
@@ -507,7 +470,7 @@ fun TodayShiftScreen(
                         }
                     }
 
-                    // Late Arrival Warning Banner
+                    // 4. Late Arrival Warning Banner
                     if (shift.lateReportRequired || shift.isSeriousLate || shift.isLate) {
                         Card(
                             modifier = Modifier
@@ -549,7 +512,7 @@ fun TodayShiftScreen(
                         }
                     }
 
-                    // Attendance Action Card
+                    // 5. Attendance Action Card
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
@@ -561,7 +524,7 @@ fun TodayShiftScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(20.dp),
+                                .padding(18.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             Row(
@@ -589,6 +552,11 @@ fun TodayShiftScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
+                                    val canClockIn = (shift.attendanceStatus == "NOT_CLOCKED_IN" || uiState.isEligibleForDuty) &&
+                                            shift.attendanceStatus != "CLOCKED_IN" &&
+                                            shift.attendanceStatus != "CLOCKED_OUT" &&
+                                            !uiState.clockLoading
+
                                     Button(
                                         onClick = {
                                             if (shift.lateReportRequired || shift.isSeriousLate) {
@@ -604,23 +572,34 @@ fun TodayShiftScreen(
                                                 }
                                             }
                                         },
-                                        enabled = (shift.attendanceStatus == "NOT_CLOCKED_IN" || uiState.isEligibleForDuty) &&
-                                                  shift.attendanceStatus != "CLOCKED_IN" &&
-                                                  shift.attendanceStatus != "CLOCKED_OUT" &&
-                                                  !uiState.clockLoading,
+                                        enabled = canClockIn,
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = MaterialTheme.colorScheme.primary
                                         ),
                                         shape = RoundedCornerShape(12.dp),
                                         modifier = Modifier
                                             .weight(1f)
-                                            .height(48.dp)
+                                            .height(52.dp)
                                             .testTag("clock_in_button")
                                     ) {
-                                        Icon(Icons.Default.Login, null, modifier = Modifier.size(18.dp))
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(stringResource(R.string.clock_in_button))
+                                        if (uiState.clockLoading && canClockIn) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                strokeWidth = 2.dp,
+                                                color = MaterialTheme.colorScheme.onPrimary
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        } else {
+                                            Icon(Icons.AutoMirrored.Filled.Login, null, modifier = Modifier.size(20.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        }
+                                        Text(
+                                            stringResource(R.string.clock_in_button),
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
+
+                                    val canClockOut = shift.attendanceStatus == "CLOCKED_IN" && !uiState.clockLoading
 
                                     Button(
                                         onClick = {
@@ -637,19 +616,31 @@ fun TodayShiftScreen(
                                                 }
                                             }
                                         },
-                                        enabled = shift.attendanceStatus == "CLOCKED_IN" && !uiState.clockLoading,
+                                        enabled = canClockOut,
                                         colors = ButtonDefaults.buttonColors(
                                             containerColor = MaterialTheme.colorScheme.secondary
                                         ),
                                         shape = RoundedCornerShape(12.dp),
                                         modifier = Modifier
                                             .weight(1f)
-                                            .height(48.dp)
+                                            .height(52.dp)
                                             .testTag("clock_out_button")
                                     ) {
-                                        Icon(Icons.Default.Logout, null, modifier = Modifier.size(18.dp))
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(stringResource(R.string.clock_out_button))
+                                        if (uiState.clockLoading && canClockOut) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                strokeWidth = 2.dp,
+                                                color = MaterialTheme.colorScheme.onSecondary
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        } else {
+                                            Icon(Icons.AutoMirrored.Filled.Logout, null, modifier = Modifier.size(20.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        }
+                                        Text(
+                                            stringResource(R.string.clock_out_button),
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
                             } else {
@@ -680,11 +671,12 @@ fun TodayShiftScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(88.dp))
+                    Spacer(modifier = Modifier.height(32.dp))
                 }
             }
         }
 
+        // Early Clock-Out Authorization Modal Dialog
         if (showEarlyClockOutDialog && shift != null) {
             AlertDialog(
                 onDismissRequest = {
@@ -877,6 +869,7 @@ fun TodayShiftScreen(
             )
         }
 
+        // Late Arrival Report Dialog
         if (showLateArrivalDialog && shift != null) {
             AlertDialog(
                 onDismissRequest = {

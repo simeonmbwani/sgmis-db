@@ -25,6 +25,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
 import com.example.R
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,19 +40,24 @@ fun AboutAppScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("About Smart Security", fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = "About Smart Security",
+                subtitle = "System Overview & Compliance",
+                onNavigationClick = onBack,
                 navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("about_back_button")) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("about_back_button")
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back)
+                            contentDescription = stringResource(R.string.back),
+                            tint = NavyDark
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                }
             )
         }
     ) { paddingValues ->
@@ -58,19 +65,19 @@ fun AboutAppScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .background(LightBackground)
                 .verticalScroll(scrollState)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // App Hero Banner Card
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("about_hero_card"),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)),
-                shape = RoundedCornerShape(20.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            SgmisCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("about_hero_card")
             ) {
                 Column(
-                    modifier = Modifier.padding(20.dp).fillMaxWidth(),
+                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -78,13 +85,13 @@ fun AboutAppScreen(
                         modifier = Modifier
                             .size(72.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary),
+                            .background(NavyDark),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.Security,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimary,
+                            tint = SurfaceCardLight,
                             modifier = Modifier.size(40.dp)
                         )
                     }
@@ -93,24 +100,24 @@ fun AboutAppScreen(
                         text = "Smart Security",
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = TextPrimaryLight
                     )
 
                     Text(
                         text = "Security Guard Management Information System",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = TextSecondaryLight
                     )
 
                     Surface(
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                        color = NavyDark.copy(alpha = 0.08f),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Text(
                             text = "Version ${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = NavyDark,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                         )
                     }
@@ -118,39 +125,39 @@ fun AboutAppScreen(
             }
 
             // Platform Description Card
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("about_description_card"),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            SgmisCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("about_description_card")
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(modifier = Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
                         text = "Platform Overview",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimaryLight
                     )
                     Text(
                         text = "Smart Security is a mission-critical, enterprise physical security operations platform engineered for universities, corporate campuses, and critical infrastructure. It provides authoritative single-source-of-truth duty tracking, immutable audit trails, and supervisor command controls.",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = TextSecondaryLight,
                         lineHeight = 22.sp
                     )
                 }
             }
 
             // Key System Features
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("about_features_card"),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            SgmisCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("about_features_card")
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Column(modifier = Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Text(
                         text = "Key Operational Capabilities",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimaryLight
                     )
 
                     FeatureItem(
@@ -197,19 +204,19 @@ fun AboutAppScreen(
             }
 
             // Technical Specifications Card
-            Card(
-                modifier = Modifier.fillMaxWidth().testTag("about_tech_card"),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            SgmisCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("about_tech_card")
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(modifier = Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = "System Information",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimaryLight
                     )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = BorderSubtleLight, thickness = 0.5.dp)
 
                     TechRow("Application ID", BuildConfig.APPLICATION_ID)
                     TechRow("Version Name", BuildConfig.VERSION_NAME)
@@ -228,7 +235,7 @@ fun AboutAppScreen(
                 Text(
                     text = "© 2026 Smart Security Systems. All rights reserved.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = TextSecondaryLight
                 )
             }
         }
@@ -250,13 +257,13 @@ private fun FeatureItem(
             modifier = Modifier
                 .size(36.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                .background(NavyDark.copy(alpha = 0.08f)),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = NavyDark,
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -265,12 +272,13 @@ private fun FeatureItem(
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold,
+                color = TextPrimaryLight
             )
             Text(
                 text = description,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = TextSecondaryLight,
                 lineHeight = 18.sp
             )
         }
@@ -284,7 +292,7 @@ private fun TechRow(label: String, value: String) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text = label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(text = value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+        Text(text = label, style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
+        Text(text = value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = TextPrimaryLight)
     }
 }

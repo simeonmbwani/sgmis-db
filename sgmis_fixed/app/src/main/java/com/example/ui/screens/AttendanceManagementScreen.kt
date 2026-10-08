@@ -6,6 +6,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -18,9 +21,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.model.Attendance
 import com.example.data.model.Shift
-import com.example.ui.theme.GoldAccent
-import com.example.ui.theme.StatusSuccess
-import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import java.text.SimpleDateFormat
 import java.util.*
@@ -86,16 +88,12 @@ fun AttendanceManagementScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Attendance Console", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        Text("Command & Duty Monitoring", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                    }
-                },
+            SgmisTopAppBar(
+                title = "Attendance Console",
+                subtitle = "Duty Monitoring • ${uiState.currentStationName}",
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("attendance_mgmt_back_button")) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -105,8 +103,7 @@ fun AttendanceManagementScreen(
                     }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh Attendance")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         }
     ) { paddingValues ->
@@ -118,13 +115,13 @@ fun AttendanceManagementScreen(
             // Filters and Search Bar
             Surface(
                 color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 2.dp,
+                tonalElevation = Elevation.card,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(modifier = Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         OutlinedTextField(
@@ -169,31 +166,22 @@ fun AttendanceManagementScreen(
                         }
                     }
 
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = { Text("Search guard name or employee ID...") },
-                        leadingIcon = { Icon(Icons.Default.Search, null) },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { searchQuery = "" }) {
-                                    Icon(Icons.Default.Clear, null)
-                                }
-                            }
-                        },
-                        singleLine = true,
+                    SgmisSearchBar(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        placeholder = "Search guard name or employee ID...",
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
 
-            // Summary Metrics Bar
+            // High contrast Metrics Row
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     MetricItem(label = "SCHEDULED", value = "$totalScheduled", color = MaterialTheme.colorScheme.onSurface)
@@ -207,30 +195,21 @@ fun AttendanceManagementScreen(
             }
 
             // Attendance Records List
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(top = 12.dp, bottom = 88.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                if (uiState.adminLoading) {
-                    item {
-                        Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                } else if (activeDutyShifts.isEmpty()) {
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                Text("No scheduled active guard duties for $selectedDate.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
-                } else {
+            if (uiState.adminLoading) {
+                SgmisLoadingSkeleton(modifier = Modifier.padding(Spacing.md))
+            } else if (activeDutyShifts.isEmpty()) {
+                SgmisEmptyState(
+                    icon = Icons.Outlined.EventBusy,
+                    title = "No Duty Shifts Found",
+                    description = "No scheduled active guard duties found for $selectedDate.",
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().padding(horizontal = Spacing.md),
+                    contentPadding = PaddingValues(top = Spacing.sm, bottom = 88.dp),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                ) {
                     items(activeDutyShifts) { shift ->
                         val attendance = attendanceMap[shift.id]
                         AttendanceRecordCard(shift = shift, attendance = attendance)
@@ -253,15 +232,16 @@ fun MetricItem(label: String, value: String, color: androidx.compose.ui.graphics
 fun AttendanceRecordCard(shift: Shift, attendance: Attendance?) {
     val isClockedOut = attendance?.clockOut != null
     val isClockedIn = attendance?.clockIn != null && !isClockedOut
-    val isNotClockedIn = attendance == null || attendance.clockIn == null
 
     Card(
-        modifier = Modifier.fillMaxWidth().testTag("attendance_record_${shift.id}"),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("attendance_record_${shift.id}"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(14.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(CornerRadius.md),
+        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.card)
     ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -280,41 +260,27 @@ fun AttendanceRecordCard(shift: Shift, attendance: Attendance?) {
                     )
                 }
 
-                // Attendance Status Pill
-                Surface(
-                    color = when {
-                        isClockedOut -> MaterialTheme.colorScheme.primaryContainer
-                        isClockedIn -> StatusSuccess.copy(alpha = 0.15f)
-                        else -> StatusWarning.copy(alpha = 0.15f)
+                SgmisBadge(
+                    text = when {
+                        isClockedOut -> "COMPLETED"
+                        isClockedIn -> "ON DUTY"
+                        else -> "NOT ARRIVED"
                     },
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text(
-                        text = when {
-                            isClockedOut -> "COMPLETED"
-                            isClockedIn -> "ON DUTY"
-                            else -> "NOT ARRIVED"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = when {
-                            isClockedOut -> MaterialTheme.colorScheme.primary
-                            isClockedIn -> StatusSuccess
-                            else -> StatusWarning
-                        },
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                    )
-                }
+                    variant = when {
+                        isClockedOut -> SgmisBadgeVariant.INFO
+                        isClockedIn -> SgmisBadgeVariant.SUCCESS
+                        else -> SgmisBadgeVariant.WARNING
+                    }
+                )
             }
 
-            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Scheduled Shift Type & Hours
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = if (shift.shiftType == "DAY") Icons.Default.WbSunny else Icons.Default.Nightlight,
@@ -322,7 +288,7 @@ fun AttendanceRecordCard(shift: Shift, attendance: Attendance?) {
                         tint = if (shift.shiftType == "DAY") GoldAccent else MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(Spacing.xs))
                     Text(
                         text = "${shift.shiftType} (${shift.startTime} - ${shift.endTime})",
                         style = MaterialTheme.typography.bodySmall,
@@ -344,20 +310,18 @@ fun AttendanceRecordCard(shift: Shift, attendance: Attendance?) {
             if (attendance != null && (attendance.clockIn != null || attendance.clockOut != null)) {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(CornerRadius.sm),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(modifier = Modifier.padding(Spacing.xs), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (attendance.clockIn != null) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Login, null, tint = StatusSuccess, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Icon(Icons.AutoMirrored.Filled.Login, null, tint = StatusSuccess, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(Spacing.xs))
                                 Text("In: ${attendance.clockIn}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                                 if (attendance.isLate) {
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Surface(color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f), shape = RoundedCornerShape(4.dp)) {
-                                        Text("LATE", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
-                                    }
+                                    Spacer(modifier = Modifier.width(Spacing.xs))
+                                    SgmisBadge(text = "LATE", variant = SgmisBadgeVariant.ERROR)
                                 }
                             }
                         }
@@ -368,8 +332,8 @@ fun AttendanceRecordCard(shift: Shift, attendance: Attendance?) {
 
                         if (attendance.clockOut != null) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Logout, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Icon(Icons.AutoMirrored.Filled.Logout, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(Spacing.xs))
                                 Text("Out: ${attendance.clockOut}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                             }
                         }

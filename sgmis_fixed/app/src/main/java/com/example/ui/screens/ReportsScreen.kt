@@ -23,7 +23,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -72,13 +75,21 @@ fun ReportsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.reports_title), fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = stringResource(R.string.reports_title),
+                subtitle = if (isGuard) "Station Assigned Records" else "Authoritative Company Ledger",
+                onNavigationClick = onBack,
                 navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("reports_back_button")) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("reports_back_button")
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back)
+                            contentDescription = stringResource(R.string.back),
+                            tint = NavyDark
                         )
                     }
                 },
@@ -135,18 +146,21 @@ fun ReportsScreen(
                             }
                             context.startActivity(Intent.createChooser(sendIntent, "Export $selectedCategory Report"))
                         },
-                        modifier = Modifier.testTag("export_reports_button")
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("export_reports_button")
                     ) {
-                        Icon(Icons.Default.Share, "Export / Share Report")
+                        Icon(Icons.Default.Share, "Export / Share Report", tint = NavyDark)
                     }
                     IconButton(
                         onClick = { viewModel.refreshAllData() },
-                        modifier = Modifier.testTag("refresh_reports_button")
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("refresh_reports_button")
                     ) {
-                        Icon(Icons.Default.Refresh, "Refresh")
+                        Icon(Icons.Default.Refresh, "Refresh", tint = NavyDark)
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         }
     ) { paddingValues ->
@@ -154,6 +168,7 @@ fun ReportsScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .background(LightBackground)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -161,19 +176,29 @@ fun ReportsScreen(
             ScrollableTabRow(
                 selectedTabIndex = categories.indexOfFirst { it.first == selectedCategory }.coerceAtLeast(0),
                 edgePadding = 0.dp,
+                containerColor = SurfaceCardLight,
+                contentColor = NavyDark,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 categories.forEach { (catKey, catLabel) ->
+                    val selected = selectedCategory == catKey
                     Tab(
-                        selected = selectedCategory == catKey,
+                        selected = selected,
                         onClick = { selectedCategory = catKey },
-                        text = { Text(catLabel, style = MaterialTheme.typography.labelMedium) }
+                        text = {
+                            Text(
+                                catLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (selected) NavyDark else TextSecondaryLight
+                            )
+                        }
                     )
                 }
             }
 
             // Summary Stats Card with Role Scope Indication (interactive)
-            Card(
+            SgmisCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable {
@@ -197,19 +222,20 @@ fun ReportsScreen(
                             ),
                             content = "Tap any individual record card below for detailed audit breakdown, cross-reference verification, and sharing options."
                         )
-                    },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    }
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
                             text = if (isGuard) "AUTHORITATIVE GUARD RECORDS (YOUR STATION)" else "AUTHORITATIVE COMPANY-WIDE AUDIT RECORDS",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = NavyDark,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
@@ -223,10 +249,15 @@ fun ReportsScreen(
                                 else -> "0 Records"
                             },
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimaryLight
                         )
                     }
-                    Icon(Icons.Default.ChevronRight, contentDescription = "View Details", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(
+                        Icons.Default.ChevronRight,
+                        contentDescription = "View Details",
+                        tint = TextSecondaryLight
+                    )
                 }
             }
 
@@ -241,7 +272,7 @@ fun ReportsScreen(
                             contentPadding = PaddingValues(bottom = 88.dp)
                         ) {
                             items(uiState.obEntries) { entry ->
-                                Card(
+                                SgmisCard(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
@@ -258,20 +289,47 @@ fun ReportsScreen(
                                             )
                                         }
                                 ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text(entry.entryNumber, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
-                                            Text(entry.createdAt.take(16).replace("T", " "), style = MaterialTheme.typography.labelSmall)
-                                        }
-                                        Text(entry.occurrenceText, style = MaterialTheme.typography.bodyMedium)
+                                    Column(
+                                        modifier = Modifier.padding(4.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("Post: ${entry.stationName} • Guard: ${entry.guardName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text(
+                                                entry.entryNumber,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace,
+                                                color = NavyDark
+                                            )
+                                            Text(
+                                                entry.createdAt.take(16).replace("T", " "),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = TextSecondaryLight
+                                            )
+                                        }
+                                        Text(
+                                            entry.occurrenceText,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = TextPrimaryLight
+                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                "Post: ${entry.stationName} • Guard: ${entry.guardName}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = TextSecondaryLight
+                                            )
                                             if (!entry.crossReference.isNullOrBlank()) {
-                                                Text("CR: ${entry.crossReference}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold)
+                                                SgmisBadge(
+                                                    text = "CR: ${entry.crossReference}",
+                                                    variant = BadgeVariant.Info
+                                                )
                                             }
                                         }
                                     }
@@ -289,7 +347,12 @@ fun ReportsScreen(
                             contentPadding = PaddingValues(bottom = 88.dp)
                         ) {
                             items(uiState.incidents) { inc ->
-                                Card(
+                                val badgeVariant = when (inc.priority.uppercase()) {
+                                    "CRITICAL", "HIGH" -> BadgeVariant.Danger
+                                    "MEDIUM" -> BadgeVariant.Warning
+                                    else -> BadgeVariant.Info
+                                }
+                                SgmisCard(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
@@ -308,13 +371,46 @@ fun ReportsScreen(
                                             )
                                         }
                                 ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text(inc.title, fontWeight = FontWeight.Bold)
-                                            Text(inc.priority, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                                    Column(
+                                        modifier = Modifier.padding(4.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                inc.title,
+                                                fontWeight = FontWeight.Bold,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = TextPrimaryLight
+                                            )
+                                            SgmisBadge(
+                                                text = inc.priority,
+                                                variant = badgeVariant
+                                            )
                                         }
-                                        Text(inc.description, style = MaterialTheme.typography.bodySmall)
-                                        Text("Status: ${inc.status} • Location: ${inc.location} • Guard: ${inc.reportingGuardName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(
+                                            inc.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = TextPrimaryLight
+                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                "Post: ${inc.stationName} • Guard: ${inc.reportingGuardName}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = TextSecondaryLight
+                                            )
+                                            SgmisBadge(
+                                                text = inc.status,
+                                                variant = if (inc.status.equals("RESOLVED", true)) BadgeVariant.Success else BadgeVariant.Neutral
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -330,7 +426,7 @@ fun ReportsScreen(
                             contentPadding = PaddingValues(bottom = 88.dp)
                         ) {
                             items(uiState.patrolLogs) { p ->
-                                Card(
+                                SgmisCard(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
@@ -349,13 +445,36 @@ fun ReportsScreen(
                                             )
                                         }
                                 ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text(p.stationName, fontWeight = FontWeight.Bold)
-                                            Text(p.status, style = MaterialTheme.typography.labelSmall)
+                                    Column(
+                                        modifier = Modifier.padding(4.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                p.stationName,
+                                                fontWeight = FontWeight.Bold,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = TextPrimaryLight
+                                            )
+                                            SgmisBadge(
+                                                text = p.status,
+                                                variant = if (p.status.equals("COMPLETED", true)) BadgeVariant.Success else BadgeVariant.Warning
+                                            )
                                         }
-                                        Text("Officer: ${p.guardName} • Scans: ${p.scansCount}", style = MaterialTheme.typography.bodySmall)
-                                        Text("Started: ${p.startTime?.take(16)?.replace("T", " ") ?: "Not started"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(
+                                            "Officer: ${p.guardName} • Scans: ${p.scansCount}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = TextPrimaryLight
+                                        )
+                                        Text(
+                                            "Started: ${p.startTime?.take(16)?.replace("T", " ") ?: "Not started"}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextSecondaryLight
+                                        )
                                     }
                                 }
                             }
@@ -371,7 +490,7 @@ fun ReportsScreen(
                             contentPadding = PaddingValues(bottom = 88.dp)
                         ) {
                             items(uiState.visitors) { v ->
-                                Card(
+                                SgmisCard(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
@@ -388,10 +507,37 @@ fun ReportsScreen(
                                             )
                                         }
                                 ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Text(v.entryNumber, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
-                                        Text(v.occurrenceText, style = MaterialTheme.typography.bodySmall)
-                                        Text("Post: ${v.stationName} • Logged by: ${v.guardName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Column(
+                                        modifier = Modifier.padding(4.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                v.entryNumber,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace,
+                                                color = NavyDark
+                                            )
+                                            Text(
+                                                v.createdAt.take(16).replace("T", " "),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = TextSecondaryLight
+                                            )
+                                        }
+                                        Text(
+                                            v.occurrenceText,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = TextPrimaryLight
+                                        )
+                                        Text(
+                                            "Post: ${v.stationName} • Logged by: ${v.guardName}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextSecondaryLight
+                                        )
                                     }
                                 }
                             }
@@ -407,19 +553,25 @@ fun ReportsScreen(
                             contentPadding = PaddingValues(bottom = 88.dp)
                         ) {
                             items(uiState.leaveApplications) { l ->
-                                Card(
+                                val statusText = l.statusDisplay ?: l.status
+                                val variant = when (statusText.uppercase()) {
+                                    "APPROVED" -> BadgeVariant.Success
+                                    "REJECTED" -> BadgeVariant.Danger
+                                    else -> BadgeVariant.Warning
+                                }
+                                SgmisCard(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
                                             selectedDetailItem = ReportDetailItem(
                                                 title = "Leave Request: ${l.guardName}",
-                                                subtitle = "${l.leaveTypeDisplay ?: l.leaveType} (${l.statusDisplay ?: l.status})",
+                                                subtitle = "${l.leaveTypeDisplay ?: l.leaveType} ($statusText)",
                                                 timestamp = "${l.startDate} to ${l.endDate}",
                                                 metadata = listOf(
                                                     "Applicant" to l.guardName,
                                                     "Leave Type" to (l.leaveTypeDisplay ?: l.leaveType),
                                                     "Duration" to "${l.startDate} to ${l.endDate}",
-                                                    "Status" to (l.statusDisplay ?: l.status),
+                                                    "Status" to statusText,
                                                     "Emergency Phone" to (l.emergencyPhone ?: "N/A"),
                                                     "Emergency Address" to (l.emergencyAddress ?: "N/A"),
                                                     "Reviewer" to (l.reviewerName ?: "Pending"),
@@ -429,14 +581,38 @@ fun ReportsScreen(
                                             )
                                         }
                                 ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text("${l.leaveTypeDisplay ?: l.leaveType} (${l.guardName})", fontWeight = FontWeight.Bold)
-                                            Text(l.statusDisplay ?: l.status, style = MaterialTheme.typography.labelSmall)
+                                    Column(
+                                        modifier = Modifier.padding(4.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                "${l.leaveTypeDisplay ?: l.leaveType} (${l.guardName})",
+                                                fontWeight = FontWeight.Bold,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = TextPrimaryLight
+                                            )
+                                            SgmisBadge(
+                                                text = statusText,
+                                                variant = variant
+                                            )
                                         }
-                                        Text("${l.startDate} to ${l.endDate}: ${l.reason}", style = MaterialTheme.typography.bodySmall)
+                                        Text(
+                                            "${l.startDate} to ${l.endDate}: ${l.reason}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = TextPrimaryLight
+                                        )
                                         if (!l.reviewerNotes.isNullOrBlank()) {
-                                            Text("Reviewer: ${l.reviewerName ?: "Supervisor"} - ${l.reviewerNotes}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                            Text(
+                                                "Reviewer: ${l.reviewerName ?: "Supervisor"} - ${l.reviewerNotes}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = NavyDark,
+                                                fontWeight = FontWeight.Medium
+                                            )
                                         }
                                     }
                                 }
@@ -453,7 +629,7 @@ fun ReportsScreen(
                             contentPadding = PaddingValues(bottom = 88.dp)
                         ) {
                             items(uiState.attendanceRecords) { a ->
-                                Card(
+                                SgmisCard(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
@@ -472,13 +648,36 @@ fun ReportsScreen(
                                             )
                                         }
                                 ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text("${a.guardName} (${a.guardEmployeeNumber ?: ""})", fontWeight = FontWeight.Bold)
-                                            Text(a.shiftDate, style = MaterialTheme.typography.labelSmall)
+                                    Column(
+                                        modifier = Modifier.padding(4.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                "${a.guardName} (${a.guardEmployeeNumber ?: ""})",
+                                                fontWeight = FontWeight.Bold,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = TextPrimaryLight
+                                            )
+                                            SgmisBadge(
+                                                text = a.shiftDate,
+                                                variant = BadgeVariant.Info
+                                            )
                                         }
-                                        Text("Station: ${a.stationName} • Shift: ${a.shiftType}", style = MaterialTheme.typography.bodySmall)
-                                        Text("In: ${a.clockIn?.take(16)?.replace("T", " ") ?: "Not In"} • Out: ${a.clockOut?.take(16)?.replace("T", " ") ?: "Not Out"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(
+                                            "Station: ${a.stationName} • Shift: ${a.shiftType}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = TextPrimaryLight
+                                        )
+                                        Text(
+                                            "In: ${a.clockIn?.take(16)?.replace("T", " ") ?: "Not In"} • Out: ${a.clockOut?.take(16)?.replace("T", " ") ?: "Not Out"}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = TextSecondaryLight
+                                        )
                                     }
                                 }
                             }
@@ -506,27 +705,30 @@ fun ReportDetailDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Column {
-                Text(item.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(item.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = TextPrimaryLight)
                 if (item.subtitle.isNotBlank()) {
-                    Text(item.subtitle, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                    Text(item.subtitle, style = MaterialTheme.typography.labelMedium, color = NavyDark, fontWeight = FontWeight.SemiBold)
                 }
             }
         },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (item.timestamp != null) {
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        color = NavyDark.copy(alpha = 0.08f),
                         shape = RoundedCornerShape(6.dp)
                     ) {
                         Text(
                             text = "Timestamp / Window: ${item.timestamp}",
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = FontFamily.Monospace,
+                            color = NavyDark,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
@@ -535,7 +737,7 @@ fun ReportDetailDialog(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .background(SurfaceCardLight, RoundedCornerShape(8.dp))
                             .padding(10.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
@@ -544,14 +746,14 @@ fun ReportDetailDialog(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text(k, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(v, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                                Text(k, style = MaterialTheme.typography.labelSmall, color = TextSecondaryLight)
+                                Text(v, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = TextPrimaryLight)
                             }
                         }
                     }
                 }
-                Text("Details / Description:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                Text(item.content, style = MaterialTheme.typography.bodyMedium)
+                Text("Details / Description:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = TextPrimaryLight)
+                Text(item.content, style = MaterialTheme.typography.bodyMedium, color = TextPrimaryLight)
             }
         },
         confirmButton = {
@@ -570,7 +772,8 @@ fun ReportDetailDialog(
                         type = "text/plain"
                     }
                     context.startActivity(Intent.createChooser(sendIntent, "Share Record"))
-                }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = NavyDark)
             ) {
                 Icon(Icons.Default.Share, null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
@@ -578,21 +781,17 @@ fun ReportDetailDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
+            TextButton(onClick = onDismiss) { Text("Close", color = TextSecondaryLight) }
         }
     )
 }
 
 @Composable
 fun EmptyReportPlaceholder(message: String) {
-    Box(
-        modifier = Modifier.fillMaxSize().padding(32.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Outlined.Assessment, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(48.dp))
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+    SgmisEmptyState(
+        title = "No Records Found",
+        description = message,
+        icon = Icons.Outlined.Assessment,
+        modifier = Modifier.fillMaxWidth().padding(top = 32.dp)
+    )
 }

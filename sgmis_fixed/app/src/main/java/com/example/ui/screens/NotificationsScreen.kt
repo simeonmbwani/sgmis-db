@@ -3,6 +3,7 @@ package com.example.ui.screens
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,9 +24,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.data.model.NotificationAlert
-import com.example.ui.theme.StatusSuccess
-import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import kotlinx.coroutines.delay
 
@@ -57,11 +59,22 @@ fun NotificationsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Notification Hub", fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = "Notification Hub",
+                subtitle = "Security Communications & Dispatch",
+                onNavigationClick = onBack,
                 navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("notifications_back_button")) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("notifications_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = NavyDark
+                        )
                     }
                 },
                 actions = {
@@ -69,16 +82,17 @@ fun NotificationsScreen(
                         onClick = { viewModel.markAllNotificationsRead() },
                         modifier = Modifier.testTag("read_all_notifications_button")
                     ) {
-                        Text("Mark all read")
+                        Text("Mark all read", color = NavyDark, fontWeight = FontWeight.SemiBold)
                     }
                     IconButton(
                         onClick = { viewModel.fetchNotifications() },
-                        modifier = Modifier.testTag("refresh_notifications_button")
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("refresh_notifications_button")
                     ) {
-                        Icon(Icons.Default.Refresh, "Refresh")
+                        Icon(Icons.Default.Refresh, "Refresh", tint = NavyDark)
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         },
         floatingActionButton = {
@@ -86,9 +100,9 @@ fun NotificationsScreen(
                 ExtendedFloatingActionButton(
                     onClick = { showBroadcastDialog = true },
                     icon = { Icon(Icons.Default.Campaign, null) },
-                    text = { Text("Broadcast Notice") },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    text = { Text("Broadcast Notice", fontWeight = FontWeight.Bold) },
+                    containerColor = NavyDark,
+                    contentColor = SurfaceCardLight,
                     modifier = Modifier.testTag("broadcast_notice_fab")
                 )
             }
@@ -98,6 +112,7 @@ fun NotificationsScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .background(LightBackground)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -125,7 +140,7 @@ fun NotificationsScreen(
 
             if (state.errorMessage != null) {
                 Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
+                    color = StatusError.copy(alpha = 0.15f),
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 ) {
@@ -133,11 +148,11 @@ fun NotificationsScreen(
                         modifier = Modifier.padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Error, null, tint = StatusError, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = state.errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            color = StatusError,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -145,29 +160,35 @@ fun NotificationsScreen(
             }
 
             // Summary Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            val unreadCount = state.notifications.count { !it.read }
+            SgmisCard(
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
                             text = "SECURITY COMMUNICATIONS & DISPATCH",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = NavyDark,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${state.notifications.count { !it.read }} Unread Alerts (${state.notifications.size} Total)",
+                            text = "$unreadCount Unread Alerts (${state.notifications.size} Total)",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimaryLight
                         )
                     }
-                    Icon(Icons.Outlined.NotificationsActive, null, tint = MaterialTheme.colorScheme.primary)
+                    SgmisBadge(
+                        text = if (unreadCount > 0) "$unreadCount NEW" else "ALL READ",
+                        variant = if (unreadCount > 0) BadgeVariant.Danger else BadgeVariant.Success
+                    )
                 }
             }
 
@@ -179,8 +200,10 @@ fun NotificationsScreen(
             }
             val archiveAlerts = readAlerts
 
-            TabRow(
+            PrimaryTabRow(
                 selectedTabIndex = selectedTab,
+                containerColor = SurfaceCardLight,
+                contentColor = NavyDark,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Tab(
@@ -189,7 +212,8 @@ fun NotificationsScreen(
                     text = {
                         Text(
                             if (unreadAlerts.isNotEmpty()) "Recent Alerts (${unreadAlerts.size})"
-                            else "Recent Alerts"
+                            else "Recent Alerts",
+                            fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Medium
                         )
                     },
                     icon = { Icon(Icons.Outlined.NotificationsActive, contentDescription = null, modifier = Modifier.size(18.dp)) }
@@ -200,7 +224,8 @@ fun NotificationsScreen(
                     text = {
                         Text(
                             if (archiveAlerts.isNotEmpty()) "Archive (${archiveAlerts.size})"
-                            else "Archive"
+                            else "Archive",
+                            fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Medium
                         )
                     },
                     icon = { Icon(Icons.Default.Archive, contentDescription = null, modifier = Modifier.size(18.dp)) }
@@ -210,21 +235,12 @@ fun NotificationsScreen(
             val displayedAlerts = if (selectedTab == 0) recentAlerts else archiveAlerts
 
             if (displayedAlerts.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            if (selectedTab == 0) Icons.Outlined.NotificationsNone else Icons.Default.Archive,
-                            null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(48.dp)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            if (selectedTab == 0) "No active security notifications" else "No archived notifications",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                SgmisEmptyState(
+                    title = if (selectedTab == 0) "No Active Alerts" else "No Archived Alerts",
+                    description = if (selectedTab == 0) "You are completely caught up on all security alerts." else "No read alerts currently in archive.",
+                    icon = if (selectedTab == 0) Icons.Outlined.NotificationsNone else Icons.Default.Archive,
+                    modifier = Modifier.fillMaxWidth().padding(top = 40.dp)
+                )
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -306,60 +322,51 @@ fun NotificationCard(
     onTriggerSms: () -> Unit,
     onTriggerEmail: () -> Unit
 ) {
-    Card(
+    SgmisCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onMarkRead() }
             .testTag("notification_card_${notification.id}"),
-        colors = CardDefaults.cardColors(
-            containerColor = if (!notification.read) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
-            else MaterialTheme.colorScheme.surface
-        ),
-        shape = RoundedCornerShape(12.dp)
+        backgroundColor = if (!notification.read) NavyDark.copy(alpha = 0.04f) else SurfaceCardLight,
+        borderColor = if (!notification.read) NavyDark.copy(alpha = 0.3f) else BorderSubtleLight
     ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (!notification.read) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.primary,
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text(
-                                text = "NEW",
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
+                        SgmisBadge(
+                            text = "NEW",
+                            variant = BadgeVariant.Danger
+                        )
                     }
                     Text(
                         text = notification.title,
                         style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimaryLight
                     )
                 }
                 Text(
                     text = notification.createdAt?.take(16)?.replace("T", " ") ?: "",
                     style = MaterialTheme.typography.labelSmall,
                     fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = TextSecondaryLight
                 )
             }
 
             Text(
                 text = notification.message,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextPrimaryLight
             )
 
             // Direct Communication Channel Triggers
-            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
-            Text("Quick Communication Channels:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            HorizontalDivider(color = BorderSubtleLight, thickness = 0.5.dp)
+            Text("Quick Communication Channels:", style = MaterialTheme.typography.labelSmall, color = TextSecondaryLight)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -368,30 +375,30 @@ fun NotificationCard(
                 OutlinedButton(
                     onClick = onTriggerWhatsApp,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    modifier = Modifier.weight(1f).height(36.dp)
+                    modifier = Modifier.weight(1f).heightIn(min = 40.dp)
                 ) {
-                    Text("WhatsApp", style = MaterialTheme.typography.labelSmall)
+                    Text("WhatsApp", style = MaterialTheme.typography.labelSmall, color = NavyDark, fontWeight = FontWeight.SemiBold)
                 }
                 OutlinedButton(
                     onClick = onTriggerCall,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    modifier = Modifier.weight(1f).height(36.dp)
+                    modifier = Modifier.weight(1f).heightIn(min = 40.dp)
                 ) {
-                    Text("Call", style = MaterialTheme.typography.labelSmall)
+                    Text("Call", style = MaterialTheme.typography.labelSmall, color = NavyDark, fontWeight = FontWeight.SemiBold)
                 }
                 OutlinedButton(
                     onClick = onTriggerSms,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    modifier = Modifier.weight(1f).height(36.dp)
+                    modifier = Modifier.weight(1f).heightIn(min = 40.dp)
                 ) {
-                    Text("SMS", style = MaterialTheme.typography.labelSmall)
+                    Text("SMS", style = MaterialTheme.typography.labelSmall, color = NavyDark, fontWeight = FontWeight.SemiBold)
                 }
                 OutlinedButton(
                     onClick = onTriggerEmail,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    modifier = Modifier.weight(1f).height(36.dp)
+                    modifier = Modifier.weight(1f).heightIn(min = 40.dp)
                 ) {
-                    Text("Email", style = MaterialTheme.typography.labelSmall)
+                    Text("Email", style = MaterialTheme.typography.labelSmall, color = NavyDark, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -423,7 +430,7 @@ fun BroadcastNoticeDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
-        title = { Text("Broadcast Security Notice", fontWeight = FontWeight.Bold) },
+        title = { Text("Broadcast Security Notice", fontWeight = FontWeight.Bold, color = TextPrimaryLight) },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -431,14 +438,14 @@ fun BroadcastNoticeDialog(
             ) {
                 if (errorMessage != null) {
                     Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
+                        color = StatusError.copy(alpha = 0.15f),
                         shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Error, null, tint = StatusError, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(errorMessage, color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodySmall)
+                            Text(errorMessage, color = StatusError, style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
@@ -461,18 +468,22 @@ fun BroadcastNoticeDialog(
                     modifier = Modifier.fillMaxWidth().testTag("broadcast_message_input")
                 )
 
-                Text("Target Role Audience:", style = MaterialTheme.typography.labelSmall)
+                Text("Target Role Audience:", style = MaterialTheme.typography.labelSmall, color = TextSecondaryLight)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     roles.forEach { (roleKey, label) ->
                         FilterChip(
                             selected = selectedRole == roleKey,
                             onClick = { if (!isLoading) selectedRole = roleKey },
-                            label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                            label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = NavyDark,
+                                selectedLabelColor = SurfaceCardLight
+                            )
                         )
                     }
                 }
 
-                Text("Target Station Post:", style = MaterialTheme.typography.labelSmall)
+                Text("Target Station Post:", style = MaterialTheme.typography.labelSmall, color = TextSecondaryLight)
                 ExposedDropdownMenuBox(
                     expanded = stationDropdownExpanded,
                     onExpandedChange = { if (!isLoading) stationDropdownExpanded = it }
@@ -517,10 +528,11 @@ fun BroadcastNoticeDialog(
                     }
                 },
                 enabled = isValid && !isLoading,
-                modifier = Modifier.testTag("submit_broadcast_button")
+                colors = ButtonDefaults.buttonColors(containerColor = NavyDark),
+                modifier = Modifier.testTag("submit_broadcast_button").heightIn(min = 48.dp)
             ) {
                 if (isLoading) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    CircularProgressIndicator(color = SurfaceCardLight, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Sending...")
                 } else {
@@ -529,7 +541,7 @@ fun BroadcastNoticeDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isLoading) { Text("Cancel") }
+            TextButton(onClick = onDismiss, enabled = !isLoading) { Text("Cancel", color = TextSecondaryLight) }
         }
     )
 }

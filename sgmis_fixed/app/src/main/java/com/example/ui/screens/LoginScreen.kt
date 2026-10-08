@@ -1,20 +1,24 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -27,9 +31,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
-import com.example.ui.theme.GoldAccent
-import com.example.ui.theme.NavyDark
+import com.example.ui.components.SgmisInputField
+import com.example.ui.components.SgmisPrimaryButton
+import com.example.ui.components.SgmisStatusCard
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
+import com.example.util.ApiErrorTranslator
 
 @Composable
 fun LoginScreen(
@@ -52,82 +59,105 @@ fun LoginScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp),
+                .imePadding(),
             contentAlignment = Alignment.Center
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .widthIn(max = 480.dp)
-                    .verticalScroll(scrollState),
+                    .widthIn(max = 440.dp)
+                    .verticalScroll(scrollState)
+                    .padding(horizontal = 24.dp, vertical = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
                 // Server Config Icon on Top Right
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
                         onClick = { showServerDialog = true },
-                        modifier = Modifier.testTag("server_config_button")
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("server_config_button")
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.Settings,
                             contentDescription = stringResource(R.string.server_settings),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = TextSecondaryLight
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 // Brand Emblem
                 Box(
                     modifier = Modifier
-                        .size(88.dp)
-                        .background(
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            shape = RoundedCornerShape(24.dp)
-                        ),
+                        .size(80.dp)
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(NavyDark),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.Security,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(52.dp)
+                        tint = GoldAccent,
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // System Brand Typography
+                Text(
+                    text = stringResource(R.string.app_name),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = NavyDark,
+                    letterSpacing = 2.sp
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = stringResource(R.string.app_full_title),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = TextSecondaryLight,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Official operational badge
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = NavyDark.copy(alpha = 0.08f),
+                    border = BorderStroke(1.dp, NavyDark.copy(alpha = 0.15f))
+                ) {
+                    Text(
+                        text = "OFFICIAL OPERATIONAL PORTAL",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp,
+                        color = NavyDark,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                Text(
-                    text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.headlineLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    letterSpacing = 2.sp
-                )
-
-                Text(
-                    text = stringResource(R.string.app_full_title),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-
-                Spacer(modifier = Modifier.height(32.dp))
-
-                // Login Card
+                // Main Login Card
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ),
+                    colors = CardDefaults.cardColors(containerColor = LightSurface),
                     shape = RoundedCornerShape(16.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                    border = BorderStroke(1.dp, BorderSubtleLight),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
                     Column(
                         modifier = Modifier
@@ -135,51 +165,48 @@ fun LoginScreen(
                             .padding(24.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Text(
-                            text = stringResource(R.string.login_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-
-                        Text(
-                            text = stringResource(R.string.login_subtitle),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Column {
+                            Text(
+                                text = stringResource(R.string.login_title),
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimaryLight
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = stringResource(R.string.login_subtitle),
+                                fontSize = 13.sp,
+                                color = TextSecondaryLight
+                            )
+                        }
 
                         // Lockout Warning Banner
                         if (uiState.isLockedOut) {
-                            Card(
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.errorContainer
-                                ),
-                                shape = RoundedCornerShape(8.dp)
+                            SgmisStatusCard(
+                                statusColor = StatusError,
+                                backgroundColor = StatusError.copy(alpha = 0.06f)
                             ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
+                                Row(verticalAlignment = Alignment.Top) {
                                     Icon(
                                         imageVector = Icons.Default.Lock,
                                         contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(24.dp)
+                                        tint = StatusError,
+                                        modifier = Modifier.size(22.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Spacer(modifier = Modifier.width(10.dp))
                                     Column {
                                         Text(
                                             text = "Account Locked",
-                                            style = MaterialTheme.typography.titleSmall,
+                                            fontSize = 14.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                            color = StatusError
                                         )
+                                        Spacer(modifier = Modifier.height(2.dp))
                                         Text(
                                             text = "Security lockout active (5 failed attempts). Try again in ${uiState.lockoutRemainingMinutes.coerceAtLeast(1)} minutes or reset your password.",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                            fontSize = 12.sp,
+                                            color = TextPrimaryLight,
+                                            lineHeight = 16.sp
                                         )
                                     }
                                 }
@@ -188,113 +215,113 @@ fun LoginScreen(
 
                         // Success Banner
                         if (uiState.successMessage != null) {
-                            Card(
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                                ),
-                                shape = RoundedCornerShape(8.dp)
+                            SgmisStatusCard(
+                                statusColor = StatusSuccess,
+                                backgroundColor = StatusSuccess.copy(alpha = 0.06f)
                             ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
                                         imageVector = Icons.Default.CheckCircle,
                                         contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
+                                        tint = StatusSuccess,
                                         modifier = Modifier.size(20.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Spacer(modifier = Modifier.width(10.dp))
                                     Text(
                                         text = uiState.successMessage ?: "",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = TextPrimaryLight
                                     )
                                 }
                             }
                         }
 
-                        // Error Banner
+                        // Error Banner (answering: What happened? Why? What can I do now?)
                         if (uiState.errorMessage != null && !uiState.isLockedOut) {
-                            Card(
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.errorContainer
-                                ),
-                                shape = RoundedCornerShape(8.dp)
+                            val guidance = ApiErrorTranslator.translate(uiState.errorMessage)
+                            SgmisStatusCard(
+                                statusColor = StatusError,
+                                backgroundColor = StatusError.copy(alpha = 0.06f)
                             ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
+                                Row(verticalAlignment = Alignment.Top) {
                                     Icon(
                                         imageVector = Icons.Default.Warning,
                                         contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.error,
+                                        tint = StatusError,
                                         modifier = Modifier.size(20.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = uiState.errorMessage ?: "",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onErrorContainer
-                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = guidance.whatHappened,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = StatusError
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = guidance.whyItHappened,
+                                            fontSize = 12.sp,
+                                            color = TextPrimaryLight,
+                                            lineHeight = 16.sp
+                                        )
+                                        if (guidance.whatCanIDoNow.isNotBlank()) {
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = guidance.whatCanIDoNow,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = TextSecondaryLight,
+                                                lineHeight = 16.sp
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
 
                         // Identifier Field
-                        OutlinedTextField(
+                        SgmisInputField(
                             value = identifier,
                             onValueChange = {
                                 identifier = it
                                 viewModel.clearMessages()
                             },
-                            label = { Text(stringResource(R.string.username_or_id_label)) },
-                            placeholder = { Text("Username or Employee ID") },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Badge,
-                                    contentDescription = null
-                                )
-                            },
-                            singleLine = true,
+                            label = stringResource(R.string.username_or_id_label),
+                            placeholder = "Username or Employee ID",
+                            leadingIcon = Icons.Default.Badge,
+                            fieldModifier = Modifier.testTag("identifier_input"),
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Text,
                                 imeAction = ImeAction.Next
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("identifier_input")
+                            )
                         )
 
                         // Password Field
-                        OutlinedTextField(
+                        SgmisInputField(
                             value = password,
                             onValueChange = {
                                 password = it
                                 viewModel.clearMessages()
                             },
-                            label = { Text(stringResource(R.string.password_label)) },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Lock,
-                                    contentDescription = null
-                                )
-                            },
+                            label = stringResource(R.string.password_label),
+                            placeholder = "Enter your password",
+                            leadingIcon = Icons.Default.Lock,
+                            fieldModifier = Modifier.testTag("password_input"),
                             trailingIcon = {
-                                IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                IconButton(
+                                    onClick = { passwordVisible = !passwordVisible },
+                                    modifier = Modifier.size(48.dp)
+                                ) {
                                     Icon(
                                         imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                        contentDescription = "Toggle password visibility"
+                                        contentDescription = if (passwordVisible) "Hide password" else "Show password",
+                                        tint = TextSecondaryLight
                                     )
                                 }
                             },
                             visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                            singleLine = true,
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Password,
                                 imeAction = ImeAction.Done
@@ -305,13 +332,10 @@ fun LoginScreen(
                                         viewModel.login(identifier, password)
                                     }
                                 }
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("password_input")
+                            )
                         )
 
-                        // Forgot Password Link
+                        // Forgot Password Action Link
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End
@@ -321,65 +345,63 @@ fun LoginScreen(
                                     viewModel.clearMessages()
                                     showForgotPasswordDialog = true
                                 },
-                                modifier = Modifier.testTag("forgot_password_button")
+                                modifier = Modifier
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .testTag("forgot_password_button")
                             ) {
                                 Text(
                                     text = "Forgot Password?",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = NavyDark
                                 )
                             }
                         }
 
                         // Submit Button
-                        Button(
+                        SgmisPrimaryButton(
+                            text = stringResource(R.string.sign_in_button),
+                            loadingText = stringResource(R.string.logging_in),
                             onClick = {
                                 viewModel.login(identifier, password)
                             },
                             enabled = !uiState.isLoading && !uiState.isLockedOut,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            shape = RoundedCornerShape(12.dp),
+                            isLoading = uiState.isLoading,
+                            leadingIcon = Icons.Default.Login,
+                            minHeight = 52.dp,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(52.dp)
                                 .testTag("login_button")
-                        ) {
-                            if (uiState.isLoading) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(24.dp),
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text(stringResource(R.string.logging_in))
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Login,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = stringResource(R.string.sign_in_button),
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
+                        )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
                 // Server Endpoint Indicator
-                Text(
-                    text = "Server: ${uiState.serverUrl}",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = BorderSubtleLight.copy(alpha = 0.5f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(StatusSuccess)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Server: ${uiState.serverUrl}",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = TextSecondaryLight
+                        )
+                    }
+                }
             }
         }
     }
@@ -428,19 +450,54 @@ fun ServerConfigDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.server_settings)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Outlined.Settings,
+                    contentDescription = null,
+                    tint = NavyDark,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "Configure the secure operational backend API gateway endpoint.",
-                    style = MaterialTheme.typography.bodySmall
+                    text = stringResource(R.string.server_settings),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimaryLight
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "Configure the operational backend API gateway endpoint for authentication and sync.",
+                    fontSize = 13.sp,
+                    color = TextSecondaryLight
                 )
                 OutlinedTextField(
                     value = urlText,
                     onValueChange = { urlText = it },
                     label = { Text("Base URL") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("server_url_input")
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = TextPrimaryLight,
+                        unfocusedTextColor = TextPrimaryLight,
+                        cursorColor = NavyDark,
+                        focusedBorderColor = NavyDark,
+                        unfocusedBorderColor = BorderSubtleLight,
+                        focusedContainerColor = LightSurface,
+                        unfocusedContainerColor = LightSurface
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("server_url_input")
+                )
+                Text(
+                    text = "Environment Presets:",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextSecondaryLight
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -448,15 +505,23 @@ fun ServerConfigDialog(
                 ) {
                     OutlinedButton(
                         onClick = { urlText = "https://security-management-5u3m.onrender.com/" },
-                        modifier = Modifier.weight(1f).testTag("preset_production_button")
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = 44.dp)
+                            .testTag("preset_production_button")
                     ) {
-                        Text("Production", style = MaterialTheme.typography.labelSmall)
+                        Text("Production", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                     OutlinedButton(
                         onClick = { urlText = "http://10.0.2.2:8000/" },
-                        modifier = Modifier.weight(1f).testTag("preset_emulator_button")
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .defaultMinSize(minHeight = 44.dp)
+                            .testTag("preset_emulator_button")
                     ) {
-                        Text("Emulator", style = MaterialTheme.typography.labelSmall)
+                        Text("Emulator", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -464,14 +529,24 @@ fun ServerConfigDialog(
         confirmButton = {
             Button(
                 onClick = { onSave(urlText) },
-                modifier = Modifier.testTag("save_server_url_button")
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NavyDark,
+                    contentColor = androidx.compose.ui.graphics.Color.White
+                ),
+                modifier = Modifier
+                    .defaultMinSize(minHeight = 44.dp)
+                    .testTag("save_server_url_button")
             ) {
-                Text("Save")
+                Text("Save", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.defaultMinSize(minHeight = 44.dp)
+            ) {
+                Text("Cancel", color = TextSecondaryLight)
             }
         }
     )
@@ -496,10 +571,21 @@ fun ForgotPasswordDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(
-                text = if (!otpSent) "Reset Password" else "Enter OTP & New Password",
-                fontWeight = FontWeight.Bold
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Outlined.Lock,
+                    contentDescription = null,
+                    tint = NavyDark,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = if (!otpSent) "Reset Password" else "Enter OTP & New Password",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimaryLight
+                )
+            }
         },
         text = {
             Column(
@@ -508,69 +594,87 @@ fun ForgotPasswordDialog(
             ) {
                 val err = validationError ?: errorMessage
                 if (err != null) {
-                    Text(
-                        text = err,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    SgmisStatusCard(
+                        statusColor = StatusError,
+                        backgroundColor = StatusError.copy(alpha = 0.08f)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.ErrorOutline,
+                                contentDescription = null,
+                                tint = StatusError,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = err,
+                                fontSize = 12.sp,
+                                color = StatusError
+                            )
+                        }
+                    }
                 }
 
                 if (!otpSent) {
                     Text(
                         text = "Enter your Username or Guard ID. A 6-digit one-time passcode (OTP) valid for 10 minutes will be generated.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontSize = 13.sp,
+                        color = TextSecondaryLight
                     )
-                    OutlinedTextField(
+                    SgmisInputField(
                         value = identifier,
                         onValueChange = {
                             identifier = it
                             validationError = null
                         },
-                        label = { Text("Username or Guard ID") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        label = "Username or Guard ID",
+                        placeholder = "e.g. SEC-001 or admin",
+                        leadingIcon = Icons.Default.Badge,
+                        singleLine = true
                     )
                 } else {
                     Text(
                         text = "Enter the 6-digit OTP code received, and enter a new secure password (minimum 8 characters).",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontSize = 13.sp,
+                        color = TextSecondaryLight
                     )
-                    OutlinedTextField(
+                    SgmisInputField(
                         value = otp,
                         onValueChange = {
                             otp = it.filter { ch -> ch.isDigit() }.take(6)
                             validationError = null
                         },
-                        label = { Text("6-Digit OTP Code") },
+                        label = "6-Digit OTP Code",
+                        placeholder = "123456",
+                        leadingIcon = Icons.Default.Pin,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        singleLine = true
                     )
-                    OutlinedTextField(
+                    SgmisInputField(
                         value = newPassword,
                         onValueChange = {
                             newPassword = it
                             validationError = null
                         },
-                        label = { Text("New Password (min 8 chars)") },
+                        label = "New Password (min 8 chars)",
+                        placeholder = "Enter new password",
+                        leadingIcon = Icons.Default.Lock,
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        singleLine = true
                     )
-                    OutlinedTextField(
+                    SgmisInputField(
                         value = confirmPassword,
                         onValueChange = {
                             confirmPassword = it
                             validationError = null
                         },
-                        label = { Text("Confirm New Password") },
+                        label = "Confirm New Password",
+                        placeholder = "Re-type new password",
+                        leadingIcon = Icons.Default.Lock,
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        singleLine = true
                     )
                 }
             }
@@ -604,22 +708,33 @@ fun ForgotPasswordDialog(
                         }
                     }
                 },
-                enabled = !isLoading
+                enabled = !isLoading,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = NavyDark,
+                    contentColor = androidx.compose.ui.graphics.Color.White
+                ),
+                modifier = Modifier.defaultMinSize(minHeight = 44.dp)
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
+                        color = androidx.compose.ui.graphics.Color.White
                     )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Processing...", fontSize = 13.sp)
                 } else {
-                    Text(if (!otpSent) "Request OTP" else "Reset Password")
+                    Text(if (!otpSent) "Request OTP" else "Reset Password", fontWeight = FontWeight.Bold)
                 }
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.defaultMinSize(minHeight = 44.dp)
+            ) {
+                Text("Cancel", color = TextSecondaryLight)
             }
         }
     )

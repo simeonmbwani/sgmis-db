@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.location.Location
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -16,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -23,13 +25,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.model.AppRole
 import com.example.data.model.Checkpoint
 import com.example.data.model.PatrolLog
-import com.example.ui.theme.StatusSuccess
-import com.example.ui.theme.StatusWarning
 import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
+import com.example.util.LocationHelper
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,7 +45,7 @@ fun PatrolScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val activePatrol = uiState.activePatrol
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
     var showFinishConfirmDialog by remember { mutableStateOf(false) }
@@ -52,8 +57,8 @@ fun PatrolScreen(
     var showCheckpointsSection by remember { mutableStateOf(false) }
 
     val currentUser = uiState.currentUser
-    val isSupervisor = currentUser?.isSupervisor == true || uiState.appRole == com.example.data.model.AppRole.SUPERVISOR || currentUser?.role == "SUPERVISOR" || currentUser?.role == "STATION_SUPERVISOR"
-    val isAdmin = currentUser?.isAdmin == true || uiState.appRole == com.example.data.model.AppRole.ADMINISTRATOR
+    val isSupervisor = currentUser?.isSupervisor == true || uiState.appRole == AppRole.SUPERVISOR || currentUser?.role == "SUPERVISOR" || currentUser?.role == "STATION_SUPERVISOR"
+    val isAdmin = currentUser?.isAdmin == true || uiState.appRole == AppRole.ADMINISTRATOR
     val isGuard = !isSupervisor && !isAdmin
 
     var elapsedSeconds by remember { mutableIntStateOf(0) }
@@ -79,7 +84,7 @@ fun PatrolScreen(
         elapsedSeconds = 0
         if (activePatrol != null) {
             while (true) {
-                kotlinx.coroutines.delay(1000)
+                delay(1000)
                 elapsedSeconds++
             }
         } else {
@@ -89,7 +94,7 @@ fun PatrolScreen(
 
     val elapsedMinutes = elapsedSeconds / 60
     val elapsedSecs = elapsedSeconds % 60
-    val formattedElapsedTime = String.format(java.util.Locale.US, "%02d:%02d", elapsedMinutes, elapsedSecs)
+    val formattedElapsedTime = String.format(Locale.US, "%02d:%02d", elapsedMinutes, elapsedSecs)
 
     val orderedCheckpoints = remember(uiState.checkpoints) {
         uiState.checkpoints.sortedBy { it.order }
@@ -114,15 +119,16 @@ fun PatrolScreen(
     // Auto-dismiss transient messages
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
         if (uiState.successMessage != null || uiState.errorMessage != null) {
-            kotlinx.coroutines.delay(3500)
+            delay(3500)
             viewModel.clearMessages()
         }
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.patrols_title), fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = stringResource(R.string.patrols_title),
+                subtitle = "${uiState.currentStationName ?: "Station Post"} • Patrol Route",
                 navigationIcon = {
                     IconButton(onClick = onBack, modifier = Modifier.testTag("patrol_back_button")) {
                         Icon(
@@ -150,8 +156,7 @@ fun PatrolScreen(
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh Patrols")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         }
     ) { paddingValues ->
@@ -159,50 +164,24 @@ fun PatrolScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Notification Banners
             if (uiState.successMessage != null) {
-                Surface(
-                    color = StatusSuccess.copy(alpha = 0.15f),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.CheckCircle, null, tint = StatusSuccess, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.successMessage!!,
-                            color = StatusSuccess,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = CardStatus.SUCCESS,
+                    title = "Operation Recorded",
+                    description = uiState.successMessage!!
+                )
             }
 
             if (uiState.errorMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = CardStatus.ERROR,
+                    title = "Patrol Alert",
+                    description = uiState.errorMessage!!
+                )
             }
 
             // Offline Sync Banner
@@ -247,7 +226,9 @@ fun PatrolScreen(
             // ACTIVE PATROL CARD
             if (activePatrol != null) {
                 Card(
-                    modifier = Modifier.fillMaxWidth().testTag("active_patrol_card"),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("active_patrol_card"),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                     shape = RoundedCornerShape(16.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -258,7 +239,7 @@ fun PatrolScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = activePatrol.name,
                                     style = MaterialTheme.typography.titleMedium,
@@ -384,14 +365,17 @@ fun PatrolScreen(
                                 },
                                 enabled = !uiState.isLoading,
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                modifier = Modifier.fillMaxWidth().testTag("finish_patrol_button")
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("finish_patrol_button")
                             ) {
                                 if (uiState.isLoading) {
                                     CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text("Submitting...")
                                 } else {
-                                    Text("Complete & Submit Patrol Log")
+                                    Text("Complete & Submit Patrol Log", fontWeight = FontWeight.Bold)
                                 }
                             }
                         } else {
@@ -500,14 +484,24 @@ fun PatrolScreen(
                                             Text(text = "Instructions: ${assigned.notes}", style = MaterialTheme.typography.bodySmall)
                                         }
                                         Button(
-                                            onClick = { viewModel.startAssignedPatrol(assigned.id) },
-                                            enabled = !uiState.isLoading && uiState.isOnDuty,
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    viewModel.startPatrol(
+                                                        stationId = assigned.station,
+                                                        notes = "Assigned patrol: ${assigned.name}"
+                                                    )
+                                                }
+                                            },
+                                            enabled = uiState.isOnDuty && !uiState.isLoading,
                                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                            modifier = Modifier.fillMaxWidth().testTag("start_assigned_patrol_${assigned.id}")
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("start_assigned_patrol_${assigned.id}")
                                         ) {
-                                            Icon(Icons.AutoMirrored.Filled.DirectionsWalk, null, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            Text("Start Assigned Patrol")
+                                            Text("Start Assigned Patrol", fontWeight = FontWeight.Bold)
                                         }
                                     }
                                 }
@@ -515,118 +509,101 @@ fun PatrolScreen(
                         }
                     }
                 }
-            } else {
-                // SUPERVISOR / ADMIN STATION PATROLS DASHBOARD
-                val filterOptions = listOf("All", "Active", "Pending", "Completed", "Failed")
+            }
 
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+            // Checkpoints Header & Expansion Toggle
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showCheckpointsSection = !showCheckpointsSection }
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "STATION CHECKPOINTS (${orderedCheckpoints.size})",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Icon(
+                    imageVector = if (showCheckpointsSection) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            if (showCheckpointsSection || activePatrol != null) {
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
-                    // Search Bar
-                    SmartSearchBar(
-                        query = searchQuery,
-                        onQueryChange = { searchQuery = it },
-                        placeholder = "Search patrols or guards"
-                    )
+                    items(orderedCheckpoints) { checkpoint ->
+                        val isScanned = scannedCheckpointIds.contains(checkpoint.id)
+                        val isNext = nextRequiredCheckpoint?.id == checkpoint.id
 
-                    // Filters & Actions Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        androidx.compose.foundation.lazy.LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            items(filterOptions) { filter ->
-                                SmartFilterChip(
-                                    text = filter,
-                                    selected = selectedFilter == filter,
-                                    onClick = { selectedFilter = filter }
-                                )
-                            }
-                        }
-
-                        if (isSupervisor) {
-                            Button(
-                                onClick = { showAssignPatrolDialog = true },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                modifier = Modifier
-                                    .padding(start = 8.dp)
-                                    .testTag("assign_patrol_button")
-                            ) {
-                                Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Assign", fontSize = 12.sp)
-                            }
-                        }
-                    }
-
-                    // Checkpoints Toggle Button
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Station Patrol Records (${uiState.patrolLogs.size})",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        TextButton(onClick = { showCheckpointsSection = !showCheckpointsSection }) {
-                            Icon(
-                                if (showCheckpointsSection) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                if (showCheckpointsSection) "Hide Checkpoints" else "View Checkpoints (${orderedCheckpoints.size})",
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-
-                    // Collapsible Station Inspection Checkpoints
-                    if (showCheckpointsSection) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    text = "Inspection Checkpoints Sequence (${orderedCheckpoints.size})",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                if (orderedCheckpoints.isEmpty()) {
-                                    Text("No checkpoints registered for this station.", style = MaterialTheme.typography.bodySmall)
-                                } else {
-                                    orderedCheckpoints.forEach { cp ->
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text("${cp.order}. ${cp.name} (${cp.code})", style = MaterialTheme.typography.bodySmall)
-                                            if (!cp.nfcUid.isNullOrBlank()) {
-                                                Text("NFC: ${cp.nfcUid}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
-                                            }
-                                        }
+                        CheckpointItemCard(
+                            checkpoint = checkpoint,
+                            patrolActive = activePatrol != null,
+                            isScanned = isScanned,
+                            isNextRequired = isNext,
+                            onScan = { method ->
+                                coroutineScope.launch {
+                                    val loc = LocationHelper.getDeviceLocation(context)
+                                    val gpsStr = if (loc != null) "${loc.first},${loc.second}" else "0.0,0.0"
+                                    val scannedCode = if (method == "NFC") (checkpoint.nfcUid ?: checkpoint.code) else checkpoint.qrCode
+                                    activePatrol?.let { patrol ->
+                                        viewModel.scanCheckpoint(
+                                            patrolId = patrol.id,
+                                            checkpointId = checkpoint.id,
+                                            gps = gpsStr,
+                                            notes = "Scanned via $method",
+                                            checkpointCode = scannedCode,
+                                            checkpointOrder = checkpoint.order,
+                                            verificationMethod = method
+                                        )
+                                        scannedCheckpointIds = scannedCheckpointIds + checkpoint.id
                                     }
                                 }
                             }
+                        )
+                    }
+                }
+            } else if (!isGuard) {
+                // SUPERVISOR LOGS VIEW
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    SgmisSearchBar(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        placeholder = "Search patrol logs, guards, stations...",
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("All", "Active", "Pending", "Completed", "Failed").forEach { filter ->
+                            SgmisFilterChip(
+                                selected = selectedFilter == filter,
+                                onClick = { selectedFilter = filter },
+                                label = filter
+                            )
                         }
                     }
 
-                    // Patrols List
                     if (uiState.isLoading) {
-                        SmartLoadingState(message = "Loading station patrol records...")
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            SgmisLoadingSkeleton(modifier = Modifier.fillMaxWidth().height(90.dp))
+                            SgmisLoadingSkeleton(modifier = Modifier.fillMaxWidth().height(90.dp))
+                        }
                     } else if (uiState.patrolLogs.isEmpty()) {
-                        SmartEmptyState(
+                        SgmisEmptyState(
                             title = "No active patrols",
                             message = if (searchQuery.isNotBlank() || selectedFilter != "All")
                                 "No patrol logs match current search filters."
@@ -642,8 +619,13 @@ fun PatrolScreen(
                             items(uiState.patrolLogs, key = { it.id }) { patrol ->
                                 val displayStatus = if (patrol.status == "COMPLETED" && !patrol.isApproved) "PENDING REVIEW" else patrol.status
 
-                                SmartCard(modifier = Modifier.fillMaxWidth()) {
-                                    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                    shape = RoundedCornerShape(14.dp),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -655,9 +637,7 @@ fun PatrolScreen(
                                                 fontWeight = FontWeight.Bold,
                                                 modifier = Modifier.weight(1f)
                                             )
-                                            SmartStatusChip(
-                                                status = displayStatus
-                                            )
+                                            SmartStatusChip(status = displayStatus)
                                         }
 
                                         Text(
@@ -717,7 +697,8 @@ fun PatrolScreen(
                                                 Button(
                                                     onClick = { viewModel.approvePatrol(patrol.id) },
                                                     colors = ButtonDefaults.buttonColors(containerColor = StatusSuccess),
-                                                    modifier = Modifier.weight(1f)
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(8.dp)
                                                 ) {
                                                     Text("Approve")
                                                 }
@@ -726,7 +707,8 @@ fun PatrolScreen(
                                                         patrolToReject = patrol
                                                         rejectReasonText = ""
                                                     },
-                                                    modifier = Modifier.weight(1f)
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(8.dp)
                                                 ) {
                                                     Text("Reject", color = MaterialTheme.colorScheme.error)
                                                 }
@@ -755,7 +737,7 @@ fun PatrolScreen(
 
         AlertDialog(
             onDismissRequest = { showAssignPatrolDialog = false },
-            title = { Text("Assign New Patrol Round") },
+            title = { Text("Assign New Patrol Round", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Select on-duty guard to conduct patrol at this station:", style = MaterialTheme.typography.bodySmall)
@@ -787,6 +769,7 @@ fun PatrolScreen(
                         value = patrolName,
                         onValueChange = { patrolName = it },
                         label = { Text("Patrol Name") },
+                        shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
 
@@ -794,6 +777,7 @@ fun PatrolScreen(
                         value = deadlineHours,
                         onValueChange = { deadlineHours = it },
                         label = { Text("Deadline (Hours from now)") },
+                        shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
 
@@ -801,6 +785,7 @@ fun PatrolScreen(
                         value = notes,
                         onValueChange = { notes = it },
                         label = { Text("Instructions / Focus Areas") },
+                        shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -822,7 +807,8 @@ fun PatrolScreen(
                             )
                         }
                     },
-                    enabled = selectedGuardId.isNotBlank()
+                    enabled = selectedGuardId.isNotBlank(),
+                    shape = RoundedCornerShape(10.dp)
                 ) {
                     Text("Assign Patrol")
                 }
@@ -840,7 +826,7 @@ fun PatrolScreen(
         val target = patrolToReject!!
         AlertDialog(
             onDismissRequest = { patrolToReject = null },
-            title = { Text("Reject Patrol Log") },
+            title = { Text("Reject Patrol Log", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Provide the operational reason for rejecting patrol log '${target.name}':")
@@ -849,6 +835,7 @@ fun PatrolScreen(
                         onValueChange = { rejectReasonText = it },
                         label = { Text("Rejection Reason") },
                         placeholder = { Text("e.g. Checkpoint 3 bypassed or rapid transit anomaly detected") },
+                        shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -863,7 +850,8 @@ fun PatrolScreen(
                         }
                     },
                     enabled = rejectReasonText.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    shape = RoundedCornerShape(10.dp)
                 ) {
                     Text("Confirm Rejection")
                 }
@@ -880,7 +868,7 @@ fun PatrolScreen(
     if (showFinishConfirmDialog && activePatrol != null) {
         AlertDialog(
             onDismissRequest = { showFinishConfirmDialog = false },
-            title = { Text("Complete Patrol Round") },
+            title = { Text("Complete Patrol Round", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Are you sure you want to finalize and submit this patrol log for ${activePatrol.stationName}?")
@@ -912,7 +900,8 @@ fun PatrolScreen(
                     onClick = {
                         showFinishConfirmDialog = false
                         viewModel.finishPatrol(activePatrol.id, "Routine patrol completed successfully ($completedScans/$totalCheckpoints checkpoints scanned).")
-                    }
+                    },
+                    shape = RoundedCornerShape(10.dp)
                 ) {
                     Text("Confirm & Submit")
                 }
@@ -935,7 +924,9 @@ fun CheckpointItemCard(
     onScan: (method: String) -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth().testTag("checkpoint_item_${checkpoint.code}"),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("checkpoint_item_${checkpoint.code}"),
         colors = CardDefaults.cardColors(
             containerColor = if (isScanned) StatusSuccess.copy(alpha = 0.08f)
             else if (isNextRequired) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
@@ -945,7 +936,9 @@ fun CheckpointItemCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {

@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,12 +14,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.AppRole
 import com.example.data.model.OrganizationPolicy
 import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -55,26 +58,34 @@ fun OrganizationPolicyScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Organization Policies", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        Text("Standard Operating Procedures & Rules", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                },
+            SgmisTopAppBar(
+                title = "Organization Policies",
+                subtitle = "Standard Operating Procedures & Rules",
+                onNavigationClick = onBack,
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("policy_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = NavyDark
+                        )
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.fetchOrganizationPolicies() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    IconButton(
+                        onClick = { viewModel.fetchOrganizationPolicies() },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("refresh_policy_button")
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = NavyDark)
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                }
             )
         }
     ) { innerPadding ->
@@ -82,12 +93,13 @@ fun OrganizationPolicyScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .background(LightBackground)
                 .padding(horizontal = 16.dp)
         ) {
             Spacer(modifier = Modifier.height(8.dp))
 
             // Search Bar
-            SmartSearchBar(
+            SgmisSearchBar(
                 query = searchQuery,
                 onQueryChange = { searchQuery = it },
                 placeholder = "Search operational policies and rules..."
@@ -101,10 +113,14 @@ fun OrganizationPolicyScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 items(categories) { category ->
-                    SmartFilterChip(
-                        text = category,
+                    FilterChip(
                         selected = selectedCategory == category,
-                        onClick = { selectedCategory = category }
+                        onClick = { selectedCategory = category },
+                        label = { Text(category, style = MaterialTheme.typography.labelSmall) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = NavyDark,
+                            selectedLabelColor = SurfaceCardLight
+                        )
                     )
                 }
             }
@@ -112,22 +128,25 @@ fun OrganizationPolicyScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             if (uiState.policiesLoading) {
-                SmartLoadingState(message = "Loading authoritative policies...")
+                SgmisLoadingSkeleton()
             } else if (filteredPolicies.isEmpty()) {
-                SmartEmptyState(
+                SgmisEmptyState(
                     title = "No Policies Found",
-                    message = if (searchQuery.isNotBlank() || selectedCategory != "ALL")
+                    description = if (searchQuery.isNotBlank() || selectedCategory != "ALL")
                         "No policies match your search or filter."
                     else
-                        "No organization policies currently registered on the server."
+                        "No organization policies currently registered on the server.",
+                    icon = Icons.Default.Policy,
+                    modifier = Modifier.fillMaxWidth().padding(top = 40.dp)
                 )
             } else {
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(filteredPolicies, key = { it.id }) { policy ->
-                        SmartCard(
+                        SgmisCard(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable(enabled = isAdmin) {
@@ -136,7 +155,7 @@ fun OrganizationPolicyScreen(
                                     editContent = policy.content
                                 }
                         ) {
-                            Column(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.fillMaxWidth().padding(4.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -146,10 +165,12 @@ fun OrganizationPolicyScreen(
                                         text = policy.title,
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold,
+                                        color = TextPrimaryLight,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    SmartStatusChip(
-                                        status = policy.category
+                                    SgmisBadge(
+                                        text = policy.category,
+                                        variant = BadgeVariant.Info
                                     )
                                 }
 
@@ -157,13 +178,13 @@ fun OrganizationPolicyScreen(
                                 Text(
                                     text = "Category: ${policy.categoryDisplay ?: policy.category} • v${policy.version}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = TextSecondaryLight
                                 )
 
                                 if (policy.summary.isNotBlank()) {
                                     Spacer(modifier = Modifier.height(6.dp))
                                     Surface(
-                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        color = NavyDark.copy(alpha = 0.06f),
                                         shape = RoundedCornerShape(6.dp),
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
@@ -171,6 +192,7 @@ fun OrganizationPolicyScreen(
                                             text = policy.summary,
                                             style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.SemiBold,
+                                            color = NavyDark,
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                                         )
                                     }
@@ -181,7 +203,7 @@ fun OrganizationPolicyScreen(
                                     Text(
                                         text = policy.content,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                        color = TextPrimaryLight
                                     )
                                 }
 
@@ -190,7 +212,7 @@ fun OrganizationPolicyScreen(
                                     Text(
                                         text = "Last updated by: ${policy.updatedByName}",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = TextSecondaryLight
                                     )
                                 }
 
@@ -207,17 +229,14 @@ fun OrganizationPolicyScreen(
                                                 editContent = policy.content
                                             }
                                         ) {
-                                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp), tint = NavyDark)
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Edit Policy", fontSize = 12.sp)
+                                            Text("Edit Policy", fontSize = 12.sp, color = NavyDark, fontWeight = FontWeight.SemiBold)
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                    item {
-                        Spacer(modifier = Modifier.height(16.dp))
                     }
                 }
             }
@@ -228,10 +247,10 @@ fun OrganizationPolicyScreen(
     policyToEdit?.let { policy ->
         AlertDialog(
             onDismissRequest = { policyToEdit = null },
-            title = { Text("Update Policy: ${policy.title}", fontWeight = FontWeight.Bold) },
+            title = { Text("Update Policy: ${policy.title}", fontWeight = FontWeight.Bold, color = TextPrimaryLight) },
             text = {
                 Column {
-                    Text("Category: ${policy.category}", style = MaterialTheme.typography.labelMedium)
+                    Text("Category: ${policy.category}", style = MaterialTheme.typography.labelMedium, color = NavyDark, fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = editSummary,
@@ -265,14 +284,15 @@ fun OrganizationPolicyScreen(
                             )
                         }
                         policyToEdit = null
-                    }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = NavyDark)
                 ) {
                     Text("Save Changes")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { policyToEdit = null }) {
-                    Text("Cancel")
+                    Text("Cancel", color = TextSecondaryLight)
                 }
             }
         )

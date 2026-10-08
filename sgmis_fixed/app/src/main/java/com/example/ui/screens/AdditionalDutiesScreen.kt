@@ -22,8 +22,8 @@ import com.example.data.model.CreateEscortDutyRequest
 import com.example.data.model.CreateExamDutyRequest
 import com.example.data.model.EscortDuty
 import com.example.data.model.ExamDuty
-import com.example.ui.theme.StatusSuccess
-import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import java.text.SimpleDateFormat
 import java.util.*
@@ -53,8 +53,9 @@ fun AdditionalDutiesScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(if (selectedTab == 0) "Vehicle Escort Operations" else "Exam Security Escorts", fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = if (selectedTab == 0) "Vehicle Escort Operations" else "Exam Security Escorts",
+                subtitle = "Active Station: ${uiState.currentStationName}",
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -75,8 +76,7 @@ fun AdditionalDutiesScreen(
                     }) {
                         Icon(Icons.Default.Refresh, "Refresh")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         },
         floatingActionButton = {
@@ -86,7 +86,7 @@ fun AdditionalDutiesScreen(
                         if (selectedTab == 0) showCreateEscortDialog = true else showCreateExamDialog = true
                     },
                     icon = { Icon(Icons.Default.Add, null) },
-                    text = { Text(if (selectedTab == 0) "Assign Escort" else "Schedule Exam Duty") },
+                    text = { Text(if (selectedTab == 0) "Assign Escort" else "Schedule Exam Duty", fontWeight = FontWeight.SemiBold) },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 )
@@ -97,64 +97,52 @@ fun AdditionalDutiesScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
             // Success & Error notification banners
             if (uiState.successMessage != null) {
-                Surface(
-                    color = StatusSuccess.copy(alpha = 0.15f),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.CheckCircle, null, tint = StatusSuccess, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.successMessage!!,
-                            color = StatusSuccess,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = SgmisCardStatus.SUCCESS,
+                    title = "Success",
+                    message = uiState.successMessage!!,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
             if (uiState.errorMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
+                SgmisStatusCard(
+                    status = SgmisCardStatus.ERROR,
+                    title = "Error",
+                    message = uiState.errorMessage!!,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
-            TabRow(selectedTabIndex = selectedTab) {
+            PrimaryTabRow(
+                selectedTabIndex = selectedTab,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary
+            ) {
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = { Text("Vehicle Escorts (${uiState.escortDuties.size})") },
-                    icon = { Icon(Icons.Default.DirectionsCar, null) }
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                            Icon(Icons.Default.DirectionsCar, null, modifier = Modifier.size(16.dp))
+                            Text("Vehicle Escorts (${uiState.escortDuties.size})", fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
                 )
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = { Text("Exam Escorts (${uiState.examDuties.size})") },
-                    icon = { Icon(Icons.Default.School, null) }
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                            Icon(Icons.Default.School, null, modifier = Modifier.size(16.dp))
+                            Text("Exam Escorts (${uiState.examDuties.size})", fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
                 )
             }
 
@@ -169,23 +157,23 @@ fun AdditionalDutiesScreen(
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                         if (selectedTab == 1) {
                             Button(
                                 onClick = { showPaperEscortDialog = true },
-                                shape = RoundedCornerShape(8.dp)
+                                shape = RoundedCornerShape(CornerRadius.sm)
                             ) {
                                 Icon(Icons.Default.School, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
+                                Spacer(modifier = Modifier.width(Spacing.xxs))
                                 Text("Paper Escort (06-17h)", style = MaterialTheme.typography.labelSmall)
                             }
                         }
                         OutlinedButton(
                             onClick = { showAutoAllocateDialog = true },
-                            shape = RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(CornerRadius.sm)
                         ) {
                             Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(Spacing.xs))
                             Text("Auto-Allocate (${if (selectedTab == 0) "Escorts" else "Exams"})", style = MaterialTheme.typography.labelSmall)
                         }
                     }
@@ -194,15 +182,21 @@ fun AdditionalDutiesScreen(
 
             if (selectedTab == 0) {
                 if (uiState.escortsLoading) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    }
+                    SgmisLoadingSkeleton()
                 } else if (uiState.escortDuties.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                        Text("No management or vehicle escort duties assigned.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                    SgmisEmptyState(
+                        icon = Icons.Outlined.DirectionsCar,
+                        title = "No Vehicle Escorts",
+                        description = "No management or vehicle escort duties assigned.",
+                        actionLabel = if (isSupervisorOrAdmin) "Assign Escort" else null,
+                        onAction = { showCreateEscortDialog = true },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    LazyColumn(
+                        contentPadding = PaddingValues(bottom = 88.dp),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                    ) {
                         items(uiState.escortDuties) { duty ->
                             EscortCard(
                                 duty = duty,
@@ -214,15 +208,21 @@ fun AdditionalDutiesScreen(
                 }
             } else {
                 if (uiState.examsLoading) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    }
+                    SgmisLoadingSkeleton()
                 } else if (uiState.examDuties.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                        Text("No exam security escort duties scheduled.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                    SgmisEmptyState(
+                        icon = Icons.Outlined.School,
+                        title = "No Exam Escorts",
+                        description = "No exam security escort duties scheduled.",
+                        actionLabel = if (isSupervisorOrAdmin) "Schedule Exam Duty" else null,
+                        onAction = { showCreateExamDialog = true },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 } else {
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    LazyColumn(
+                        contentPadding = PaddingValues(bottom = 88.dp),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+                    ) {
                         items(uiState.examDuties) { duty ->
                             ExamDutyCard(
                                 duty = duty,
@@ -327,10 +327,10 @@ fun EscortCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(12.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(CornerRadius.md),
+        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.card)
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -341,28 +341,15 @@ fun EscortCard(
                     val ref = duty.reference ?: "ESC-${duty.id.take(8).uppercase()}"
                     Text("Ref: $ref", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
                 }
-                Surface(
-                    color = when (duty.status) {
-                        "COMPLETED" -> StatusSuccess.copy(alpha = 0.2f)
-                        "ACKNOWLEDGED", "EN_ROUTE" -> MaterialTheme.colorScheme.primaryContainer
-                        "CANCELLED" -> MaterialTheme.colorScheme.errorContainer
-                        else -> StatusWarning.copy(alpha = 0.2f)
-                    },
-                    shape = RoundedCornerShape(6.dp)
-                ) {
-                    Text(
-                        text = duty.statusDisplay ?: duty.status,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = when (duty.status) {
-                            "COMPLETED" -> StatusSuccess
-                            "ACKNOWLEDGED", "EN_ROUTE" -> MaterialTheme.colorScheme.onPrimaryContainer
-                            "CANCELLED" -> MaterialTheme.colorScheme.error
-                            else -> StatusWarning
-                        },
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                SgmisBadge(
+                    text = duty.statusDisplay ?: duty.status,
+                    variant = when (duty.status) {
+                        "COMPLETED" -> SgmisBadgeVariant.SUCCESS
+                        "CANCELLED" -> SgmisBadgeVariant.ERROR
+                        "ACKNOWLEDGED", "EN_ROUTE" -> SgmisBadgeVariant.INFO
+                        else -> SgmisBadgeVariant.WARNING
+                    }
+                )
             }
 
             Text("Route: ${duty.origin} → ${duty.destination}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
@@ -400,22 +387,22 @@ fun EscortCard(
             }
 
             if (canUpdateStatus && duty.status != "COMPLETED" && duty.status != "CANCELLED") {
-                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                     if (duty.status == "SCHEDULED" || duty.status == "ASSIGNED") {
-                        OutlinedButton(onClick = { onUpdateStatus("ACKNOWLEDGED") }) {
+                        OutlinedButton(onClick = { onUpdateStatus("ACKNOWLEDGED") }, modifier = Modifier.defaultMinSize(minHeight = 40.dp)) {
                             Text("Acknowledge Duty")
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(onClick = { onUpdateStatus("EN_ROUTE") }) {
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        Button(onClick = { onUpdateStatus("EN_ROUTE") }, modifier = Modifier.defaultMinSize(minHeight = 40.dp)) {
                             Text("Mark En Route")
                         }
                     } else if (duty.status == "ACKNOWLEDGED") {
-                        Button(onClick = { onUpdateStatus("EN_ROUTE") }) {
+                        Button(onClick = { onUpdateStatus("EN_ROUTE") }, modifier = Modifier.defaultMinSize(minHeight = 40.dp)) {
                             Text("Depart (En Route)")
                         }
                     } else if (duty.status == "EN_ROUTE") {
-                        Button(onClick = { onUpdateStatus("COMPLETED") }) {
+                        Button(onClick = { onUpdateStatus("COMPLETED") }, modifier = Modifier.defaultMinSize(minHeight = 40.dp)) {
                             Text("Complete Escort")
                         }
                     }
@@ -434,10 +421,10 @@ fun ExamDutyCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(12.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(CornerRadius.md),
+        elevation = CardDefaults.cardElevation(defaultElevation = Elevation.card)
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -448,28 +435,15 @@ fun ExamDutyCard(
                     val ref = duty.reference ?: "EXAM-${duty.id.take(8).uppercase()}"
                     Text("Ref: $ref", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.primary)
                 }
-                Surface(
-                    color = when (duty.status) {
-                        "COMPLETED" -> StatusSuccess.copy(alpha = 0.2f)
-                        "ACKNOWLEDGED", "IN_PROGRESS" -> MaterialTheme.colorScheme.primaryContainer
-                        "CANCELLED" -> MaterialTheme.colorScheme.errorContainer
-                        else -> StatusWarning.copy(alpha = 0.2f)
-                    },
-                    shape = RoundedCornerShape(6.dp)
-                ) {
-                    Text(
-                        text = duty.status,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = when (duty.status) {
-                            "COMPLETED" -> StatusSuccess
-                            "ACKNOWLEDGED", "IN_PROGRESS" -> MaterialTheme.colorScheme.onPrimaryContainer
-                            "CANCELLED" -> MaterialTheme.colorScheme.error
-                            else -> StatusWarning
-                        },
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                SgmisBadge(
+                    text = duty.status,
+                    variant = when (duty.status) {
+                        "COMPLETED" -> SgmisBadgeVariant.SUCCESS
+                        "CANCELLED" -> SgmisBadgeVariant.ERROR
+                        "ACKNOWLEDGED", "IN_PROGRESS" -> SgmisBadgeVariant.INFO
+                        else -> SgmisBadgeVariant.WARNING
+                    }
+                )
             }
 
             Text("Institution: ${duty.institution}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
@@ -498,22 +472,22 @@ fun ExamDutyCard(
             }
 
             if (canUpdateStatus && duty.status != "COMPLETED" && duty.status != "CANCELLED") {
-                Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                     if (duty.status == "ASSIGNED") {
-                        OutlinedButton(onClick = { onUpdateStatus("ACKNOWLEDGED") }) {
+                        OutlinedButton(onClick = { onUpdateStatus("ACKNOWLEDGED") }, modifier = Modifier.defaultMinSize(minHeight = 40.dp)) {
                             Text("Acknowledge Duty")
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(onClick = { onUpdateStatus("IN_PROGRESS") }) {
+                        Spacer(modifier = Modifier.width(Spacing.xs))
+                        Button(onClick = { onUpdateStatus("IN_PROGRESS") }, modifier = Modifier.defaultMinSize(minHeight = 40.dp)) {
                             Text("Report to Post")
                         }
                     } else if (duty.status == "ACKNOWLEDGED") {
-                        Button(onClick = { onUpdateStatus("IN_PROGRESS") }) {
+                        Button(onClick = { onUpdateStatus("IN_PROGRESS") }, modifier = Modifier.defaultMinSize(minHeight = 40.dp)) {
                             Text("Report to Post")
                         }
                     } else if (duty.status == "IN_PROGRESS") {
-                        Button(onClick = { onUpdateStatus("COMPLETED") }) {
+                        Button(onClick = { onUpdateStatus("COMPLETED") }, modifier = Modifier.defaultMinSize(minHeight = 40.dp)) {
                             Text("Complete Exam Duty")
                         }
                     }

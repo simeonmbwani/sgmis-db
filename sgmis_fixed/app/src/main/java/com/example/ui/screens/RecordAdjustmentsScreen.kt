@@ -4,10 +4,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,8 +19,11 @@ import androidx.compose.ui.unit.dp
 import com.example.data.model.AppRole
 import com.example.data.model.CreateRecordAdjustmentRequest
 import com.example.data.model.RecordAdjustmentRequest
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import java.time.LocalDate
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,103 +50,139 @@ fun RecordAdjustmentsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
     // Auto-dismiss transient messages
     LaunchedEffect(state.successMessage, state.errorMessage) {
         if (state.successMessage != null || state.errorMessage != null) {
-            kotlinx.coroutines.delay(3500)
+            delay(3500)
             viewModel.clearMessages()
         }
     }
 
-    Scaffold(topBar = {
-        TopAppBar(
-            title = { Text("Master Record Adjustments", fontWeight = FontWeight.Bold) },
-            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-            actions = {
-                IconButton(onClick = {
-                    viewModel.clearMessages()
-                    viewModel.fetchRecordAdjustments()
-                }) { Icon(Icons.Default.Refresh, "Refresh") }
+    Scaffold(
+        topBar = {
+            SgmisTopAppBar(
+                title = "Master Record Adjustments",
+                subtitle = "Reconciliations & Audit Trail",
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = {
+                        viewModel.clearMessages()
+                        viewModel.fetchRecordAdjustments()
+                    }) {
+                        Icon(Icons.Default.Refresh, "Refresh")
+                    }
+                }
+            )
+        },
+        floatingActionButton = {
+            if (canRequest) {
+                ExtendedFloatingActionButton(
+                    onClick = { showCreate = true },
+                    icon = { Icon(Icons.Default.Add, null) },
+                    text = { Text(if (isAdmin) "New Reconciliation" else "Request Adjustment", fontWeight = FontWeight.SemiBold) },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                )
             }
-        )
-    }, floatingActionButton = {
-        if (canRequest) ExtendedFloatingActionButton(
-            onClick = { showCreate = true },
-            icon = { Icon(Icons.Default.Add, null) },
-            text = { Text(if (isAdmin) "New Reconciliation" else "Request Adjustment") }
-        )
-    }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+        }
+    ) { padding ->
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
+        ) {
             Text(
                 if (isAdmin) "Superuser Master Adjustments: Apply direct reconciliations or review proposed supervisor requests. Approved adjustments immediately update master database records."
                 else "Supervisor requests require administrator review. Approved values are applied by the backend workflow.",
-                style = MaterialTheme.typography.bodySmall
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.height(12.dp))
-            if (state.adjustmentsLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+
             if (state.errorMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                SgmisStatusCard(
+                    status = SgmisCardStatus.ERROR,
+                    title = "Error",
+                    message = state.errorMessage!!,
                     modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        state.errorMessage!!,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
+                )
             }
             if (state.successMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                SgmisStatusCard(
+                    status = SgmisCardStatus.SUCCESS,
+                    title = "Success",
+                    message = state.successMessage!!,
                     modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            if (state.adjustmentsLoading) {
+                SgmisLoadingSkeleton()
+            } else if (state.recordAdjustments.isEmpty()) {
+                SgmisEmptyState(
+                    icon = Icons.Outlined.Tune,
+                    title = "No Adjustments Found",
+                    description = "No past or pending master database adjustments recorded.",
+                    actionLabel = if (canRequest) (if (isAdmin) "New Reconciliation" else "Request Adjustment") else null,
+                    onAction = { showCreate = true },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                LazyColumn(
+                    contentPadding = PaddingValues(bottom = 88.dp),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
-                    Text(
-                        state.successMessage!!,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-            if (state.recordAdjustments.isEmpty() && !state.adjustmentsLoading) {
-                Text("No adjustment records found.", modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.outline)
-            }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(state.recordAdjustments) { row ->
-                    ElevatedCard(Modifier.fillMaxWidth().clickable { selected = row }) {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("${row.guardName ?: row.guard} · ${row.fieldName}", fontWeight = FontWeight.Bold)
-                                Surface(
-                                    shape = MaterialTheme.shapes.small,
-                                    color = when (row.status) {
-                                        "APPROVED" -> MaterialTheme.colorScheme.primaryContainer
-                                        "REJECTED" -> MaterialTheme.colorScheme.errorContainer
-                                        else -> MaterialTheme.colorScheme.surfaceVariant
-                                    }
-                                ) {
+                    items(state.recordAdjustments) { row ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().clickable { selected = row },
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            shape = RoundedCornerShape(CornerRadius.md),
+                            elevation = CardDefaults.cardElevation(defaultElevation = Elevation.card)
+                        ) {
+                            Column(Modifier.padding(Spacing.md), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                     Text(
+                                        "${row.guardName ?: row.guard} · ${row.fieldName}",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    SgmisBadge(
                                         text = row.statusDisplay ?: row.status,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold
+                                        variant = when (row.status) {
+                                            "APPROVED" -> SgmisBadgeVariant.SUCCESS
+                                            "REJECTED" -> SgmisBadgeVariant.ERROR
+                                            else -> SgmisBadgeVariant.WARNING
+                                        }
                                     )
                                 }
-                            }
-                            Text("${row.oldValue.takeIf { !it.isNullOrBlank() } ?: "(empty)"}  →  ${row.approvedValue?.takeIf { it.isNotBlank() } ?: row.requestedValue}")
-                            Text("Effective: ${row.effectiveDate} · Reason: ${row.reason}", style = MaterialTheme.typography.bodySmall)
-                            Text("Requested by ${row.requestedByName ?: "Unknown"} · ${row.createdAt ?: ""}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                            if (row.reviewedByName != null) {
-                                Text("Reviewed by ${row.reviewedByName} · ${row.reviewedAt.orEmpty()}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                            }
-                            if (isAdmin && row.status == "PENDING") {
-                                Spacer(Modifier.height(4.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(onClick = { approvedValue = row.requestedValue; selected = row }) { Text("Review / Approve") }
-                                    OutlinedButton(onClick = { rejectTarget = row }) { Text("Reject") }
+                                Text(
+                                    "${row.oldValue.takeIf { !it.isNullOrBlank() } ?: "(empty)"}  →  ${row.approvedValue?.takeIf { it.isNotBlank() } ?: row.requestedValue}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text("Effective: ${row.effectiveDate} · Reason: ${row.reason}", style = MaterialTheme.typography.bodySmall)
+                                Text("Requested by ${row.requestedByName ?: "Unknown"} · ${row.createdAt ?: ""}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (row.reviewedByName != null) {
+                                    Text("Reviewed by ${row.reviewedByName} · ${row.reviewedAt.orEmpty()}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                }
+                                if (isAdmin && row.status == "PENDING") {
+                                    Spacer(Modifier.height(Spacing.xxs))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                                        Button(
+                                            onClick = { approvedValue = row.requestedValue; selected = row },
+                                            modifier = Modifier.defaultMinSize(minHeight = 40.dp)
+                                        ) {
+                                            Text("Review / Approve")
+                                        }
+                                        OutlinedButton(
+                                            onClick = { rejectTarget = row },
+                                            modifier = Modifier.defaultMinSize(minHeight = 40.dp)
+                                        ) {
+                                            Text("Reject")
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -162,9 +203,9 @@ fun RecordAdjustmentsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
     selected?.let { row ->
         AlertDialog(
             onDismissRequest = { selected = null },
-            title = { Text("Adjustment Detail") },
+            title = { Text("Adjustment Detail", fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                     Text("Employee: ${row.guardName ?: row.guard} (${row.guardEmployeeId ?: "No employee ID"})")
                     Text("Field: ${row.fieldName} · Effective: ${row.effectiveDate}")
                     Text("Current/Old Value: ${row.oldValue.takeIf { !it.isNullOrBlank() } ?: "(empty)"}")
@@ -202,7 +243,7 @@ fun RecordAdjustmentsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
         val row = selected!!
         AlertDialog(
             onDismissRequest = { confirmApproval = false },
-            title = { Text("Approve this adjustment?") },
+            title = { Text("Approve this adjustment?", fontWeight = FontWeight.Bold) },
             text = {
                 Text("${row.guardName ?: row.guard} · ${row.fieldName}\nCurrent value: ${row.oldValue.orEmpty()}\nNew value: ${approvedValue.ifBlank { row.requestedValue }}\nEffective: ${row.effectiveDate}")
             },
@@ -220,7 +261,7 @@ fun RecordAdjustmentsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
     rejectTarget?.let { row ->
         AlertDialog(
             onDismissRequest = { rejectTarget = null; rejectionReason = "" },
-            title = { Text("Reject Adjustment") },
+            title = { Text("Reject Adjustment", fontWeight = FontWeight.Bold) },
             text = {
                 OutlinedTextField(
                     value = rejectionReason,
@@ -244,17 +285,20 @@ fun RecordAdjustmentsScreen(viewModel: SgmisViewModel, onBack: () -> Unit) {
         val row = rejectTarget!!
         AlertDialog(
             onDismissRequest = { confirmRejection = false },
-            title = { Text("Confirm Rejection") },
+            title = { Text("Confirm Rejection", fontWeight = FontWeight.Bold) },
             text = {
                 Text("${row.guardName ?: row.guard} · ${row.fieldName}\nCurrent value: ${row.oldValue.orEmpty()}\nRequested value: ${row.requestedValue}\nRejection Reason: $rejectionReason")
             },
             confirmButton = {
-                Button(onClick = {
-                    confirmRejection = false
-                    viewModel.reviewRecordAdjustment(row.id, false, rejectionReason)
-                    rejectTarget = null
-                    rejectionReason = ""
-                }) { Text("Confirm Rejection") }
+                Button(
+                    onClick = {
+                        confirmRejection = false
+                        viewModel.reviewRecordAdjustment(row.id, false, rejectionReason)
+                        rejectTarget = null
+                        rejectionReason = ""
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Confirm Rejection") }
             },
             dismissButton = { TextButton(onClick = { confirmRejection = false }) { Text("Back") } }
         )
@@ -310,9 +354,9 @@ private fun AdjustmentRequestDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isAdmin) "New Record Reconciliation" else "Submit Record Adjustment Request") },
+        title = { Text(if (isAdmin) "New Record Reconciliation" else "Submit Record Adjustment Request", fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
                 // Guard Selector
                 ExposedDropdownMenuBox(
                     expanded = guardDropdownExpanded,

@@ -18,12 +18,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.model.OccurrenceBookEntry
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import java.text.SimpleDateFormat
 import java.util.*
-
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,6 +37,8 @@ fun VisitorScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var showLogDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedFilter by remember { mutableStateOf("ALL") }
 
     val currentUserRole = uiState.currentUser?.role?.uppercase()
     val isSupervisor = currentUserRole == "SUPERVISOR"
@@ -44,7 +48,6 @@ fun VisitorScreen(
         viewModel.fetchVisitors()
     }
 
-    // Auto-dismiss transient messages after 3.5 seconds
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
         if (uiState.successMessage != null || uiState.errorMessage != null) {
             delay(3500)
@@ -52,32 +55,62 @@ fun VisitorScreen(
         }
     }
 
+    val filteredVisitors = remember(uiState.visitors, searchQuery, selectedFilter) {
+        uiState.visitors.filter { entry ->
+            val matchesSearch = searchQuery.isBlank() ||
+                entry.occurrenceText.contains(searchQuery, ignoreCase = true) ||
+                entry.entryNumber.contains(searchQuery, ignoreCase = true) ||
+                entry.guardName.contains(searchQuery, ignoreCase = true)
+
+            val isActive = entry.occurrenceText.contains("ACTIVE ON SITE", ignoreCase = true) ||
+                !entry.occurrenceText.contains("Time Out:", ignoreCase = true)
+
+            val matchesFilter = when (selectedFilter) {
+                "ACTIVE" -> isActive
+                "DEPARTED" -> !isActive
+                else -> true
+            }
+            matchesSearch && matchesFilter
+        }
+    }
+
+    val activeCount = remember(uiState.visitors) {
+        uiState.visitors.count {
+            it.occurrenceText.contains("ACTIVE ON SITE", ignoreCase = true) ||
+            !it.occurrenceText.contains("Time Out:", ignoreCase = true)
+        }
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Visitor Book", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                        Text("Official Gate Register • ${uiState.currentStationName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                    }
-                },
+            SgmisTopAppBar(
+                title = "Gate Visitor Book",
+                subtitle = "Official Register • ${uiState.currentStationName}",
+                onNavigationClick = onBack,
                 navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("visitor_back_button")) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("visitor_back_button")
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.back)
+                            contentDescription = stringResource(R.string.back),
+                            tint = NavyDark
                         )
                     }
                 },
                 actions = {
                     IconButton(
                         onClick = { viewModel.fetchVisitors() },
-                        modifier = Modifier.testTag("refresh_visitors_button")
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("refresh_visitors_button")
                     ) {
-                        Icon(Icons.Default.Refresh, "Refresh Visitors")
+                        Icon(Icons.Default.Refresh, "Refresh Visitors", tint = NavyDark)
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         },
         floatingActionButton = {
@@ -85,9 +118,9 @@ fun VisitorScreen(
                 ExtendedFloatingActionButton(
                     onClick = { showLogDialog = true },
                     icon = { Icon(Icons.Default.PersonAdd, null) },
-                    text = { Text("Log Visitor") },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    text = { Text("Log Visitor", fontWeight = FontWeight.SemiBold) },
+                    containerColor = NavyDark,
+                    contentColor = SurfaceCardLight,
                     modifier = Modifier.testTag("log_visitor_fab")
                 )
             }
@@ -97,110 +130,129 @@ fun VisitorScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .background(LightBackground)
         ) {
             // Off-duty guard notice
             if (uiState.isGuard && !uiState.isOnDuty) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(8.dp)
+                SgmisStatusCard(
+                    statusColor = StatusWarning,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 ) {
-                    Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Viewing mode: You must be CLOCKED IN (On Duty) to register visitors or issue gate passes.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text("DUTY RESTRICTED", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = StatusWarning)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        "Viewing mode: You must be CLOCKED IN (On Duty) to register visitors or issue gate passes.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondaryLight
+                    )
                 }
             }
 
             // Notification banners
             if (uiState.successMessage != null) {
-                Surface(
-                    color = com.example.ui.theme.StatusSuccess.copy(alpha = 0.15f),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(8.dp)
+                SgmisStatusCard(
+                    statusColor = StatusSuccess,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.CheckCircle, null, tint = com.example.ui.theme.StatusSuccess, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.successMessage!!,
-                            color = com.example.ui.theme.StatusSuccess,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
+                    Text("SUCCESS", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = StatusSuccess)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(uiState.successMessage!!, style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
                 }
             }
 
             if (uiState.errorMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(8.dp)
+                SgmisStatusCard(
+                    statusColor = StatusError,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = uiState.errorMessage!!,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
+                    Text("ERROR", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = StatusError)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(uiState.errorMessage!!, style = MaterialTheme.typography.bodySmall, color = TextSecondaryLight)
                 }
             }
 
             if (isSupervisor) {
-                Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    shape = RoundedCornerShape(8.dp)
+                SgmisStatusCard(
+                    statusColor = NavyDark,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Visibility, null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Supervisor View-Only Mode: Visitor logs must be recorded by field guards at the gate.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                    Text("SUPERVISOR VIEW-ONLY MODE", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = NavyDark)
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        "Gate visitor records are entered by operational security guards on post.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondaryLight
+                    )
+                }
+            }
+
+            // Search and quick stats
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SgmisSearchBar(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    placeholder = "Search visitor name, ID, vehicle...",
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = selectedFilter == "ALL",
+                        onClick = { selectedFilter = "ALL" },
+                        label = { Text("All (${uiState.visitors.size})", style = MaterialTheme.typography.labelSmall) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = NavyDark,
+                            selectedLabelColor = SurfaceCardLight
                         )
-                    }
+                    )
+                    FilterChip(
+                        selected = selectedFilter == "ACTIVE",
+                        onClick = { selectedFilter = "ACTIVE" },
+                        label = { Text("On Site ($activeCount)", style = MaterialTheme.typography.labelSmall) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = NavyDark,
+                            selectedLabelColor = SurfaceCardLight
+                        )
+                    )
+                    FilterChip(
+                        selected = selectedFilter == "DEPARTED",
+                        onClick = { selectedFilter = "DEPARTED" },
+                        label = { Text("Departed (${uiState.visitors.size - activeCount})", style = MaterialTheme.typography.labelSmall) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = NavyDark,
+                            selectedLabelColor = SurfaceCardLight
+                        )
+                    )
                 }
             }
 
             if (uiState.visitorsLoading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                }
-            } else if (uiState.visitors.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Outlined.Badge, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(56.dp))
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text("No visitor records found", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("Authorized visitors logged at the gate will appear here.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
+                SgmisLoadingSkeleton(modifier = Modifier.padding(16.dp))
+            } else if (filteredVisitors.isEmpty()) {
+                SgmisEmptyState(
+                    icon = Icons.Outlined.Badge,
+                    title = if (searchQuery.isNotBlank()) "No Matching Visitors" else "No Visitor Records Found",
+                    description = if (searchQuery.isNotBlank()) "Try refining your search keyword." else "Authorized visitors logged at the gate will appear here.",
+                    actionText = if (canLogVisitor && searchQuery.isBlank()) "Log First Visitor" else null,
+                    onActionClick = { showLogDialog = true },
+                    modifier = Modifier.fillMaxSize()
+                )
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                    contentPadding = PaddingValues(bottom = 88.dp, top = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    contentPadding = PaddingValues(top = 4.dp, bottom = 88.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(uiState.visitors) { entry ->
+                    items(filteredVisitors) { entry ->
                         VisitorEntryCard(entry)
                     }
                 }
@@ -227,15 +279,18 @@ fun VisitorScreen(
 
 @Composable
 fun VisitorEntryCard(entry: OccurrenceBookEntry) {
-    val isDeparturePending = entry.occurrenceText.contains("ACTIVE ON SITE", ignoreCase = true) || !entry.occurrenceText.contains("Time Out:", ignoreCase = true)
+    val isDeparturePending = entry.occurrenceText.contains("ACTIVE ON SITE", ignoreCase = true) ||
+        !entry.occurrenceText.contains("Time Out:", ignoreCase = true)
 
-    Card(
-        modifier = Modifier.fillMaxWidth().testTag("visitor_entry_${entry.entryNumber}"),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        shape = RoundedCornerShape(12.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    SgmisCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("visitor_entry_${entry.entryNumber}")
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+            modifier = Modifier.padding(4.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -246,83 +301,55 @@ fun VisitorEntryCard(entry: OccurrenceBookEntry) {
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.primary
+                    color = NavyDark
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (isDeparturePending) {
-                        Surface(
-                            color = com.example.ui.theme.StatusWarning.copy(alpha = 0.2f),
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Warning,
-                                    contentDescription = null,
-                                    tint = com.example.ui.theme.StatusWarning,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "ACTIVE ON PREMISES - DEPARTURE PENDING",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = com.example.ui.theme.StatusWarning,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
+                        SgmisBadge(
+                            text = "ACTIVE ON PREMISES",
+                            variant = BadgeVariant.Warning
+                        )
                     } else {
-                        Surface(
-                            color = com.example.ui.theme.StatusSuccess.copy(alpha = 0.2f),
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Text(
-                                text = "DEPARTED",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = com.example.ui.theme.StatusSuccess,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Text(
-                            text = "VISITOR PASS",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            fontWeight = FontWeight.Bold
+                        SgmisBadge(
+                            text = "DEPARTED",
+                            variant = BadgeVariant.Success
                         )
                     }
+                    SgmisBadge(
+                        text = "VISITOR PASS",
+                        variant = BadgeVariant.Neutral
+                    )
                 }
             }
 
             Text(
                 text = entry.occurrenceText,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
+                color = TextPrimaryLight
             )
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            HorizontalDivider(
+                color = BorderSubtleLight,
+                thickness = 0.5.dp,
+                modifier = Modifier.padding(vertical = 2.dp)
+            )
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 Text(
                     text = "Post: ${entry.stationName}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = TextSecondaryLight
                 )
                 Text(
                     text = "Logging Guard: ${entry.guardName}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = TextSecondaryLight
                 )
             }
         }
@@ -349,27 +376,31 @@ fun LogVisitorDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isLoading) onDismiss() },
-        title = { Text("Log Official Visitor") },
+        title = {
+            Text(
+                "Log Official Visitor",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimaryLight
+            )
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 if (errorMessage != null) {
                     Surface(
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp)
+                        color = StatusError.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
-                            modifier = Modifier.padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Error, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = errorMessage,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
+                        Text(
+                            text = errorMessage,
+                            color = StatusError,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(10.dp)
+                        )
                     }
                 }
 
@@ -455,13 +486,14 @@ fun LogVisitorDialog(
                     }
                 },
                 enabled = !isLoading && visitorName.isNotBlank() && personToVisit.isNotBlank() && purpose.isNotBlank(),
-                modifier = Modifier.testTag("submit_visitor_button")
+                colors = ButtonDefaults.buttonColors(containerColor = NavyDark),
+                modifier = Modifier.testTag("submit_visitor_button").heightIn(min = 48.dp)
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),
                         strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
+                        color = SurfaceCardLight
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Registering...")
@@ -471,7 +503,7 @@ fun LogVisitorDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isLoading) { Text("Cancel") }
+            TextButton(onClick = onDismiss, enabled = !isLoading) { Text("Cancel", color = TextSecondaryLight) }
         }
     )
 }

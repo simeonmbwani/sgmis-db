@@ -9,16 +9,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.DirectionsCar
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import com.example.data.model.AppRole
 import com.example.data.model.EscortDuty
 import com.example.data.model.UpdateEscortDutyRequest
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,15 +47,16 @@ fun EscortDutiesScreen(
     }
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
         if (uiState.successMessage != null || uiState.errorMessage != null) {
-            kotlinx.coroutines.delay(3500)
+            delay(3500)
             viewModel.clearMessages()
         }
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Escort Duties", fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = "Vehicle Escort Duties",
+                subtitle = "Active Station: ${uiState.currentStationName}",
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -61,8 +66,7 @@ fun EscortDutiesScreen(
                     IconButton(onClick = { viewModel.fetchEscortDuties() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         },
         floatingActionButton = {
@@ -70,7 +74,7 @@ fun EscortDutiesScreen(
                 ExtendedFloatingActionButton(
                     onClick = { showCreateEscortDialog = true },
                     icon = { Icon(Icons.Default.Add, null) },
-                    text = { Text("Assign Escort") },
+                    text = { Text("Assign Escort", fontWeight = FontWeight.SemiBold) },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 )
@@ -81,29 +85,41 @@ fun EscortDutiesScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            uiState.successMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-            uiState.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            if (uiState.successMessage != null) {
+                SgmisStatusCard(
+                    status = SgmisCardStatus.SUCCESS,
+                    title = "Success",
+                    message = uiState.successMessage!!,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            if (uiState.errorMessage != null) {
+                SgmisStatusCard(
+                    status = SgmisCardStatus.ERROR,
+                    title = "Error",
+                    message = uiState.errorMessage!!,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             if (uiState.escortsLoading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                }
+                SgmisLoadingSkeleton()
             } else if (uiState.escortDuties.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("No escort duties assigned.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                SgmisEmptyState(
+                    icon = Icons.Outlined.DirectionsCar,
+                    title = "No Escort Duties Assigned",
+                    description = "Vehicle escorts and transport details will be listed here.",
+                    actionLabel = if (isSupervisorOrAdmin) "Assign Escort" else null,
+                    onAction = { showCreateEscortDialog = true },
+                    modifier = Modifier.fillMaxSize()
+                )
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 120.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
                     items(uiState.escortDuties) { duty ->
                         EscortCard(
@@ -111,9 +127,21 @@ fun EscortDutiesScreen(
                             canUpdateStatus = !isAdmin,
                             onUpdateStatus = { st -> viewModel.updateEscortStatus(duty.id, st) }
                         )
-                        if (isAdmin) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { editDuty = duty }) { Text("Edit / Reassign") }
-                            TextButton(enabled = duty.status != "CANCELLED", onClick = { cancelDuty = duty }) { Text("Cancel Duty") }
+                        if (isAdmin) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(onClick = { editDuty = duty }) { Text("Edit / Reassign") }
+                                Spacer(modifier = Modifier.width(Spacing.xs))
+                                TextButton(
+                                    enabled = duty.status != "CANCELLED",
+                                    onClick = { cancelDuty = duty },
+                                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    Text("Cancel Duty")
+                                }
+                            }
                         }
                     }
                 }
@@ -148,10 +176,17 @@ fun EscortDutiesScreen(
     cancelDuty?.let { duty ->
         AlertDialog(
             onDismissRequest = { cancelDuty = null },
-            title = { Text("Cancel escort duty?") },
+            title = { Text("Cancel escort duty?", fontWeight = FontWeight.Bold) },
             text = { Text("${duty.reference} · ${duty.missionName}\nAssigned guard: ${duty.guardName}\nDestination: ${duty.destination}\nStatus: ${duty.status} → CANCELLED") },
-            confirmButton = { TextButton(onClick = { viewModel.cancelEscortDuty(duty.id); cancelDuty = null }) { Text("Confirm cancellation") } },
-            dismissButton = { TextButton(onClick = { cancelDuty = null }) { Text("Keep duty") } }
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.cancelEscortDuty(duty.id); cancelDuty = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Confirm Cancellation")
+                }
+            },
+            dismissButton = { TextButton(onClick = { cancelDuty = null }) { Text("Keep Duty") } }
         )
     }
 }
@@ -171,31 +206,31 @@ private fun EscortEditDialog(duty: EscortDuty, guards: List<com.example.data.mod
     var start by remember(duty.id) { mutableStateOf(duty.startTime) }
     var end by remember(duty.id) { mutableStateOf(duty.endTime) }
     var notes by remember(duty.id) { mutableStateOf(duty.notes.orEmpty()) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit / Reassign Escort") }, text = {
-        Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Assigned guard")
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit / Reassign Escort", fontWeight = FontWeight.Bold) }, text = {
+        Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+            Text("Assigned guard", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
             guards.forEach { user -> TextButton(onClick = { guard = user.id }) { Text("${if (guard == user.id) "✓ " else ""}${user.fullName ?: user.username}") } }
-            Text("Supervisor")
+            Text("Supervisor", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
             supervisors.forEach { user -> TextButton(onClick = { supervisor = user.id }) { Text("${if (supervisor == user.id) "✓ " else ""}${user.fullName ?: user.username}") } }
-            Text("Station")
+            Text("Station", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
             stations.forEach { item -> TextButton(onClick = { station = item.id }) { Text("${if (station == item.id) "✓ " else ""}${item.name}") } }
-            OutlinedTextField(mission, { mission = it }, label = { Text("Mission") })
-            OutlinedTextField(origin, { origin = it }, label = { Text("Origin") })
-            OutlinedTextField(destination, { destination = it }, label = { Text("Destination") })
-            OutlinedTextField(purpose, { purpose = it }, label = { Text("Purpose") })
-            OutlinedTextField(instructions, { instructions = it }, label = { Text("Instructions") }, minLines = 2)
-            OutlinedTextField(contacts, { contacts = it }, label = { Text("Contact numbers") })
-            OutlinedTextField(start, { start = it }, label = { Text("Start (ISO datetime)") })
-            OutlinedTextField(end, { end = it }, label = { Text("End (ISO datetime)") })
-            OutlinedTextField(notes, { notes = it }, label = { Text("Administrative notes") }, minLines = 2)
+            OutlinedTextField(mission, { mission = it }, label = { Text("Mission") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(origin, { origin = it }, label = { Text("Origin") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(destination, { destination = it }, label = { Text("Destination") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(purpose, { purpose = it }, label = { Text("Purpose") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(instructions, { instructions = it }, label = { Text("Instructions") }, minLines = 2, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(contacts, { contacts = it }, label = { Text("Contact numbers") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(start, { start = it }, label = { Text("Start (ISO datetime)") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(end, { end = it }, label = { Text("End (ISO datetime)") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(notes, { notes = it }, label = { Text("Administrative notes") }, minLines = 2, modifier = Modifier.fillMaxWidth())
         }
-    }, confirmButton = { TextButton(onClick = { confirmSave = true }) { Text("Review changes") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    }, confirmButton = { Button(onClick = { confirmSave = true }) { Text("Review changes") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
     if (confirmSave) {
         val oldGuard = guards.firstOrNull { it.id == duty.guard }?.fullName ?: duty.guardName ?: duty.guard
         val newGuard = guards.firstOrNull { it.id == guard }?.fullName ?: guard
         AlertDialog(
             onDismissRequest = { confirmSave = false },
-            title = { Text("Save these changes?") },
+            title = { Text("Save these changes?", fontWeight = FontWeight.Bold) },
             text = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Escort ${duty.reference} · ${duty.missionName}")
                 Text("Guard: $oldGuard → $newGuard")
@@ -210,7 +245,7 @@ private fun EscortEditDialog(duty: EscortDuty, guards: List<com.example.data.mod
                 Text("Time: ${duty.startTime} – ${duty.endTime} → $start – $end")
                 Text("Notes: ${duty.notes.orEmpty()} → $notes")
             } },
-            confirmButton = { TextButton(onClick = { confirmSave = false; onSave(UpdateEscortDutyRequest(guard = guard, supervisor = supervisor.ifBlank { null }, station = station.ifBlank { null }, missionName = mission, origin = origin, destination = destination, purpose = purpose, instructions = instructions, contactNumbers = contacts, startTime = start, endTime = end, notes = notes)) }) { Text("Confirm save") } },
+            confirmButton = { Button(onClick = { confirmSave = false; onSave(UpdateEscortDutyRequest(guard = guard, supervisor = supervisor.ifBlank { null }, station = station.ifBlank { null }, missionName = mission, origin = origin, destination = destination, purpose = purpose, instructions = instructions, contactNumbers = contacts, startTime = start, endTime = end, notes = notes)) }) { Text("Confirm save") } },
             dismissButton = { TextButton(onClick = { confirmSave = false }) { Text("Back") } }
         )
     }

@@ -22,9 +22,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Shift
-import com.example.ui.theme.GoldAccent
-import com.example.ui.theme.StatusSuccess
-import com.example.ui.theme.StatusWarning
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import java.text.SimpleDateFormat
 import java.util.*
@@ -74,7 +73,7 @@ fun GuardDutyPlanScreen(
         filtered
     }
 
-    // Server-derived statistics (no hardcoded 4 ON / 8 OFF rules)
+    // Server-derived statistics
     val totalDaysOn = remember(myShifts) {
         myShifts.count {
             val st = it.shiftType.uppercase()
@@ -97,24 +96,18 @@ fun GuardDutyPlanScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "My Roster Overview",
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(
-                            text = "$currentMonthYear • Personal Calendar",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                },
+            SgmisTopAppBar(
+                title = "My Roster Overview",
+                subtitle = "$currentMonthYear • Personal Calendar",
                 navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("duty_plan_back_button")) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.testTag("duty_plan_back_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
                     }
                 },
                 actions = {
@@ -125,8 +118,7 @@ fun GuardDutyPlanScreen(
                     }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh Roster")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         }
     ) { paddingValues ->
@@ -188,11 +180,9 @@ fun GuardDutyPlanScreen(
 
             // 2. Blueprint Stats Overview Section (3 Metric Blocks + Holiday Comp)
             item {
-                Text(
-                    text = "MONTHLY ROSTER STATISTICS",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
+                SgmisSectionHeader(
+                    title = "Monthly Roster Statistics",
+                    actionLabel = null
                 )
             }
 
@@ -201,73 +191,40 @@ fun GuardDutyPlanScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Card(
+                    SgmisStatTile(
                         modifier = Modifier.weight(1f),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = "$totalDaysOn",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text("Total Shifts", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
+                        title = "Total Shifts",
+                        value = "$totalDaysOn",
+                        icon = Icons.Default.Event,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
 
-                    Card(
+                    SgmisStatTile(
                         modifier = Modifier.weight(1f),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = "$totalDaysOff",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text("Days Off", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
+                        title = "Days Off",
+                        value = "$totalDaysOff",
+                        icon = Icons.Default.Bedtime,
+                        tint = MaterialTheme.colorScheme.secondary
+                    )
 
-                    Card(
+                    val vac = leaveBalance?.let { String.format(Locale.getDefault(), "%.1f", it.remainingVacation.coerceAtLeast(it.vacationDays)) } ?: "—"
+                    val cas = leaveBalance?.let { String.format(Locale.getDefault(), "%.1f", it.remainingCasual.coerceAtLeast(it.casualDays)) } ?: "—"
+                    SgmisStatTile(
                         modifier = Modifier.weight(1.2f),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            val vac = leaveBalance?.let { String.format(Locale.getDefault(), "%.1f", it.remainingVacation.coerceAtLeast(it.vacationDays)) } ?: "—"
-                            val cas = leaveBalance?.let { String.format(Locale.getDefault(), "%.1f", it.remainingCasual.coerceAtLeast(it.casualDays)) } ?: "—"
-                            Text(
-                                text = "$vac / $cas",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.secondary
-                            )
-                            Text("Vacation / Casual", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
+                        title = "Vac / Cas",
+                        value = "$vac / $cas",
+                        icon = Icons.Default.BeachAccess,
+                        tint = MaterialTheme.colorScheme.tertiary
+                    )
                 }
             }
 
-            // Public Holiday Compensation Card (Blueprint Comp Days Card)
+            // Public Holiday Compensation Card
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f)),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(14.dp)
                 ) {
                     Row(
                         modifier = Modifier.padding(14.dp),
@@ -308,7 +265,7 @@ fun GuardDutyPlanScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth().testTag("next_duty_card"),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(14.dp)
                 ) {
                     Row(
                         modifier = Modifier.padding(14.dp),
@@ -381,18 +338,18 @@ fun GuardDutyPlanScreen(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    FilterChip(
+                    SgmisFilterChip(
                         selected = viewMode == "TABLE",
                         onClick = { viewMode = "TABLE" },
-                        label = { Text("My Roster Table (Official)") },
-                        leadingIcon = { Icon(Icons.Default.TableChart, null, modifier = Modifier.size(16.dp)) },
+                        label = "My Roster Table (Official)",
+                        leadingIcon = Icons.Default.TableChart,
                         modifier = Modifier.weight(1f)
                     )
-                    FilterChip(
+                    SgmisFilterChip(
                         selected = viewMode == "CARDS",
                         onClick = { viewMode = "CARDS" },
-                        label = { Text("Duty Stream Cards") },
-                        leadingIcon = { Icon(Icons.Default.ViewAgenda, null, modifier = Modifier.size(16.dp)) },
+                        label = "Duty Stream Cards",
+                        leadingIcon = Icons.Default.ViewAgenda,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -401,25 +358,18 @@ fun GuardDutyPlanScreen(
             // Duty Schedule Items
             if (uiState.adminLoading) {
                 item {
-                    Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SgmisLoadingSkeleton(modifier = Modifier.fillMaxWidth().height(70.dp))
+                        SgmisLoadingSkeleton(modifier = Modifier.fillMaxWidth().height(70.dp))
                     }
                 }
             } else if (myShifts.isEmpty()) {
                 item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                            Text(
-                                text = "No roster shifts recorded for this period. Contact your station supervisor to verify roster publication.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+                    SgmisEmptyState(
+                        icon = Icons.Outlined.EventBusy,
+                        title = "No Roster Shifts",
+                        message = "No roster shifts recorded for this period. Contact your station supervisor to verify roster publication."
+                    )
                 }
             } else if (viewMode == "TABLE") {
                 item {
@@ -454,7 +404,7 @@ fun BlueprintRosterShiftItem(shift: Shift, currentUserId: String?) {
         colors = CardDefaults.cardColors(
             containerColor = if (isTimeOff) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f) else MaterialTheme.colorScheme.surface
         ),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = if (isTimeOff) 0.dp else 2.dp)
     ) {
         Column(
@@ -587,7 +537,7 @@ fun AuthoritativeRosterTable(
 
     Card(
         modifier = Modifier.fillMaxWidth().testTag("authoritative_roster_table"),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {

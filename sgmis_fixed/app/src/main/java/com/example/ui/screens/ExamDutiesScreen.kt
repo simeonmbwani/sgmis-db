@@ -9,16 +9,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.School
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.ui.components.*
+import com.example.ui.theme.*
 import com.example.ui.viewmodel.SgmisViewModel
 import com.example.data.model.AppRole
 import com.example.data.model.ExamDuty
 import com.example.data.model.UpdateExamDutyRequest
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,15 +47,16 @@ fun ExamDutiesScreen(
     }
     LaunchedEffect(uiState.successMessage, uiState.errorMessage) {
         if (uiState.successMessage != null || uiState.errorMessage != null) {
-            kotlinx.coroutines.delay(3500)
+            delay(3500)
             viewModel.clearMessages()
         }
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Exam Period Duties", fontWeight = FontWeight.Bold) },
+            SgmisTopAppBar(
+                title = "Exam Security Duties",
+                subtitle = "Active Station: ${uiState.currentStationName}",
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -61,8 +66,7 @@ fun ExamDutiesScreen(
                     IconButton(onClick = { viewModel.fetchExamDuties() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
             )
         },
         floatingActionButton = {
@@ -70,7 +74,7 @@ fun ExamDutiesScreen(
                 ExtendedFloatingActionButton(
                     onClick = { showCreateExamDialog = true },
                     icon = { Icon(Icons.Default.Add, null) },
-                    text = { Text("Schedule Exam Duty") },
+                    text = { Text("Schedule Exam Duty", fontWeight = FontWeight.SemiBold) },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 )
@@ -81,29 +85,41 @@ fun ExamDutiesScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = Spacing.md, vertical = Spacing.xs),
+            verticalArrangement = Arrangement.spacedBy(Spacing.sm)
         ) {
-            uiState.successMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-            uiState.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            if (uiState.successMessage != null) {
+                SgmisStatusCard(
+                    status = SgmisCardStatus.SUCCESS,
+                    title = "Success",
+                    message = uiState.successMessage!!,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            if (uiState.errorMessage != null) {
+                SgmisStatusCard(
+                    status = SgmisCardStatus.ERROR,
+                    title = "Error",
+                    message = uiState.errorMessage!!,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             if (uiState.examsLoading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                }
+                SgmisLoadingSkeleton()
             } else if (uiState.examDuties.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("No exam period security duties scheduled.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                SgmisEmptyState(
+                    icon = Icons.Outlined.School,
+                    title = "No Exam Duties Scheduled",
+                    description = "Institutional exam posts and escort assignments will appear here.",
+                    actionLabel = if (isSupervisorOrAdmin) "Schedule Exam Duty" else null,
+                    onAction = { showCreateExamDialog = true },
+                    modifier = Modifier.fillMaxSize()
+                )
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 120.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm)
                 ) {
                     items(uiState.examDuties) { duty ->
                         ExamDutyCard(
@@ -111,9 +127,21 @@ fun ExamDutiesScreen(
                             canUpdateStatus = !isAdmin,
                             onUpdateStatus = { st -> viewModel.updateExamStatus(duty.id, st) }
                         )
-                        if (isAdmin) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { editDuty = duty }) { Text("Edit / Reassign") }
-                            TextButton(enabled = duty.status != "CANCELLED", onClick = { cancelDuty = duty }) { Text("Cancel Duty") }
+                        if (isAdmin) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(onClick = { editDuty = duty }) { Text("Edit / Reassign") }
+                                Spacer(modifier = Modifier.width(Spacing.xs))
+                                TextButton(
+                                    enabled = duty.status != "CANCELLED",
+                                    onClick = { cancelDuty = duty },
+                                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    Text("Cancel Duty")
+                                }
+                            }
                         }
                     }
                 }
@@ -148,10 +176,17 @@ fun ExamDutiesScreen(
     cancelDuty?.let { duty ->
         AlertDialog(
             onDismissRequest = { cancelDuty = null },
-            title = { Text("Cancel exam duty?") },
-            text = { Text("${duty.reference} · ${duty.examTitle}\nAssigned guard: ${duty.guardName}\nLocation: ${duty.institution}\nStatus: ${duty.status} → CANCELLED") },
-            confirmButton = { TextButton(onClick = { viewModel.cancelExamDuty(duty.id); cancelDuty = null }) { Text("Confirm cancellation") } },
-            dismissButton = { TextButton(onClick = { cancelDuty = null }) { Text("Keep duty") } }
+            title = { Text("Cancel exam duty?", fontWeight = FontWeight.Bold) },
+            text = { Text("${duty.reference} · ${duty.examTitle}\nAssigned guard: ${duty.guardName}\nInstitution: ${duty.institution}\nStatus: ${duty.status} → CANCELLED") },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.cancelExamDuty(duty.id); cancelDuty = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Confirm Cancellation")
+                }
+            },
+            dismissButton = { TextButton(onClick = { cancelDuty = null }) { Text("Keep Duty") } }
         )
     }
 }
@@ -165,54 +200,50 @@ private fun ExamEditDialog(duty: ExamDuty, guards: List<com.example.data.model.U
     var title by remember(duty.id) { mutableStateOf(duty.examTitle) }
     var institution by remember(duty.id) { mutableStateOf(duty.institution) }
     var hall by remember(duty.id) { mutableStateOf(duty.hallPost.orEmpty()) }
-    var supervisorContact by remember(duty.id) { mutableStateOf(duty.supervisorContact.orEmpty()) }
     var instructions by remember(duty.id) { mutableStateOf(duty.instructions.orEmpty()) }
     var date by remember(duty.id) { mutableStateOf(duty.date) }
-    var reportingTime by remember(duty.id) { mutableStateOf(duty.reportingTime.orEmpty()) }
+    var reporting by remember(duty.id) { mutableStateOf(duty.reportingTime.orEmpty()) }
     var start by remember(duty.id) { mutableStateOf(duty.startTime) }
     var end by remember(duty.id) { mutableStateOf(duty.endTime) }
     var notes by remember(duty.id) { mutableStateOf(duty.notes.orEmpty()) }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit / Reassign Exam Duty") }, text = {
-        Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Assigned guard")
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit / Reassign Exam Duty", fontWeight = FontWeight.Bold) }, text = {
+        Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+            Text("Assigned guard", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
             guards.forEach { user -> TextButton(onClick = { guard = user.id }) { Text("${if (guard == user.id) "✓ " else ""}${user.fullName ?: user.username}") } }
-            Text("Supervisor")
+            Text("Supervisor", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
             supervisors.forEach { user -> TextButton(onClick = { supervisor = user.id }) { Text("${if (supervisor == user.id) "✓ " else ""}${user.fullName ?: user.username}") } }
-            Text("Station")
+            Text("Station", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
             stations.forEach { item -> TextButton(onClick = { station = item.id }) { Text("${if (station == item.id) "✓ " else ""}${item.name}") } }
-            OutlinedTextField(title, { title = it }, label = { Text("Exam title") })
-            OutlinedTextField(institution, { institution = it }, label = { Text("Institution") })
-            OutlinedTextField(hall, { hall = it }, label = { Text("Hall / post") })
-            OutlinedTextField(supervisorContact, { supervisorContact = it }, label = { Text("Supervisor contact") })
-            OutlinedTextField(instructions, { instructions = it }, label = { Text("Instructions") }, minLines = 2)
-            OutlinedTextField(date, { date = it }, label = { Text("Date (YYYY-MM-DD)") })
-            OutlinedTextField(reportingTime, { reportingTime = it }, label = { Text("Reporting time (HH:MM:SS)") })
-            OutlinedTextField(start, { start = it }, label = { Text("Start (HH:MM)") })
-            OutlinedTextField(end, { end = it }, label = { Text("End (HH:MM)") })
-            OutlinedTextField(notes, { notes = it }, label = { Text("Administrative notes") }, minLines = 2)
+            OutlinedTextField(title, { title = it }, label = { Text("Exam title") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(institution, { institution = it }, label = { Text("Institution") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(hall, { hall = it }, label = { Text("Hall / Post") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(instructions, { instructions = it }, label = { Text("Instructions") }, minLines = 2, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(date, { date = it }, label = { Text("Date (YYYY-MM-DD)") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(reporting, { reporting = it }, label = { Text("Reporting time (HH:MM:SS)") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(start, { start = it }, label = { Text("Start time (HH:MM:SS)") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(end, { end = it }, label = { Text("End time (HH:MM:SS)") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(notes, { notes = it }, label = { Text("Administrative notes") }, minLines = 2, modifier = Modifier.fillMaxWidth())
         }
-    }, confirmButton = { TextButton(onClick = { confirmSave = true }) { Text("Review changes") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+    }, confirmButton = { Button(onClick = { confirmSave = true }) { Text("Review changes") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
     if (confirmSave) {
         val oldGuard = guards.firstOrNull { it.id == duty.guard }?.fullName ?: duty.guardName ?: duty.guard
         val newGuard = guards.firstOrNull { it.id == guard }?.fullName ?: guard
         AlertDialog(
             onDismissRequest = { confirmSave = false },
-            title = { Text("Save these changes?") },
+            title = { Text("Save these changes?", fontWeight = FontWeight.Bold) },
             text = { Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Exam duty ${duty.reference} · ${duty.examTitle}")
+                Text("Exam ${duty.reference} · ${duty.examTitle}")
                 Text("Guard: $oldGuard → $newGuard")
                 Text("Supervisor: ${duty.supervisorName ?: "Unassigned"} → ${supervisors.firstOrNull { it.id == supervisor }?.fullName ?: "Unassigned"}")
                 Text("Station: ${duty.stationName ?: "Unassigned"} → ${stations.firstOrNull { it.id == station }?.name ?: "Unassigned"}")
-                Text("Exam: ${duty.examTitle} → $title")
-                Text("Location: ${duty.institution} → $institution")
-                Text("Hall / post: ${duty.hallPost.orEmpty()} → $hall")
-                Text("Supervisor contact: ${duty.supervisorContact.orEmpty()} → $supervisorContact")
+                Text("Institution: ${duty.institution} → $institution")
+                Text("Hall / Post: ${duty.hallPost.orEmpty()} → $hall")
                 Text("Instructions: ${duty.instructions.orEmpty()} → $instructions")
-                Text("Date and time: ${duty.date} ${duty.startTime}–${duty.endTime} → $date $start–$end")
-                Text("Reporting time: ${duty.reportingTime.orEmpty()} → $reportingTime")
+                Text("Date: ${duty.date} → $date")
+                Text("Hours: ${duty.startTime} – ${duty.endTime} → $start – $end")
                 Text("Notes: ${duty.notes.orEmpty()} → $notes")
             } },
-            confirmButton = { TextButton(onClick = { confirmSave = false; onSave(UpdateExamDutyRequest(guard = guard, supervisor = supervisor.ifBlank { null }, station = station.ifBlank { null }, institution = institution, examTitle = title, hallPost = hall, supervisorContact = supervisorContact, instructions = instructions, date = date, reportingTime = reportingTime.ifBlank { null }, startTime = start, endTime = end, notes = notes)) }) { Text("Confirm save") } },
+            confirmButton = { Button(onClick = { confirmSave = false; onSave(UpdateExamDutyRequest(guard = guard, supervisor = supervisor.ifBlank { null }, station = station.ifBlank { null }, examTitle = title, institution = institution, hallPost = hall.ifBlank { null }, instructions = instructions.ifBlank { null }, date = date, reportingTime = reporting.ifBlank { null }, startTime = start, endTime = end, notes = notes.ifBlank { null })) }) { Text("Confirm save") } },
             dismissButton = { TextButton(onClick = { confirmSave = false }) { Text("Back") } }
         )
     }
