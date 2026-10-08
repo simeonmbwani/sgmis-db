@@ -3,8 +3,12 @@ import datetime
 from datetime import time, timedelta, datetime as dt_cls
 from collections import defaultdict
 from django.db import models, transaction
+from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError, PermissionDenied, NotAuthenticated
+from apps.accounts.models import UserRole
+from apps.core.models import SecurityAuditEvent
 from .models import (
     Shift,
     ShiftType,
@@ -15,13 +19,90 @@ from .models import (
     DutyRoster,
     RosterStatus,
     Attendance,
+    ShiftHandover,
     PublicHoliday,
     PublicHolidayDutyRecord,
     HolidayCompensationStatus,
 )
 from apps.stations.models import GuardPair
-from apps.accounts.models import UserRole
 
+
+@transaction.atomic
+def reopen_duty_roster_as_draft(roster, admin_user, reason):
+    """Reopen an approved roster for correction when it has no operational data.
+
+    This is the sole controlled transition that removes generated shifts from an
+    approved roster. The normal DutyRoster validation and delete protections are
+    intentionally unchanged.
+    """
+    if not (
+        getattr(admin_user, "is_superuser", False)
+        or getattr(admin_user, "role", None) == UserRole.ADMINISTRATOR
+    ):
+        raise DjangoPermissionDenied("Only an administrator can reopen an approved roster.")
+
+    reason = (reason or "").strip()
+    if not reason:
+        raise DjangoValidationError("A reason is required to reopen a roster.")
+    if len(reason) > 2000:
+        raise DjangoValidationError("The roster correction reason must be 2000 characters or fewer.")
+
+    roster_id = roster.pk if isinstance(roster, DutyRoster) else roster
+    try:
+        locked_roster = DutyRoster.objects.select_for_update().get(pk=roster_id)
+    except (DutyRoster.DoesNotExist, DjangoValidationError, ValueError, TypeError):
+        raise DjangoValidationError("Duty roster not found.")
+
+    if locked_roster.status != RosterStatus.APPROVED:
+        raise DjangoValidationError(
+            f"Only APPROVED rosters can be reopened; this roster is {locked_roster.status}."
+        )
+
+    shift_ids = list(
+        Shift.objects.select_for_update()
+        .filter(roster_id=locked_roster.pk)
+        .values_list("pk", flat=True)
+    )
+
+    shift_filter = {"shift_id__in": shift_ids}
+    if Attendance.objects.filter(**shift_filter, clock_in__isnull=False).exists():
+        raise DjangoValidationError("Cannot reopen this roster because one or more shifts have clock-in records.")
+    if Attendance.objects.filter(**shift_filter).exists():
+        raise DjangoValidationError("Cannot reopen this roster because attendance records exist for its shifts.")
+    if ShiftHandover.objects.filter(outgoing_shift_id__in=shift_ids).exists():
+        raise DjangoValidationError("Cannot reopen this roster because shift handover records exist.")
+
+    previous_status = locked_roster.status
+    previous_start_date = locked_roster.start_date
+    previous_end_date = locked_roster.end_date
+    generated_shift_count = len(shift_ids)
+
+    if shift_ids:
+        Shift.objects.filter(pk__in=shift_ids).delete()
+
+    locked_roster.status = RosterStatus.DRAFT
+    locked_roster.approved_by = None
+    locked_roster.approved_at = None
+    locked_roster.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+
+    SecurityAuditEvent.objects.create(
+        event_type=SecurityAuditEvent.EventType.RECORD_AMENDMENT,
+        actor=admin_user,
+        actor_username=getattr(admin_user, "username", ""),
+        target_model="DutyRoster",
+        target_id=str(locked_roster.pk),
+        details={
+            "action": "reopen_approved_duty_roster_as_draft",
+            "previous_status": previous_status,
+            "previous_start_date": previous_start_date.isoformat(),
+            "previous_end_date": previous_end_date.isoformat(),
+            "new_status": RosterStatus.DRAFT,
+            "reason": reason,
+            "deleted_generated_shift_count": generated_shift_count,
+        },
+    )
+
+    return generated_shift_count
 def resolve_incoming_guard(outgoing_shift):
     """
     Authoritative server resolution of the incoming guard.
@@ -2041,6 +2122,3 @@ def validate_guard_duty_availability(
                     f"Duty Conflict: Guard {guard_name} is already assigned to "
                     f"escort mission '{existing_escort.mission_name}' on {date}."
                 )
-
-
-
