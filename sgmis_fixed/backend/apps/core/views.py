@@ -36,7 +36,6 @@ def health_check(request):
                 att_count = Attendance.objects.filter(shift__roster=r).count()
                 clock_in_count = Attendance.objects.filter(shift__roster=r, clock_in__isnull=False).count()
                 handover_count = ShiftHandover.objects.filter(outgoing_shift__roster=r).count()
-                escort_count = EscortDuty.objects.filter(shift__roster=r).count()
 
                 clean_error = None
                 try:
@@ -62,7 +61,6 @@ def health_check(request):
                     "attendance_count": att_count,
                     "attendance_clocked_in_count": clock_in_count,
                     "handover_count": handover_count,
-                    "escort_count": escort_count,
                     "clean_error": clean_error,
                 })
 
